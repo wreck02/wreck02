@@ -1,0 +1,238 @@
+{
+  "meta": {
+    "title": "OCR Y544 Discrete Mathematics",
+    "version": 1,
+    "notes": "Question content for the Y544 revision app. See README.md for the full schema. All four top-level mode keys are required; each holds an array of items (pivot holds presets plus a generator flag)."
+  },
+
+  "quickfire": [
+    {
+      "id": "qf1",
+      "prompt": "How many edges does the complete graph K6 have?",
+      "options": ["12", "15", "30", "36"],
+      "answer": 1,
+      "explanation": "Kn has n(n−1)/2 edges, so K6 has 6×5/2 = 15."
+    },
+    {
+      "id": "qf2",
+      "prompt": "A connected graph is Eulerian if and only if…",
+      "options": [
+        "it has exactly two vertices of odd degree",
+        "every vertex has even degree",
+        "it contains a Hamiltonian cycle",
+        "it is planar"
+      ],
+      "answer": 1,
+      "explanation": "Eulerian = closed trail using every arc exactly once, which requires every vertex to have even degree. Exactly two odd vertices gives a semi-Eulerian graph."
+    },
+    {
+      "id": "qf3",
+      "prompt": "In the simplex algorithm, the pivot row is chosen using…",
+      "options": [
+        "the largest ratio of RHS ÷ pivot-column entry",
+        "the most negative entry in the objective row",
+        "the smallest non-negative ratio of RHS ÷ positive pivot-column entry",
+        "the row with the largest RHS value"
+      ],
+      "answer": 2,
+      "explanation": "The ratio test: divide RHS by the pivot-column entry for rows where that entry is positive, and choose the smallest non-negative ratio. The most negative objective entry chooses the pivot COLUMN."
+    },
+    {
+      "id": "qf4",
+      "prompt": "Euler's formula for a connected planar graph states…",
+      "options": ["V + E − F = 2", "V − E + F = 2", "V − E − F = 2", "E − V + F = 2"],
+      "answer": 1,
+      "explanation": "Vertices − Edges + Faces = 2. To 'verify' it in an exam you must substitute the actual values of V, E and F, not just quote it."
+    },
+    {
+      "id": "qf5",
+      "prompt": "Bubble sort has worst-case order…",
+      "options": ["O(n)", "O(n log n)", "O(n²)", "O(2ⁿ)"],
+      "answer": 2,
+      "explanation": "Bubble (and shuttle) sort are O(n²) in the worst case; quick sort averages O(n log n). For O(n²), doubling the list size roughly quadruples the run time."
+    }
+  ],
+
+  "ordering": [
+    {
+      "id": "ord1",
+      "algorithm": "simplex",
+      "title": "Simplex: one complete iteration",
+      "steps": [
+        "Choose the pivot column: the column with the most negative entry in the objective row.",
+        "For each row with a positive entry in the pivot column, calculate RHS ÷ pivot-column entry.",
+        "Choose the pivot row: the row with the smallest non-negative ratio.",
+        "Divide every entry in the pivot row by the pivot element.",
+        "Add or subtract multiples of the pivot row so every other entry in the pivot column becomes 0.",
+        "If the objective row still has a negative entry, repeat; otherwise the solution is optimal."
+      ]
+    },
+    {
+      "id": "ord2",
+      "algorithm": "simplex",
+      "title": "Simplex: setting up the initial tableau",
+      "steps": [
+        "Write the problem in standard form: maximise P subject to ≤ constraints and non-negative variables.",
+        "Introduce a slack variable into each constraint to turn it into an equation.",
+        "Rearrange the objective so that P minus the objective expression equals 0.",
+        "Enter the constraint equations as the body rows of the tableau.",
+        "Enter the objective equation as the bottom row, giving negative coefficients for the variables."
+      ]
+    },
+    {
+      "id": "ord3",
+      "algorithm": "dijkstra",
+      "title": "Dijkstra's algorithm",
+      "steps": [
+        "Give the start vertex the permanent label 0, with order of labelling 1.",
+        "Update the temporary labels at every vertex directly connected to the vertex just made permanent, if the new value is smaller.",
+        "Make the smallest temporary label permanent, recording its order of labelling.",
+        "Repeat updating and selecting until the destination vertex receives a permanent label.",
+        "Trace back from the destination, using arcs where the difference in permanent labels equals the arc weight, to find the route."
+      ]
+    },
+    {
+      "id": "ord4",
+      "algorithm": "route-inspection",
+      "title": "Route inspection (closed route)",
+      "steps": [
+        "Find the degree of each vertex and list the vertices of odd degree.",
+        "List every way the odd vertices can be paired up.",
+        "Find the total of the shortest paths for each complete pairing.",
+        "Choose the pairing with the smallest total and repeat those paths in the network.",
+        "Add the smallest pairing total to the total weight of all the arcs to obtain the route length."
+      ]
+    },
+    {
+      "id": "ord5",
+      "algorithm": "route-inspection",
+      "title": "Route inspection (start and finish at different vertices)",
+      "steps": [
+        "Find the vertices of odd degree.",
+        "Note that with different start and finish vertices, exactly two odd vertices may be left unpaired.",
+        "For each choice of the two vertices left unpaired, find the shortest-path total needed to pair up the remaining odd vertices.",
+        "Choose the option with the smallest repeated total, which also identifies the best start and finish vertices.",
+        "Add the repeated total to the total weight of all the arcs."
+      ]
+    }
+  ],
+
+  "pivot": {
+    "useGenerator": true,
+    "presets": [
+      {
+        "id": "pv1",
+        "objective": [5, 4, 3],
+        "constraints": [
+          { "coeffs": [2, 3, 1], "rhs": 5 },
+          { "coeffs": [4, 1, 2], "rhs": 11 },
+          { "coeffs": [3, 4, 2], "rhs": 8 }
+        ]
+      },
+      {
+        "id": "pv2",
+        "objective": [3, 5, 4],
+        "constraints": [
+          { "coeffs": [2, 4, 1], "rhs": 24 },
+          { "coeffs": [1, 2, 3], "rhs": 18 },
+          { "coeffs": [3, 1, 2], "rhs": 20 }
+        ]
+      },
+      {
+        "id": "pv3",
+        "objective": [2, 3, 6],
+        "constraints": [
+          { "coeffs": [1, 2, 2], "rhs": 16 },
+          { "coeffs": [2, 1, 4], "rhs": 20 },
+          { "coeffs": [3, 2, 1], "rhs": 15 }
+        ]
+      },
+      {
+        "id": "pv4",
+        "objective": [4, 7, 2],
+        "constraints": [
+          { "coeffs": [3, 2, 1], "rhs": 12 },
+          { "coeffs": [1, 4, 2], "rhs": 16 },
+          { "coeffs": [2, 5, 3], "rhs": 25 }
+        ]
+      },
+      {
+        "id": "pv5",
+        "objective": [6, 2, 5],
+        "constraints": [
+          { "coeffs": [2, 1, 3], "rhs": 30 },
+          { "coeffs": [4, 2, 1], "rhs": 28 },
+          { "coeffs": [1, 3, 2], "rhs": 22 }
+        ]
+      }
+    ]
+  },
+
+  "spotTheError": [
+    {
+      "id": "se1",
+      "topic": "Route inspection",
+      "prompt": "A network has total arc weight 84. Find the length of the shortest closed route covering every arc. The shortest paths between odd vertices are BD = 7, EG = 9, BE = 6, DG = 8, BG = 11, DE = 5.",
+      "lines": [
+        "The odd vertices are B, D, E and G.",
+        "Possible pairings: BD + EG = 7 + 9 = 16; BE + DG = 6 + 8 = 14; BG + DE = 11 + 5 = 16.",
+        "Choose the pairing BD + EG = 16 as the paths to repeat.",
+        "Shortest route = 84 + 16 = 100."
+      ],
+      "errorLine": 2,
+      "explanation": "You must repeat the pairing with the SMALLEST total, which is BE + DG = 14, not 16. The shortest route is 84 + 14 = 98."
+    },
+    {
+      "id": "se2",
+      "topic": "Simplex (ratio test)",
+      "prompt": "An iteration of the simplex algorithm uses pivot column y. The y-column entries in the three constraint rows are 2, −1 and 4, with RHS values 10, 8 and 12.",
+      "lines": [
+        "The pivot column is y, since −7 is the most negative entry in the objective row.",
+        "Ratio test: 10 ÷ 2 = 5, 8 ÷ (−1) = −8 and 12 ÷ 4 = 3, so the second row (smallest ratio, −8) is the pivot row.",
+        "Divide the pivot row by the pivot element.",
+        "Add or subtract multiples of the pivot row so the other pivot-column entries become 0."
+      ],
+      "errorLine": 1,
+      "explanation": "The ratio test only uses rows whose pivot-column entry is POSITIVE, so the row with entry −1 is excluded entirely. The valid ratios are 5 and 3, and the smallest is 3, so the third row is the pivot row."
+    },
+    {
+      "id": "se3",
+      "topic": "TSP upper bound (nearest neighbour)",
+      "prompt": "Use the nearest neighbour algorithm starting at A to find an upper bound for the travelling salesperson problem on a complete network with vertices A, B, C, D, E. (The weight of arc DA is 7.)",
+      "lines": [
+        "From A the nearest unvisited vertex is C (4); from C it is E (3); from E it is B (5); from B it is D (6).",
+        "Every vertex has now been visited.",
+        "Upper bound = 4 + 3 + 5 + 6 = 18.",
+        "A different starting vertex might give a better (smaller) upper bound."
+      ],
+      "errorLine": 2,
+      "explanation": "Nearest neighbour for the TSP must produce a complete CYCLE, returning to the start. The tour is A–C–E–B–D–A, so arc DA (7) must be included: upper bound = 4 + 3 + 5 + 6 + 7 = 25. (The 2024 examiner report flagged exactly this slip: 'a path or cycle, not just a sum of arc weights'.)"
+    },
+    {
+      "id": "se4",
+      "topic": "Euler's formula",
+      "prompt": "A connected planar graph has 7 vertices and 11 edges. Find the number of faces.",
+      "lines": [
+        "Euler's formula states that V + E − F = 2 for a connected planar graph.",
+        "Substituting: 7 + 11 − F = 2.",
+        "So F = 7 + 11 − 2 = 16.",
+        "Therefore the graph has 16 faces."
+      ],
+      "errorLine": 0,
+      "explanation": "Euler's formula is V − E + F = 2 (vertices MINUS edges plus faces). Correctly: 7 − 11 + F = 2, so F = 6. Quoting the formula the wrong way round loses everything that follows."
+    },
+    {
+      "id": "se5",
+      "topic": "Critical path analysis (total float)",
+      "prompt": "Activity K has duration 5. It starts at event i and ends at event j, where EET(i) = 8, LET(i) = 10, EET(j) = 15 and LET(j) = 19. Find the total float of K.",
+      "lines": [
+        "Total float = EET(j) − EET(i) − duration.",
+        "Total float = 15 − 8 − 5 = 2.",
+        "The total float of K is 2.",
+        "Since the total float is not zero, K is not a critical activity."
+      ],
+      "errorLine": 0,
+      "explanation": "Total float = LET(j) − EET(i) − duration: the LATEST time of the end event minus the earliest time of the start event minus the duration. Correctly: 19 − 8 − 5 = 6. (K is indeed non-critical, but its float is 6, not 2.)"
+    }
+  ]
+}

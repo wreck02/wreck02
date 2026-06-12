@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Y544 Discrete Maths Reviser</title>
+<style>
+  :root {
+    --bg: #11151c;
+    --panel: #1a2029;
+    --panel2: #222a36;
+    --ink: #e8ecf1;
+    --muted: #9aa7b5;
+    --accent: #4fa3ff;
+    --good: #3ecf8e;
+    --bad: #ff6b6b;
+    --warn: #ffc145;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.45;
+  }
+  header {
+    padding: 14px 20px 0;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.25rem; margin: 0 0 10px; }
+  h1 small { color: var(--muted); font-weight: normal; font-size: 0.8rem; margin-left: 8px; }
+  nav { display: flex; flex-wrap: wrap; gap: 6px; }
+  nav button {
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid #2c3644;
+    border-bottom: none;
+    padding: 9px 14px;
+    border-radius: var(--radius) var(--radius) 0 0;
+    cursor: pointer;
+    font-size: 0.92rem;
+  }
+  nav button.active { background: var(--panel2); border-color: var(--accent); color: var(--accent); }
+  main {
+    max-width: 880px;
+    margin: 0 auto 60px;
+    padding: 18px 20px;
+    background: var(--panel2);
+    border-radius: 0 var(--radius) var(--radius) var(--radius);
+    min-height: 420px;
+  }
+  section.mode { display: none; }
+  section.mode.visible { display: block; }
+  .card {
+    background: var(--panel);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin: 12px 0;
+  }
+  .scorebar {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    font-size: 0.9rem;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .scorebar b { color: var(--ink); }
+  button.primary {
+    background: var(--accent);
+    color: #08233f;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.4; cursor: default; }
+  button.ghost {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .options button, .lines button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    margin: 8px 0;
+    padding: 12px 14px;
+    background: var(--panel2);
+    color: var(--ink);
+    border: 1px solid #34404f;
+    border-radius: 8px;
+    font-size: 0.98rem;
+    cursor: pointer;
+  }
+  .options button:hover:not(:disabled), .lines button:hover:not(:disabled) { border-color: var(--accent); }
+  .options button:disabled, .lines button:disabled { cursor: default; }
+  .correct { border-color: var(--good) !important; background: #15311f !important; }
+  .wrong   { border-color: var(--bad) !important; background: #3a1d1d !important; }
+  .feedback { margin-top: 12px; padding: 12px 14px; border-radius: 8px; font-size: 0.95rem; }
+  .feedback.good { background: #15311f; border: 1px solid var(--good); }
+  .feedback.bad  { background: #3a1d1d; border: 1px solid var(--bad); }
+  .timerwrap { height: 10px; background: #0c0f14; border-radius: 5px; overflow: hidden; margin: 10px 0 4px; }
+  .timerbar { height: 100%; background: var(--good); width: 100%; transition: width 0.1s linear; }
+  .timerbar.low { background: var(--bad); }
+  .timertext { font-size: 0.85rem; color: var(--muted); }
+
+  /* ordering */
+  ul.order { list-style: none; padding: 0; margin: 12px 0; }
+  ul.order li {
+    background: var(--panel2);
+    border: 1px solid #34404f;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: grab;
+  }
+  ul.order li.dragging { opacity: 0.4; }
+  ul.order li .grip { color: var(--muted); user-select: none; }
+  ul.order li .stepText { flex: 1; }
+  ul.order li .mv {
+    background: transparent; color: var(--muted);
+    border: 1px solid #34404f; border-radius: 6px;
+    width: 30px; height: 26px; cursor: pointer;
+  }
+  ul.order li .mv:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* tableau */
+  table.tableau { border-collapse: collapse; margin: 14px 0; font-variant-numeric: tabular-nums; }
+  table.tableau th, table.tableau td {
+    border: 1px solid #34404f;
+    padding: 8px 14px;
+    text-align: center;
+    min-width: 52px;
+  }
+  table.tableau th { background: var(--panel); color: var(--muted); font-weight: 600; }
+  table.tableau td.clickable { cursor: pointer; }
+  table.tableau td.clickable:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+  table.tableau td.picked-good { background: #15311f; outline: 2px solid var(--good); outline-offset: -2px; }
+  table.tableau td.picked-bad { background: #3a1d1d; outline: 2px solid var(--bad); outline-offset: -2px; }
+  table.tableau td.reveal { background: #15311f; }
+  table.tableau tr.objrow td { color: var(--warn); }
+  table.ratios { border-collapse: collapse; margin: 8px 0 0; font-size: 0.92rem; }
+  table.ratios th, table.ratios td { border: 1px solid #34404f; padding: 5px 12px; text-align: center; }
+  .hint { color: var(--muted); font-size: 0.88rem; }
+  .pill { display: inline-block; background: var(--panel); border: 1px solid #34404f; border-radius: 999px; padding: 2px 10px; font-size: 0.8rem; color: var(--muted); margin-right: 6px; }
+  #loadError { display: none; }
+  .home-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .home-grid .card { margin: 0; }
+  .home-grid h3 { margin: 0 0 6px; font-size: 1rem; color: var(--accent); }
+  .home-grid p { margin: 0 0 8px; font-size: 0.88rem; color: var(--muted); }
+  .hs { font-size: 0.85rem; }
+  .hs b { color: var(--good); }
+  footer { max-width: 880px; margin: 0 auto; padding: 0 20px 30px; color: var(--muted); font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Y544 Discrete Maths Reviser <small id="contentTitle"></small></h1>
+  <nav id="nav">
+    <button data-mode="home" class="active">Home</button>
+    <button data-mode="quickfire">Quick-fire</button>
+    <button data-mode="ordering">Order the steps</button>
+    <button data-mode="pivot">Pivot picker</button>
+    <button data-mode="spot">Spot the error</button>
+  </nav>
+</header>
+
+<main>
+  <div id="loadError" class="card">
+    <p><b>Couldn't load <code>questions.json</code> automatically.</b></p>
+    <p class="hint">If you opened this file directly (file://), the browser blocks fetch.
+       Either run a tiny local server (<code>python3 -m http.server</code> in this folder,
+       then open <code>http://localhost:8000</code>), or pick the JSON file below.</p>
+    <input type="file" id="filePicker" accept=".json,application/json">
+  </div>
+
+  <!-- HOME -->
+  <section class="mode visible" id="mode-home">
+    <div class="home-grid">
+      <div class="card">
+        <h3>⚡ Quick-fire facts</h3>
+        <p>10 seconds per question. Build the longest streak of correct answers you can — one slip resets it.</p>
+        <div class="hs">Best streak: <b data-hs="quickfire">0</b></div>
+      </div>
+      <div class="card">
+        <h3>↕ Order the steps</h3>
+        <p>Drag the steps of simplex, Dijkstra and route inspection into the correct order, then check.</p>
+        <div class="hs">Solved first try: <b data-hs="ordering">0</b></div>
+      </div>
+      <div class="card">
+        <h3>⊞ Pivot picker</h3>
+        <p>Random 3-variable simplex tableaux. Click the correct pivot cell; the ratio test is explained every time.</p>
+        <div class="hs">Best streak: <b data-hs="pivot">0</b></div>
+      </div>
+      <div class="card">
+        <h3>🔍 Spot the error</h3>
+        <p>Short worked answers, each with one planted mistake. Click the line where it goes wrong.</p>
+        <div class="hs">Best streak: <b data-hs="spot">0</b></div>
+      </div>
+    </div>
+    <div class="card">
+      <p class="hint">High scores are saved in this browser (localStorage).
+        Question content comes from <code>questions.json</code> — edit that file to add your own items.</p>
+      <button class="ghost" id="resetScores">Reset high scores</button>
+    </div>
+  </section>
+
+  <!-- QUICK-FIRE -->
+  <section class="mode" id="mode-quickfire">
+    <div class="scorebar">
+      <span>Streak: <b id="qfStreak">0</b></span>
+      <span>Best: <b id="qfBest">0</b></span>
+      <span>Answered: <b id="qfCount">0</b></span>
+    </div>
+    <div class="card" id="qfIdle">
+      <p>Answer before the 10-second timer runs out. A wrong answer or a timeout resets your streak.</p>
+      <button class="primary" id="qfStart">Start</button>
+    </div>
+    <div class="card" id="qfPlay" style="display:none">
+      <div class="timerwrap"><div class="timerbar" id="qfBar"></div></div>
+      <div class="timertext" id="qfTime">10.0 s</div>
+      <p id="qfPrompt" style="font-size:1.05rem"></p>
+      <div class="options" id="qfOptions"></div>
+      <div id="qfFeedback"></div>
+      <button class="primary" id="qfNext" style="display:none; margin-top:10px">Next ▸</button>
+    </div>
+  </section>
+
+  <!-- ORDERING -->
+  <section class="mode" id="mode-ordering">
+    <div class="scorebar">
+      <span>Solved first try (session): <b id="ordScore">0</b></span>
+      <span>Best: <b id="ordBest">0</b></span>
+    </div>
+    <div class="card">
+      <span class="pill" id="ordAlgo"></span>
+      <h3 id="ordTitle" style="margin:8px 0 2px"></h3>
+      <p class="hint">Drag the steps into the correct order (or use the ▲▼ buttons), then check.</p>
+      <ul class="order" id="ordList"></ul>
+      <button class="primary" id="ordCheck">Check order</button>
+      <button class="ghost" id="ordNext" style="margin-left:8px">Next procedure ▸</button>
+      <div id="ordFeedback"></div>
+    </div>
+  </section>
+
+  <!-- PIVOT -->
+  <section class="mode" id="mode-pivot">
+    <div class="scorebar">
+      <span>Streak: <b id="pvStreak">0</b></span>
+      <span>Best: <b id="pvBest">0</b></span>
+    </div>
+    <div class="card">
+      <p>Maximise <span id="pvObjective"></span> subject to the constraints below (all ≤, slack variables s₁–s₃ added).
+         <b>Click the cell you would pivot on.</b></p>
+      <div style="overflow-x:auto"><table class="tableau" id="pvTable"></table></div>
+      <div id="pvFeedback"></div>
+      <button class="primary" id="pvNext" style="display:none; margin-top:10px">Next tableau ▸</button>
+    </div>
+  </section>
+
+  <!-- SPOT THE ERROR -->
+  <section class="mode" id="mode-spot">
+    <div class="scorebar">
+      <span>Streak: <b id="spStreak">0</b></span>
+      <span>Best: <b id="spBest">0</b></span>
+    </div>
+    <div class="card">
+      <span class="pill" id="spTopic"></span>
+      <p id="spPrompt" style="margin-top:10px"></p>
+      <p class="hint">One line below contains a planted mistake — click it.</p>
+      <div class="lines" id="spLines"></div>
+      <div id="spFeedback"></div>
+      <button class="primary" id="spNext" style="display:none; margin-top:10px">Next question ▸</button>
+    </div>
+  </section>
+</main>
+
+<footer>OCR A Level Further Maths A (H245) · Y544 Discrete Mathematics · 75 marks / 1 h 30 · content in <code>questions.json</code></footer>
+
+<script>
+"use strict";
+
+/* ---------- utilities ---------- */
+const $ = (sel) => document.querySelector(sel);
+const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1)); // inclusive
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+function fmtRatio(rhs, entry) {
+  const v = rhs / entry;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
+/* ---------- high scores ---------- */
+const HS_KEY = "y544HighScores";
+let highscores = { quickfire: 0, ordering: 0, pivot: 0, spot: 0 };
+try {
+  const saved = JSON.parse(localStorage.getItem(HS_KEY));
+  if (saved && typeof saved === "object") highscores = Object.assign(highscores, saved);
+} catch (e) { /* corrupted storage — start fresh */ }
+
+function saveHigh(mode, value) {
+  if (value > (highscores[mode] || 0)) {
+    highscores[mode] = value;
+    localStorage.setItem(HS_KEY, JSON.stringify(highscores));
+  }
+  renderHighs();
+}
+function renderHighs() {
+  document.querySelectorAll("[data-hs]").forEach(el => {
+    el.textContent = highscores[el.dataset.hs] || 0;
+  });
+  $("#qfBest").textContent = highscores.quickfire || 0;
+  $("#ordBest").textContent = highscores.ordering || 0;
+  $("#pvBest").textContent = highscores.pivot || 0;
+  $("#spBest").textContent = highscores.spot || 0;
+}
+$("#resetScores").addEventListener("click", () => {
+  if (!confirm("Reset all high scores?")) return;
+  highscores = { quickfire: 0, ordering: 0, pivot: 0, spot: 0 };
+  localStorage.removeItem(HS_KEY);
+  renderHighs();
+});
+
+/* ---------- navigation ---------- */
+document.querySelectorAll("#nav button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#nav button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll("section.mode").forEach(s => s.classList.remove("visible"));
+    $("#mode-" + btn.dataset.mode).classList.add("visible");
+    if (btn.dataset.mode !== "quickfire") QF.stopTimer();
+  });
+});
+
+/* ---------- content loading ---------- */
+let CONTENT = null;
+
+function validateContent(data) {
+  const need = ["quickfire", "ordering", "pivot", "spotTheError"];
+  for (const k of need) if (!(k in data)) throw new Error("questions.json is missing the '" + k + "' key");
+  if (!Array.isArray(data.quickfire) || !data.quickfire.length) throw new Error("'quickfire' must be a non-empty array");
+  if (!Array.isArray(data.ordering) || !data.ordering.length) throw new Error("'ordering' must be a non-empty array");
+  if (!Array.isArray(data.spotTheError) || !data.spotTheError.length) throw new Error("'spotTheError' must be a non-empty array");
+  return data;
+}
+
+function startApp(data) {
+  CONTENT = validateContent(data);
+  $("#loadError").style.display = "none";
+  if (CONTENT.meta && CONTENT.meta.title) $("#contentTitle").textContent = CONTENT.meta.title;
+  renderHighs();
+  ORD.next();
+  PV.next();
+  SP.next();
+}
+
+fetch("questions.json")
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(startApp)
+  .catch(() => { $("#loadError").style.display = "block"; });
+
+$("#filePicker").addEventListener("change", (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { startApp(JSON.parse(reader.result)); }
+    catch (e) { alert("Could not parse that file: " + e.message); }
+  };
+  reader.readAsText(file);
+});
+
+/* picks a random index different from `avoid` (when possible) */
+function pickIndex(len, avoid) {
+  if (len === 1) return 0;
+  let i;
+  do { i = Math.floor(Math.random() * len); } while (i === avoid);
+  return i;
+}
+
+/* ================= MODE 1: QUICK-FIRE ================= */
+const QF = {
+  streak: 0, count: 0, lastIdx: -1, timerId: null, deadline: 0,
+  TIME: 10000,
+
+  start() {
+    $("#qfIdle").style.display = "none";
+    $("#qfPlay").style.display = "block";
+    this.ask();
+  },
+
+  ask() {
+    if (!CONTENT) return;
+    $("#qfFeedback").innerHTML = "";
+    $("#qfNext").style.display = "none";
+    this.lastIdx = pickIndex(CONTENT.quickfire.length, this.lastIdx);
+    const q = CONTENT.quickfire[this.lastIdx];
+    $("#qfPrompt").textContent = q.prompt;
+    const box = $("#qfOptions");
+    box.innerHTML = "";
+    q.options.forEach((opt, i) => {
+      const b = document.createElement("button");
+      b.textContent = opt;
+      b.addEventListener("click", () => this.answer(q, i, b));
+      box.appendChild(b);
+    });
+    this.startTimer(q);
+  },
+
+  startTimer(q) {
+    this.stopTimer();
+    this.deadline = Date.now() + this.TIME;
+    const bar = $("#qfBar");
+    bar.classList.remove("low");
+    this.timerId = setInterval(() => {
+      const left = this.deadline - Date.now();
+      const frac = Math.max(0, left / this.TIME);
+      bar.style.width = (frac * 100) + "%";
+      bar.classList.toggle("low", frac < 0.3);
+      $("#qfTime").textContent = (Math.max(0, left) / 1000).toFixed(1) + " s";
+      if (left <= 0) this.timeout(q);
+    }, 100);
+  },
+
+  stopTimer() {
+    if (this.timerId) { clearInterval(this.timerId); this.timerId = null; }
+  },
+
+  lockOptions() {
+    document.querySelectorAll("#qfOptions button").forEach(b => b.disabled = true);
+  },
+
+  revealAnswer(q) {
+    document.querySelectorAll("#qfOptions button").forEach((b, i) => {
+      if (i === q.answer) b.classList.add("correct");
+    });
+  },
+
+  answer(q, i, btn) {
+    this.stopTimer();
+    this.lockOptions();
+    this.count++;
+    const fb = $("#qfFeedback");
+    if (i === q.answer) {
+      this.streak++;
+      btn.classList.add("correct");
+      fb.innerHTML = '<div class="feedback good"><b>Correct.</b> ' + q.explanation + "</div>";
+    } else {
+      this.streak = 0;
+      btn.classList.add("wrong");
+      this.revealAnswer(q);
+      fb.innerHTML = '<div class="feedback bad"><b>Not quite — streak reset.</b> ' + q.explanation + "</div>";
+    }
+    saveHigh("quickfire", this.streak);
+    this.updateBar();
+    $("#qfNext").style.display = "inline-block";
+  },
+
+  timeout(q) {
+    this.stopTimer();
+    this.lockOptions();
+    this.count++;
+    this.streak = 0;
+    this.revealAnswer(q);
+    $("#qfFeedback").innerHTML = '<div class="feedback bad"><b>Time! Streak reset.</b> ' + q.explanation + "</div>";
+    this.updateBar();
+    $("#qfNext").style.display = "inline-block";
+  },
+
+  updateBar() {
+    $("#qfStreak").textContent = this.streak;
+    $("#qfCount").textContent = this.count;
+    renderHighs();
+  }
+};
+$("#qfStart").addEventListener("click", () => QF.start());
+$("#qfNext").addEventListener("click", () => QF.ask());
+
+/* ================= MODE 2: ORDER THE STEPS ================= */
+const ORD = {
+  item: null, lastIdx: -1, attempted: false, solvedFirstTry: 0, dragEl: null,
+
+  next() {
+    if (!CONTENT) return;
+    this.lastIdx = pickIndex(CONTENT.ordering.length, this.lastIdx);
+    this.item = CONTENT.ordering[this.lastIdx];
+    this.attempted = false;
+    $("#ordAlgo").textContent = this.item.algorithm;
+    $("#ordTitle").textContent = this.item.title;
+    $("#ordFeedback").innerHTML = "";
+    $("#ordCheck").disabled = false;
+
+    let order = shuffle(this.item.steps);
+    // never present the already-correct order
+    while (this.item.steps.length > 1 && order.every((s, i) => s === this.item.steps[i])) {
+      order = shuffle(this.item.steps);
+    }
+    const list = $("#ordList");
+    list.innerHTML = "";
+    order.forEach(step => list.appendChild(this.makeRow(step)));
+  },
+
+  makeRow(step) {
+    const li = document.createElement("li");
+    li.draggable = true;
+    li.innerHTML = '<span class="grip">⋮⋮</span><span class="stepText"></span>' +
+                   '<button class="mv" title="Move up">▲</button><button class="mv" title="Move down">▼</button>';
+    li.querySelector(".stepText").textContent = step;
+    li.dataset.step = step;
+
+    li.addEventListener("dragstart", () => { this.dragEl = li; li.classList.add("dragging"); });
+    li.addEventListener("dragend", () => { li.classList.remove("dragging"); this.dragEl = null; });
+    li.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      if (!this.dragEl || this.dragEl === li) return;
+      const rect = li.getBoundingClientRect();
+      const before = ev.clientY < rect.top + rect.height / 2;
+      li.parentNode.insertBefore(this.dragEl, before ? li : li.nextSibling);
+    });
+
+    const [up, down] = li.querySelectorAll(".mv");
+    up.addEventListener("click", () => { if (li.previousElementSibling) li.parentNode.insertBefore(li, li.previousElementSibling); });
+    down.addEventListener("click", () => { if (li.nextElementSibling) li.parentNode.insertBefore(li.nextElementSibling, li); });
+    return li;
+  },
+
+  check() {
+    if (!this.item) return;
+    const rows = [...$("#ordList").children];
+    let allRight = true;
+    rows.forEach((li, i) => {
+      const right = li.dataset.step === this.item.steps[i];
+      li.classList.remove("correct", "wrong");
+      li.classList.add(right ? "correct" : "wrong");
+      if (!right) allRight = false;
+    });
+    const fb = $("#ordFeedback");
+    if (allRight) {
+      if (!this.attempted) {
+        this.solvedFirstTry++;
+        $("#ordScore").textContent = this.solvedFirstTry;
+        saveHigh("ordering", this.solvedFirstTry);
+      }
+      fb.innerHTML = '<div class="feedback good"><b>Correct order' +
+        (this.attempted ? "" : " — first try!") + '</b> In the exam, write the steps out in exactly this sequence and show the working for each.</div>';
+      $("#ordCheck").disabled = true;
+    } else {
+      fb.innerHTML = '<div class="feedback bad"><b>Not yet.</b> Steps in the right position are green — rearrange the red ones and check again.</div>';
+      this.attempted = true;
+    }
+  }
+};
+$("#ordCheck").addEventListener("click", () => ORD.check());
+$("#ordNext").addEventListener("click", () => ORD.next());
+
+/* ================= MODE 3: PIVOT PICKER ================= */
+const PV = {
+  streak: 0, tableau: null, queue: [], done: false,
+
+  /* Random 3-variable, 3-constraint maximisation tableau with a unique
+     correct pivot column (most negative objective entry) and a unique
+     minimum ratio, so the answer is never ambiguous. */
+  generate() {
+    for (let tries = 0; tries < 500; tries++) {
+      const objective = [randInt(2, 9), randInt(2, 9), randInt(2, 9)];
+      const maxC = Math.max(...objective);
+      if (objective.filter(v => v === maxC).length !== 1) continue;
+      const col = objective.indexOf(maxC);
+
+      const constraints = [];
+      for (let r = 0; r < 3; r++) {
+        constraints.push({ coeffs: [randInt(0, 5), randInt(0, 5), randInt(0, 5)], rhs: randInt(8, 40) });
+      }
+      if (constraints.some(c => c.coeffs.every(v => v === 0))) continue;
+
+      const ratios = constraints.map(c => c.coeffs[col] > 0 ? c.rhs / c.coeffs[col] : null);
+      const valid = ratios.filter(x => x !== null);
+      if (valid.length < 2) continue;                       // make the ratio test meaningful
+      const min = Math.min(...valid);
+      if (ratios.filter(x => x === min).length !== 1) continue;
+
+      return { objective, constraints };
+    }
+    // fall back to a known-good tableau (practically unreachable)
+    return { objective: [5, 4, 3], constraints: [
+      { coeffs: [2, 3, 1], rhs: 5 }, { coeffs: [4, 1, 2], rhs: 11 }, { coeffs: [3, 4, 2], rhs: 8 }] };
+  },
+
+  /* correct pivot for a tableau in this schema */
+  solve(t) {
+    const maxC = Math.max(...t.objective);
+    const col = t.objective.indexOf(maxC);
+    let row = -1, best = Infinity;
+    t.constraints.forEach((c, r) => {
+      if (c.coeffs[col] > 0) {
+        const ratio = c.rhs / c.coeffs[col];
+        if (ratio < best) { best = ratio; row = r; }
+      }
+    });
+    return { col, row };
+  },
+
+  next() {
+    if (!CONTENT) return;
+    const presets = (CONTENT.pivot && Array.isArray(CONTENT.pivot.presets)) ? CONTENT.pivot.presets : [];
+    const useGen = !CONTENT.pivot || CONTENT.pivot.useGenerator !== false;
+    // serve the JSON presets first (shuffled), then random tableaux;
+    // if the generator is disabled, cycle through the presets forever
+    if (!this.queue.length && presets.length && (!this.usedPresets || !useGen)) {
+      this.queue = shuffle(presets);
+      this.usedPresets = true;
+    }
+    this.tableau = this.queue.length ? this.queue.shift() : this.generate();
+    this.done = false;
+    $("#pvFeedback").innerHTML = "";
+    $("#pvNext").style.display = "none";
+    this.render();
+  },
+
+  render() {
+    const t = this.tableau;
+    $("#pvObjective").textContent = "P = " + t.objective.map((c, i) => c + ["x", "y", "z"][i]).join(" + ");
+    const vars = ["x", "y", "z", "s₁", "s₂", "s₃"];
+    const tbl = $("#pvTable");
+    tbl.innerHTML = "";
+
+    const head = document.createElement("tr");
+    head.innerHTML = "<th></th>" + vars.map(v => "<th>" + v + "</th>").join("") + "<th>RHS</th>";
+    tbl.appendChild(head);
+
+    t.constraints.forEach((c, r) => {
+      const tr = document.createElement("tr");
+      const cells = [...c.coeffs, ...[0, 0, 0].map((_, i) => i === r ? 1 : 0)];
+      tr.innerHTML = "<th>" + ["s₁", "s₂", "s₃"][r] + "</th>" +
+        cells.map(() => "<td></td>").join("") + "<td><b></b></td>";
+      const tds = tr.querySelectorAll("td");
+      cells.forEach((v, i) => {
+        tds[i].textContent = v;
+        if (i < 6) {
+          tds[i].classList.add("clickable");
+          tds[i].addEventListener("click", () => this.pick(r, i, tds[i]));
+        }
+      });
+      tds[6].querySelector("b").textContent = c.rhs;
+      tbl.appendChild(tr);
+    });
+
+    const objTr = document.createElement("tr");
+    objTr.className = "objrow";
+    objTr.innerHTML = "<th>P</th>" +
+      t.objective.map(c => "<td>−" + c + "</td>").join("") +
+      "<td>0</td><td>0</td><td>0</td><td>0</td>";
+    tbl.appendChild(objTr);
+  },
+
+  ratioTableHTML(col) {
+    const t = this.tableau;
+    const colName = ["x", "y", "z", "s₁", "s₂", "s₃"][col];
+    let rows = "";
+    t.constraints.forEach((c, r) => {
+      const entry = c.coeffs[col];
+      const cell = entry > 0
+        ? c.rhs + " ÷ " + entry + " = " + fmtRatio(c.rhs, entry)
+        : "entry " + entry + " — <i>excluded (not positive)</i>";
+      rows += "<tr><td>Row " + (r + 1) + "</td><td>" + cell + "</td></tr>";
+    });
+    return "<table class='ratios'><tr><th>Row</th><th>Ratio test on column " + colName + " (RHS ÷ entry)</th></tr>" + rows + "</table>";
+  },
+
+  pick(r, c, td) {
+    if (this.done || !this.tableau) return;
+    this.done = true;
+    const { col, row } = this.solve(this.tableau);
+    const t = this.tableau;
+    const varNames = ["x", "y", "z", "s₁", "s₂", "s₃"];
+    const fb = $("#pvFeedback");
+    const correctCell = $("#pvTable").rows[row + 1].cells[col + 1];
+
+    if (c === col && r === row) {
+      this.streak++;
+      td.classList.add("picked-good");
+      fb.innerHTML = '<div class="feedback good"><b>Correct pivot!</b> ' +
+        "Column " + varNames[col] + " has the most negative objective entry (−" + Math.max(...t.objective) + "), " +
+        "and row " + (row + 1) + " gives the smallest non-negative ratio:" +
+        this.ratioTableHTML(col) + "</div>";
+    } else {
+      this.streak = 0;
+      td.classList.add("picked-bad");
+      correctCell.classList.add("reveal");
+      let why;
+      if (c !== col) {
+        const objEntry = c < 3 ? "−" + t.objective[c] : "0";
+        why = "The pivot <b>column</b> must have the most negative entry in the objective row. " +
+          "Column " + varNames[c] + " has objective entry " + objEntry + ", but column " + varNames[col] +
+          " has −" + Math.max(...t.objective) + ", which is more negative. " +
+          "Then the ratio test on column " + varNames[col] + " picks the row:" + this.ratioTableHTML(col);
+      } else {
+        why = "Right column, wrong <b>row</b>. The ratio test divides each RHS by the pivot-column entry " +
+          "<i>only where that entry is positive</i>, and the smallest non-negative ratio wins:" +
+          this.ratioTableHTML(col) +
+          "<p>The smallest ratio is in row " + (row + 1) + ", so the pivot is the highlighted cell.</p>";
+      }
+      fb.innerHTML = '<div class="feedback bad"><b>Streak reset.</b> ' + why + "</div>";
+    }
+    saveHigh("pivot", this.streak);
+    $("#pvStreak").textContent = this.streak;
+    renderHighs();
+    $("#pvNext").style.display = "inline-block";
+  }
+};
+$("#pvNext").addEventListener("click", () => PV.next());
+
+/* ================= MODE 4: SPOT THE ERROR ================= */
+const SP = {
+  streak: 0, item: null, lastIdx: -1, done: false,
+
+  next() {
+    if (!CONTENT) return;
+    this.lastIdx = pickIndex(CONTENT.spotTheError.length, this.lastIdx);
+    this.item = CONTENT.spotTheError[this.lastIdx];
+    this.done = false;
+    $("#spTopic").textContent = this.item.topic || "";
+    $("#spPrompt").textContent = this.item.prompt;
+    $("#spFeedback").innerHTML = "";
+    $("#spNext").style.display = "none";
+    const box = $("#spLines");
+    box.innerHTML = "";
+    this.item.lines.forEach((line, i) => {
+      const b = document.createElement("button");
+      b.textContent = (i + 1) + ".  " + line;
+      b.addEventListener("click", () => this.pick(i, b));
+      box.appendChild(b);
+    });
+  },
+
+  pick(i, btn) {
+    if (this.done) return;
+    this.done = true;
+    document.querySelectorAll("#spLines button").forEach(b => b.disabled = true);
+    const fb = $("#spFeedback");
+    const errBtn = document.querySelectorAll("#spLines button")[this.item.errorLine];
+    if (i === this.item.errorLine) {
+      this.streak++;
+      btn.classList.add("correct");
+      fb.innerHTML = '<div class="feedback good"><b>Found it.</b> ' + this.item.explanation + "</div>";
+    } else {
+      this.streak = 0;
+      btn.classList.add("wrong");
+      errBtn.classList.add("correct");
+      fb.innerHTML = '<div class="feedback bad"><b>Streak reset — the mistake is in the highlighted line.</b> ' +
+        this.item.explanation + "</div>";
+    }
+    saveHigh("spot", this.streak);
+    $("#spStreak").textContent = this.streak;
+    renderHighs();
+    $("#spNext").style.display = "inline-block";
+  }
+};
+$("#spNext").addEventListener("click", () => SP.next());
+
+renderHighs();
+</script>
+</body>
+</html>

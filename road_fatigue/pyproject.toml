@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "road-fatigue"
+version = "0.1.0"
+description = "ISO 8608 road-profile synthesis, 2-DOF quarter-car simulation and rainflow counting of the wheel-load history"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "rainflow>=3.1"]
+
+[project.scripts]
+road-fatigue = "road_fatigue.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["road_fatigue*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

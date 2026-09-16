@@ -283,7 +283,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       const cands = [frac(d - p, a - c), frac(-(p + d), a + c)];
       const rejected = cands.find((v) => !v.equals(x));
       if (!rejected || satisfies(eq, rejected)) return null;
-      if (!isCleanExact(x).ok || !isCleanExact(rejected).ok) return null;
+      if (x.isZero() || !isCleanExact(x).ok || !isCleanExact(rejected).ok) return null;
       if (!x.isInteger() && rng.bool(0.6)) return null;
       const firstValid = x.equals(cands[0]);
       const ds = clean([

@@ -338,36 +338,53 @@ function triangleAreaQ(rng: RNG): Generated | null {
   };
 }
 
+/** Ratios OA : AC that make OC = ((p+q)/p)·OA a clean, mental scale factor. */
+const OA_RATIOS: [number, number][] = [[2, 1], [2, 3], [2, 5], [3, 1], [3, 2], [3, 4], [4, 1], [4, 3], [1, 1], [1, 2], [1, 3], [5, 2]];
+
+/**
+ * C on OA extended, with the ratio given as OA : AC — so the scale factor (p + q)/p has to be
+ * built before anything is multiplied — and the ask is a coordinate of C or the sum of both.
+ */
 function scaledPointQ(rng: RNG): Generated | null {
-  const den = rng.pick([2, 3, 4]);
-  const num = rng.pick([3, 5, 7, 4, 5, 8].filter((x) => x % den !== 0 && x > den));
-  const a: Pt = [rng.nonZeroInt(-4, 5) * den, rng.nonZeroInt(-4, 5) * den];
-  if (a.some((x) => Math.abs(x) > 16) || a[0] === a[1]) return null;
+  const [p, q] = rng.pick(OA_RATIOS);
+  const a: Pt = [rng.nonZeroInt(-4, 5) * p, rng.nonZeroInt(-4, 5) * p];
+  if (a.some((x) => Math.abs(x) > 15) || a[0] === a[1] || a[0] === -a[1]) return null;
+  const k = frac(p + q, p); // OC = k·OA
+  const c = a.map((x) => (x * (p + q)) / p);
+  const sumsAsked = rng.bool(0.4);
   const which = rng.int(0, 1);
   const label = which === 0 ? 'x' : 'y';
-  const value = (a[which] * num) / den;
+  const base = sumsAsked ? a[0] + a[1] : a[which];
+  const value = sumsAsked ? c[0] + c[1] : c[which];
+  if (value === 0 || Math.abs(value) > 70) return null;
   const answer = E(value);
-  if (!isCleanExact(answer).ok || Math.abs(value) > 60) return null;
+  if (!isCleanExact(answer).ok) return null;
+  const scaled = (f: Exact) => f.mul(E(base));
   const must = cleanOnly([
-    { value: frac(a[which] * den, num), trap: 'used the reciprocal of the scale factor' },
-    { value: E(a[which] * num), trap: 'forgot to divide by the denominator of the scale factor' },
-    { value: E((a[1 - which] * num) / den), trap: `gave the ${which === 0 ? 'y' : 'x'}-coordinate instead` },
+    { value: scaled(frac(q, p)), trap: 'scaled by AC : OA, giving the vector AC rather than the point C' },
+    { value: scaled(frac(p, p + q)), trap: 'turned the scale factor upside down' },
+    { value: scaled(frac(p + q, q)), trap: 'read the ratio as AC : OA' },
   ]);
   const extra = cleanOnly([
-    { value: frac(a[which] * num, den).add(E(a[which])), trap: 'added OA on top of the scaled vector' },
-    { value: E(a[which]), trap: 'quoted the coordinate of A' },
+    { value: E(base), trap: sumsAsked ? 'added the coordinates of A and forgot to scale' : 'quoted the coordinate of A' },
+    { value: sumsAsked ? E(c[0]) : E(c[1 - which]), trap: sumsAsked ? 'gave only one coordinate of C' : `gave the ${which === 0 ? 'y' : 'x'}-coordinate instead` },
+    { value: E(base + q), trap: 'added the numbers in the ratio instead of scaling by them' },
     { value: answer.add(E(1)), trap: 'arithmetic slip of one' },
     { value: answer.sub(E(1)), trap: 'arithmetic slip of one' },
-    { value: E(a[which] * (num - den) / den), trap: 'scaled AC instead of OC' },
+    { value: scaled(frac(p + q, p).add(E(1))), trap: 'added OA on top of OC as well' },
   ]);
+  const ask = sumsAsked
+    ? 'Find the sum of the coordinates of $C$.'
+    : `Find the $${label}$-coordinate of $C$.`;
+  const step = `$OA : AC = ${p} : ${q}$, so $\\mathbf{AC} = ${frac(q, p).toLatex({ format: 'fraction' })}\\mathbf{OA}$ and $\\mathbf{OC} = \\mathbf{OA} + \\mathbf{AC} = ${k.toLatex({ format: 'fraction' })}\\mathbf{OA}$.`;
   return {
-    stem: `$O$ is the origin and $A$ is the point $${ptTex(a)}$. The point $C$ lies on $OA$ extended so that $\\mathbf{OC} = \\frac{${num}}{${den}}\\mathbf{OA}$. Find the $${label}$-coordinate of $C$.`,
+    stem: `$O$ is the origin and $A$ is the point $${ptTex(a)}$. The point $C$ lies on $OA$ extended so that $OA : AC = ${p} : ${q}$. ${ask}`,
     answer: { kind: 'exact' as const, value: answer },
     options: buildOptions(rng, answer, ranked(rng, answer, must, extra), { format: 'fraction' }),
-    solution: `Every coordinate is multiplied by $\\frac{${num}}{${den}}$: $${label}_C = \\frac{${num}}{${den}} \\times ${a[which] < 0 ? `(${a[which]})` : a[which]} = ${value}$.`,
-    trap: 'OC = k·OA scales both coordinates by k; turning the fraction upside down is the usual slip.',
+    solution: `${step} So $C$ is $${ptTex(c)}$${sumsAsked ? `, and the coordinates add to $${value}$` : ` and the $${label}$-coordinate is $${value}$`}.`,
+    trap: 'OA : AC is not the scale factor: OC = OA + AC = ((p + q)/p)·OA, so the ratio has to be converted first.',
     tags: ['vectors', 'position-vectors', 'ratio'],
-    params: { variant: 'scaled', a, num, den, which },
+    params: { variant: 'scaled', a, p, q, sumsAsked, which },
     typedAllowed: true,
   };
 }
@@ -403,7 +420,7 @@ export default defineTemplate({
     });
   },
   verify(q) {
-    const p = q.params as { variant: string; a: number[]; b?: number[]; c?: number[]; m?: number; n?: number; cy?: number; num?: number; den?: number; which?: number };
+    const p = q.params as { variant: string; a: number[]; b?: number[]; c?: number[]; m?: number; n?: number; cy?: number; p?: number; q?: number; sumsAsked?: boolean; which?: number };
     const near = (x: number, y: number) => Math.abs(x - y) < 1e-9;
     const val = q.answer.kind === 'exact' ? q.answer.value.toNumber() : NaN;
     const chosen = q.answer.kind === 'choice' ? numbersIn(q.answer.value) : [];
@@ -442,8 +459,13 @@ export default defineTemplate({
         return near(val, shoelace) && val > 0;
       }
       case 'scaled': {
-        const k = p.num! / p.den!;
-        return near(val, k * p.a[p.which!]);
+        // Step from A by AC = (q/p)·OA instead of scaling OA, then check the ratio of the two lengths.
+        const a = p.a, pp = p.p!, qq = p.q!;
+        const c = a.map((x) => x + (qq / pp) * x);
+        const oa = Math.hypot(...a), ac = Math.hypot(...c.map((x, i) => x - a[i]));
+        if (Math.abs(oa * qq - ac * pp) > 1e-9) return false;
+        const expected = p.sumsAsked ? c[0] + c[1] : c[p.which!];
+        return near(val, expected);
       }
       default:
         return false;

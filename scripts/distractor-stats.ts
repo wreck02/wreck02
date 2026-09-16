@@ -16,6 +16,7 @@
 import { TEMPLATES, generateQuestion } from '../src/core/registry';
 import { RNG } from '../src/core/rng';
 import { LEVELS, type Level } from '../src/core/template';
+import { STATEMENT_COMBOS } from '../src/core/options';
 
 const filter = process.argv[2] ?? '';
 const N = parseInt(process.env.N ?? '200', 10);
@@ -40,7 +41,9 @@ for (const t of TEMPLATES) {
       const q = generateQuestion(t, new RNG(`stats:${t.id}:${level}:${i}`), level as Level);
       s.n++;
       s.stems.add(q.stem);
-      for (const o of q.options) if (!o.correct) { s.wrong++; if (!o.trap) s.unlabeled++; }
+      // The fixed I/II/III combinations are the exam's own option list: they carry no per-option trap by design.
+      const fixedCombos = q.options.length === STATEMENT_COMBOS.length && q.options.every((o, k) => o.display === STATEMENT_COMBOS[k]);
+      if (!fixedCombos) for (const o of q.options) if (!o.correct) { s.wrong++; if (!o.trap) s.unlabeled++; }
       const nums = q.options.map((o) => (o.value ? o.value.toNumber() : NaN));
       if (nums.every((x) => Number.isFinite(x))) {
         s.numeric++;

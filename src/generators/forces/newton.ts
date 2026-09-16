@@ -48,16 +48,38 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
   return out;
 }
 
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * One headline trap first, then the rest chosen towards a randomly drawn number of options *below*
+ * the answer. Without that, a variant whose named mistakes all overshoot (ma vs F, mg vs ma, …) puts
+ * the correct option at the same rank in every instance and "pick the smallest" answers it with no
+ * arithmetic. A candidate that would stretch the option list beyond `maxSpread` is skipped: 3.125 N
+ * next to 2000 N is implausible on sight.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 40): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
+  const mags: number[] = Math.abs(a) > 0 ? [Math.abs(a)] : [];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    const x = Math.abs(d.value.toNumber());
+    if (x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread) return;
     seen.push(d.value);
+    if (x > 0) mags.push(x);
     out.push(d);
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const heads = rng.shuffle(must);
+  if (heads.length > 0) take(heads[0]);
+  const rest = heads.slice(1);
+  const side = (lo: boolean) => [...rest, ...rng.shuffle(extra)].filter((d) => (lo ? d.value.toNumber() < a : d.value.toNumber() > a));
+  const below = side(true);
+  const above = side(false);
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
@@ -97,9 +119,10 @@ function fma(rng: RNG): Generated | null {
       { value: F * m, trap: 'multiplied F by m instead of dividing' },
       { value: m / F, trap: 'divided the wrong way round: a = F/m' },
     ], [
-      { value: F - m, trap: 'subtracted the mass from the force' },
-      { value: F + m, trap: 'added the mass to the force' },
-      { value: F / (m * G), trap: 'divided by the weight instead of the mass' },
+      { value: F / (m * G), trap: 'divided by the weight mg instead of the mass' },
+      { value: (F * G) / m, trap: 'multiplied by g as well: a = F/m needs no g' },
+      { value: F / (m * m), trap: 'divided by the mass twice' },
+      { value: (F / m) / 2, trap: 'halved: a = F/m, with no ½ (that belongs to ½at²)' },
     ]),
     `$F = ma$, so $a = \\frac{F}{m} = \\frac{${F}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
     'a = F/m: divide the resultant force by the mass (in kg), not by the weight.',
@@ -109,11 +132,12 @@ function fma(rng: RNG): Generated | null {
     const stem = `${obj.charAt(0).toUpperCase() + obj.slice(1)} of mass ${q(m, U.kg)} accelerates at ${q(a, U.a)}. Find the resultant force acting on it.`;
     return finish(stem, X(F), U.N, physOptions(rng, X(F), U.N, [
       { value: m / a, trap: 'divided instead of multiplying: F = ma' },
-      { value: m + a, trap: 'added m and a' },
+      { value: m * G * a, trap: 'used the weight mg instead of the mass' },
     ], [
       { value: a / m, trap: 'divided the wrong way round' },
-      { value: m * G * a, trap: 'used the weight instead of the mass' },
       { value: m * a * a, trap: 'squared the acceleration' },
+      { value: (m * a) / G, trap: 'divided by g as well: F = ma needs no g' },
+      { value: m * a * 0.5, trap: 'halved: F = ma, with no ½ (that belongs to ½at²)' },
     ]),
     `$F = ma = ${m} \\times ${num(a)} = ${F}$ N.`,
     'F = ma multiplies mass (kg) by acceleration; do not use the weight in place of the mass.',
@@ -125,8 +149,8 @@ function fma(rng: RNG): Generated | null {
     { value: a / F, trap: 'divided the wrong way round' },
   ], [
     { value: F / (a * G), trap: 'divided by g as well (confused mass with weight)' },
-    { value: F - a, trap: 'subtracted a from F' },
     { value: F * G / a, trap: 'found the weight F g/a instead of the mass' },
+    { value: F / (a * a), trap: 'divided by the acceleration twice' },
   ]),
   `$F = ma$, so $m = \\frac{F}{a} = \\frac{${F}}{${num(a)}} = ${m}$ kg.`,
   'm = F/a; the answer is a mass in kg (no factor of g involved).',
@@ -144,9 +168,11 @@ function weight(rng: RNG): Generated | null {
       { value: W, trap: 'quoted the weight as the mass: weight = mass × g' },
       { value: W * G, trap: 'multiplied by g instead of dividing' },
     ], [
-      { value: W / 9.8, trap: 'used g = 9.8 instead of the stated 10' },
+      // the g = 9.8 twin sits 2% from the answer: as a fixture it flags the answer pair, so use it sparingly
+      { value: rng.bool(0.3) ? W / 9.8 : null, trap: 'used g = 9.8 instead of the stated 10' },
       { value: W / 100, trap: 'divided by g² (or slipped a power of ten)' },
       { value: W - G, trap: 'subtracted g instead of dividing by it' },
+      { value: (W - G) / G, trap: 'subtracted g as well as dividing by it' },
     ]),
     `$W = mg$, so $m = \\frac{W}{g} = \\frac{${W}}{10} = ${num(m)}$ kg.`,
     'Weight is a force (N) and mass is in kg: m = W/g, not W itself.',
@@ -155,11 +181,12 @@ function weight(rng: RNG): Generated | null {
   const stem = `${obj.charAt(0).toUpperCase() + obj.slice(1)} has a mass of ${q(m, U.kg)}. ${G_NOTE} Find its weight.`;
   return finish(stem, X(W), U.N, physOptions(rng, X(W), U.N, [
     { value: m, trap: 'quoted the mass as the weight: W = mg' },
-    { value: m * 9.8, trap: 'used g = 9.8 instead of the stated 10' },
+    { value: m * G * G, trap: 'multiplied by g twice' },
   ], [
+    { value: rng.bool(0.3) ? m * 9.8 : null, trap: 'used g = 9.8 instead of the stated 10' },
     { value: m / G, trap: 'divided by g instead of multiplying' },
     { value: m + G, trap: 'added g instead of multiplying' },
-    { value: m * G * G, trap: 'multiplied by g twice' },
+    { value: (m + G) * G, trap: 'added g to the mass before multiplying by g' },
   ]),
   `$W = mg = ${num(m)} \\times 10 = ${num(W)}$ N.`,
   'Weight = mg (newtons); the mass in kg is not the weight.',
@@ -183,7 +210,9 @@ function twoForces(rng: RNG): Generated | null {
   ], [
     { value: net, trap: 'found the resultant force but forgot to divide by the mass' },
     { value: (F1 - F2) * m, trap: 'multiplied the resultant by the mass instead of dividing' },
-    { value: (F1 - F2) / (m * G), trap: 'divided by the weight instead of the mass' },
+    { value: (F1 - F2) / (m * G), trap: 'divided by the weight mg instead of the mass' },
+    { value: F2 / m, trap: 'used the resistive force instead of the resultant' },
+    { value: (F1 - F2) / (F1 + F2), trap: 'divided by the total force instead of by the mass' },
   ]),
   `Resultant $= ${F1} - ${F2} = ${net}$ N, so $a = \\frac{${net}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
   'Find the resultant first (forces in opposite directions subtract), then divide by the mass.',
@@ -283,7 +312,8 @@ function frictionForce(rng: RNG): Generated | null {
     ], [
       { value: m * a - fr > 0 ? m * a - fr : null, trap: 'subtracted friction from ma instead of adding' },
       { value: mu * m + m * a, trap: 'forgot g in the friction term' },
-      { value: (m * G + m) * a, trap: 'mixed weight and mass' },
+      { value: m * G + m * a, trap: 'used the whole weight mg as the friction force (forgot μ)' },
+      { value: (mu + a) * m * G, trap: 'multiplied the ma term by g as well' },
     ]),
     `Friction $= \\mu mg = ${num(mu)} \\times ${m * G} = ${num(fr)}$ N. $F - ${num(fr)} = ma = ${m * a}$, so $F = ${num(F)}$ N.`,
     'The pushing force supplies both the friction μmg and the extra ma needed to accelerate.',
@@ -319,7 +349,9 @@ function pushOnRough(rng: RNG): Generated | null {
   ], [
     { value: P - fr, trap: 'found the resultant force but did not divide by the mass' },
     { value: (P - mu * m) / m, trap: 'forgot g in the friction term' },
-    { value: (P - fr) / (m * G), trap: 'divided by the weight instead of the mass' },
+    { value: (P - fr) / (m * G), trap: 'divided by the weight mg instead of the mass' },
+    { value: fr / m, trap: 'used the friction force instead of the resultant' },
+    { value: mu * G, trap: 'quoted μg, the deceleration friction alone would give' },
   ]),
   `Friction $= \\mu mg = ${num(mu)} \\times ${m * G} = ${num(fr)}$ N. Resultant $= ${P} - ${num(fr)} = ${num(P - fr)}$ N, so $a = \\frac{${num(P - fr)}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
   'Friction opposes the motion: subtract μmg from the push before dividing by the mass.',

@@ -244,7 +244,6 @@ function velocityFromForce(rng: RNG): Generated | null {
       { value: (m * dv * F), trap: 'multiplied by F instead of dividing' },
       { value: (m * (u + v)) / F, trap: 'added the velocities instead of subtracting' },
       { value: (m * (u + v)) / (2 * F), trap: 'used the average velocity ½(u + v) instead of the change in velocity' },
-      { value: m / F, trap: 'forgot the change in velocity: the impulse is mΔv, not m' },
       { value: (m * u) / F, trap: 'used the initial momentum instead of the change in momentum' },
     ]),
     `$Ft = m(v - u)$, so $t = \\frac{${m} \\times (${v} - ${u})}{${F}} = \\frac{${m * dv}}{${F}} = ${t}$ s.`,
@@ -261,7 +260,6 @@ function velocityFromForce(rng: RNG): Generated | null {
     { value: u + F * t, trap: 'found the impulse Ft but did not divide by the mass' },
     { value: u + (F * t) / (m * 10), trap: 'divided by the weight instead of the mass' },
     { value: u + (F * t * m), trap: 'multiplied by the mass instead of dividing' },
-    { value: u + (F * t) / (m * m), trap: 'divided by the mass twice' },
     { value: (F * t) / m - u, trap: 'subtracted the initial velocity instead of adding it' },
   ]),
   `Impulse $Ft = ${F} \\times ${t} = ${F * t}$ N s $= m\\Delta v$, so $\\Delta v = \\frac{${F * t}}{${m}} = ${num(dv)}$ m s$^{-1}$ and $v = ${u} + ${num(dv)} = ${num(v)}$ m s$^{-1}$.`,
@@ -293,6 +291,7 @@ function coalesceStationary(rng: RNG): Generated | null {
     { value: m1 * u1, trap: 'found the total momentum, not the speed' },
     { value: u1 - v, trap: 'found the speed the first body loses, not their common speed' },
     { value: (m1 * u1) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
+    { value: (0.5 * m1 * u1) / (m1 + m2), trap: 'used ½m₁u₁ for the momentum before: the ½ belongs to the kinetic energy' },
   ]),
   `Momentum: $${m1} \\times ${u1} = (${m1} + ${m2})v$, so $v = \\frac{${m1 * u1}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$.`,
   'After a perfectly inelastic collision the combined mass m₁ + m₂ carries all the momentum.',
@@ -354,6 +353,9 @@ function recoil(rng: RNG): Generated | null {
     { value: (m * v) / (M * m), trap: 'divided by the product of the masses instead of by M' },
     { value: (m * v) / (M - m), trap: 'used the difference of the masses instead of M' },
     { value: (m * v * 10) / M, trap: 'multiplied by g as if momentum were weight × velocity' },
+    { value: (0.5 * m * v) / M, trap: 'used ½mv for the momentum: the ½ belongs to the kinetic energy' },
+    { value: (2 * m * v) / M, trap: 'used 2mv, the change of momentum in a rebound: from rest the change is mv' },
+    { value: v * Math.sqrt(m / M), trap: 'used conservation of kinetic energy instead of conservation of momentum' },
   ]),
   `${solutionIntro}: $${num(M)}V = ${num(m)} \\times ${v}$, so $V = \\frac{${num(m * v)}}{${num(M)}} = ${num(V)}$ m s$^{-1}$ (in the opposite direction).`,
   'In an explosion from rest the momenta are equal and opposite: MV = mv; each body keeps its own mass.',
@@ -427,6 +429,9 @@ function keLost(rng: RNG): Generated | null {
   const one = SINGLE[kind];
   const intro = `A ${one} of mass ${q(m1, U.kg)} moving at ${q(u1, U.v)} collides with a stationary ${one} of mass ${q(m2, U.kg)} and the two move off together.`;
   if (askFraction) {
+    // Equal masses make the fraction exactly ½, which is also the "assumed half is always lost" trap,
+    // and every other candidate then collapses to the same five numbers.
+    if (m1 === m2) return null;
     const fr = frac(m2, m1 + m2);
     // A fraction of the initial energy must lie strictly between 0 and 1: m₁/m₂, m₂/m₁ and any padding
     // above 1 would be eliminated on sight, and "all of it" is impossible when the pair moves off together.

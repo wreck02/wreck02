@@ -31,6 +31,7 @@ const TAKE_G = 'Take $g = 10\\ \\text{m s}^{-2}$.';
  * because 100 000 J beside 10 J is not an option list the exam would print.
  */
 type Candidate = { value: Exact | null; trap: string; wide?: boolean };
+type Ranked = Distractor & { wide?: boolean };
 
 /** Plain number for a stem: 1200, 0.05, 22.5. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
@@ -46,19 +47,29 @@ function tryE(f: () => Exact): Exact | null {
   }
 }
 
+/**
+ * A mistake value that is not exact, printed the way the exam prints a speed or a distance: one decimal
+ * place (three significant figures when large). Never a surd: an option such as 10√2 beside four whole
+ * numbers is discarded on sight, and "pick the only whole number" would score without any physics.
+ */
+function approx(x: number): Exact | null {
+  if (!Number.isFinite(x) || x <= 0) return null;
+  return E(Math.abs(x) >= 1000 ? Number(x.toPrecision(3)) : Number(x.toFixed(1)));
+}
+
 /** Positive, finite, clean candidates that sit close enough to the answer to be weighed against it. */
-function cleanOnly(ds: Candidate[], answer: Exact): Distractor[] {
+function cleanOnly(ds: Candidate[], answer: Exact): Ranked[] {
   const a = answer.toNumber();
-  const out: Distractor[] = [];
+  const out: Ranked[] = [];
   for (const d of ds) {
     const v = d.value;
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) continue;
     const x = v.toNumber();
     if (x < 0.001 || x > 2e6) continue;
-    const span = d.wide ? 100 : 20;
+    const span = d.wide ? 100 : 12;
     if (x > span * a || x < a / span) continue;
     if (v.isRational() && !Number.isInteger(r(x * 1000))) continue; // decimals must terminate: no 10/3 among 30 and 0.3
-    out.push({ value: v, trap: d.trap });
+    out.push({ value: v, trap: d.trap, wide: d.wide });
   }
   return out;
 }
@@ -69,16 +80,24 @@ function cleanOnly(ds: Candidate[], answer: Exact): Distractor[] {
  * answer, so where the correct option lands in the sorted list is a property of the draw and not of the
  * sub-variant — "the energy is the smallest number" must never be a strategy.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count = 4): Distractor[] {
   const a = answer.toNumber();
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
+  const out: Ranked[] = [];
   const nums: number[] = [a];
-  const take = (d: Distractor) => {
+  let wideSlots = rng.bool(0.4) ? 1 : 0;
+  let shiftSlots = 1; // one power-of-ten option at most: a list that is a decimal ladder tests only the decimal point
+  const take = (d: Ranked) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
-    // a unit slip may be 100x out, but the list as a whole must stay readable: never 250 N beside 0.25 N
     const x = d.value.toNumber();
+    const k = Math.log10(x / a);
+    const isShift = Math.abs(k) >= 0.999 && Math.abs(k - Math.round(k)) < 1e-6;
+    if (d.wide && wideSlots <= 0) return;
+    if (isShift && shiftSlots <= 0) return;
+    // the list as a whole must stay readable: never 250 N beside 0.25 N
     if (out.length > 0 && Math.max(...nums, x) / Math.min(...nums, x) > 250) return;
+    if (d.wide) wideSlots--;
+    if (isShift) shiftSlots--;
     seen.push(d.value);
     nums.push(x);
     out.push(d);
@@ -92,7 +111,7 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     take((useBelow ? below : above).shift()!);
     if (useBelow) wantBelow--;
   }
-  return out;
+  return out.map((d) => ({ value: d.value, trap: d.trap }));
 }
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix of variants. */
@@ -401,18 +420,18 @@ function launchQ(rng: RNG): Generated | null {
       ['trolley', `A trolley of mass ${n(m)} kg is held against a spring of stiffness ${k} ${NPM} on a smooth horizontal track, compressing it by ${xcm} cm, and then released.`],
     ];
   const [object, scenario] = rng.pick(scenarios);
-  const surdHigh = rng.bool(0.5);
+  const halfHigh = rng.bool(0.5);
   return pack(rng, {
     stem: `${scenario} Find the speed of the ${object} as it leaves the spring.`,
     answer: E(v),
     unit: U_MS,
     must: [
       { value: E(r((k * x * x) / m)), trap: 'forgot to take the square root: gave v²' },
-      // one surd only: v√2 and v√2/2 are the same slip written twice, and two surds in a list of five
-      // are discarded on sight
-      surdHigh
-        ? { value: tryE(() => surd(2, v)), trap: 'kept the ½ on only one side: ½kx² = mv²' }
-        : { value: tryE(() => surd(2, v).mulRat(0.5)), trap: 'kept the ½ on only one side: kx² = ½mv²' },
+      // one of the two "½ on one side" slips, printed as a decimal: v√2 and v√2/2 are the same slip
+      // written twice, and a surd beside four whole numbers is discarded on sight
+      halfHigh
+        ? { value: approx(v * Math.SQRT2), trap: 'kept the ½ on only one side: ½kx² = mv²' }
+        : { value: approx(v / Math.SQRT2), trap: 'kept the ½ on only one side: kx² = ½mv²' },
     ],
     extra: [
       { value: E(Ev), trap: 'gave the energy stored in joules' },
@@ -505,7 +524,7 @@ function slopeLaunchQ(rng: RNG): Generated | null {
     unit: U_M,
     must: [
       { value: E(r(d / 2)), trap: 'found the vertical height gained, not the distance along the slope' },
-      { value: Number.isInteger(d / 3) ? tryE(() => surd(3, d / 3)) : null, trap: 'used cos 30° instead of sin 30°' },
+      { value: approx(d / Math.sqrt(3)), trap: 'used cos 30° instead of sin 30°' },
     ],
     extra: [
       { value: E(r(2 * d)), trap: 'forgot the ½ in the elastic energy' },

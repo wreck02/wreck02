@@ -149,19 +149,22 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // ----------------------------------------------------------------------------- level 1
 
 const DISTINCT_ITEMS: Record<number, string[]> = {
-  3: ['different flags', 'different medals', 'different keys'],
-  4: ['different photographs', 'different trophies', 'different posters'],
-  5: ['different paintings', 'different plants', 'different flags'],
-  6: ['different books', 'different cards', 'different mugs'],
+  3: ['different flags', 'different medals', 'different keys', 'different stamps', 'different tiles'],
+  4: ['different photographs', 'different trophies', 'different posters', 'different vases', 'different clocks'],
+  5: ['different paintings', 'different plants', 'different flags', 'different sculptures', 'different lamps'],
+  6: ['different books', 'different cards', 'different mugs', 'different jars', 'different plates'],
 };
 
 function arrangeQ(rng: RNG): Generated | null {
   const n = rng.int(3, 6);
   const answer = factorial(n);
   const thing = rng.pick(DISTINCT_ITEMS[n]);
-  const stem = rng.bool(0.5)
-    ? `In how many different orders can ${WORDS[n]} ${thing} be placed in a row?`
-    : `${cap(WORDS[n])} people are to be photographed standing in a line. In how many different orders can they stand?`;
+  const stem = rng.pick([
+    `In how many different orders can ${WORDS[n]} ${thing} be placed in a row?`,
+    `${cap(WORDS[n])} people are to be photographed standing in a line. In how many different orders can they stand?`,
+    `${cap(WORDS[n])} ${thing} are to be arranged on a shelf. In how many different orders can they be arranged?`,
+    `${cap(WORDS[n])} runners finish a race and no two of them tie. In how many different orders can they finish?`,
+  ]);
   return {
     stem,
     answer: { kind: 'exact', value: E(answer) },
@@ -193,11 +196,14 @@ function chooseQ(rng: RNG): Generated | null {
   const pairStems = [
     `Every one of ${WORDS[n]} people at a meeting shakes hands once with each of the others. How many handshakes take place?`,
     `A flag is made from ${WORDS[r]} of ${WORDS[n]} available colours. How many different pairs of colours can be chosen?`,
+    `${cap(WORDS[n])} points are marked on a circle. How many straight lines can be drawn joining two of them?`,
   ];
   const anyStems = [
     `A quiz has ${WORDS[n]} questions and each candidate must answer exactly ${WORDS[r]} of them. In how many ways can the questions be chosen?`,
     `${cap(WORDS[r])} different flavours are to be chosen from ${WORDS[n]} flavours of ice cream. How many different choices are possible?`,
     `A tasting menu offers ${WORDS[n]} small dishes and a diner may keep ${WORDS[r]} of them. In how many ways can the ${WORDS[r]} dishes be chosen?`,
+    `A gardener has ${WORDS[n]} kinds of seed and plants ${WORDS[r]} different kinds in a border. In how many ways can the kinds be chosen?`,
+    `A shop sells ${WORDS[n]} kinds of pen and a customer buys ${WORDS[r]} different kinds. In how many ways can the kinds be chosen?`,
   ];
   const stem = rng.pick(r === 2 ? [...pairStems, ...anyStems] : anyStems);
   return {
@@ -232,8 +238,17 @@ function committeeQ(rng: RNG): Generated | null {
   if (rb > nb - 1 || rg > ng - 1 || rb + rg < 3) return null;
   const answer = nCr(nb, rb) * nCr(ng, rg);
   if (answer > 300) return null;
+  const boys = `${WORDS[rb]} ${rb === 1 ? 'boy' : 'boys'}`;
+  const girls = `${WORDS[rg]} ${rg === 1 ? 'girl' : 'girls'}`;
+  const men = `${WORDS[rb]} ${rb === 1 ? 'man' : 'men'}`;
+  const women = `${WORDS[rg]} ${rg === 1 ? 'woman' : 'women'}`;
   return {
-    stem: `A committee of ${WORDS[rb + rg]} is to be chosen from ${WORDS[nb]} boys and ${WORDS[ng]} girls. In how many ways can it be chosen if it must contain exactly ${WORDS[rb]} ${rb === 1 ? 'boy' : 'boys'} and ${WORDS[rg]} ${rg === 1 ? 'girl' : 'girls'}?`,
+    stem: rng.pick([
+      `A committee of ${WORDS[rb + rg]} is to be chosen from ${WORDS[nb]} boys and ${WORDS[ng]} girls. In how many ways can it be chosen if it must contain exactly ${boys} and ${girls}?`,
+      `A panel of ${WORDS[rb + rg]} is to be formed from ${WORDS[nb]} men and ${WORDS[ng]} women. In how many ways can it be formed if it must contain exactly ${men} and ${women}?`,
+      `A working group of ${WORDS[rb + rg]} is chosen from ${WORDS[nb]} engineers and ${WORDS[ng]} scientists. In how many ways can it be chosen if exactly ${WORDS[rb]} of its members are engineers?`,
+      `From ${WORDS[nb]} boys and ${WORDS[ng]} girls, ${boys} and ${girls} are to be chosen. In how many different ways can this be done?`,
+    ]),
     answer: { kind: 'exact', value: E(answer) },
     options: countOptions(rng, answer, [
       { value: nCr(nb, rb) + nCr(ng, rg), trap: 'added the two selections instead of multiplying them' },
@@ -264,6 +279,9 @@ const REPEAT_WORDS = [
   'BANANA', 'LETTER', 'COMMON', 'PEPPER', 'MAXIMA', 'DEGREE', 'MIRROR', 'CANNON', 'EFFECT',
   'SUMMER', 'TUNNEL', 'YELLOW', 'CARROT', 'BOTTLE', 'MAMMAL', 'ASSESS',
   'SUCCESS', 'MINIMUM', 'ADDRESS', 'BALLOON', 'LETTERS', 'ELEMENT',
+  'HAPPY', 'SILLY', 'DIGITS', 'LITTLE', 'COFFEE', 'TOFFEE', 'RABBIT', 'PUPPET', 'SUNSET',
+  'PATTERN', 'SCIENCE', 'GENERAL', 'MEASURE', 'AVERAGE', 'BETWEEN', 'INTEGER', 'UNKNOWN',
+  'PERCENT', 'DIVIDES', 'REVERSE', 'ALGEBRA', 'BALANCE', 'CIRCLES', 'SQUARES', 'MILLION',
 ];
 
 function repeatsQ(rng: RNG): Generated | null {
@@ -395,7 +413,11 @@ function atLeastOneQ(rng: RNG): Generated | null {
   const answer = total - nCr(nb, r);
   if (answer <= 0 || total > 220) return null;
   return {
-    stem: `A team of ${WORDS[r]} is to be chosen from ${WORDS[nb]} boys and ${WORDS[ng]} girls. In how many ways can the team be chosen if it must include at least one girl?`,
+    stem: rng.pick([
+      `A team of ${WORDS[r]} is to be chosen from ${WORDS[nb]} boys and ${WORDS[ng]} girls. In how many ways can the team be chosen if it must include at least one girl?`,
+      `A crew of ${WORDS[r]} is to be chosen from ${WORDS[nb]} men and ${WORDS[ng]} women. In how many ways can the crew be chosen if it must include at least one woman?`,
+      `A delegation of ${WORDS[r]} is chosen from ${WORDS[nb]} teachers and ${WORDS[ng]} students. In how many ways can it be chosen if at least one student must be included?`,
+    ]),
     answer: { kind: 'exact', value: E(answer) },
     options: countOptions(rng, answer, [
       { value: total, trap: 'ignored the condition and counted every team' },
@@ -417,7 +439,7 @@ function atLeastOneQ(rng: RNG): Generated | null {
   };
 }
 
-const FIXED_WORDS = ['NUMBER', 'PLANET', 'FACTOR', 'SQUARE', 'MEDIAN'];
+const FIXED_WORDS = ['NUMBER', 'PLANET', 'FACTOR', 'SQUARE', 'MEDIAN', 'DOUBLE', 'SIMPLE', 'MATRIX', 'VECTOR', 'SECOND', 'MODULE', 'POINTS', 'ANGLES', 'CHANGE'];
 
 function fixedPositionQ(rng: RNG): Generated | null {
   const word = rng.pick(FIXED_WORDS);
@@ -485,7 +507,11 @@ function gridQ(rng: RNG): Generated | null {
   if (a + b > 8) return null;
   const answer = nCr(a + b, a);
   return {
-    stem: `A counter moves along the lines of a grid that is $${a}$ units wide and $${b}$ units tall, starting at the bottom-left corner. Each move takes it one unit right or one unit up. In how many different ways can it reach the top-right corner?`,
+    stem: rng.pick([
+      `A counter moves along the lines of a grid that is $${a}$ units wide and $${b}$ units tall, starting at the bottom-left corner. Each move takes it one unit right or one unit up. In how many different ways can it reach the top-right corner?`,
+      `The streets of a town form a grid $${a}$ blocks wide and $${b}$ blocks deep. Walking only east or north, in how many different ways can someone get from the south-west corner to the north-east corner?`,
+      `An ant crawls along the lines of a rectangular grid $${a}$ units wide and $${b}$ units tall. Starting at one corner and moving only right or up, in how many different ways can it reach the opposite corner?`,
+    ]),
     answer: { kind: 'exact', value: E(answer) },
     options: countOptions(rng, answer, [
       { value: a + b, trap: 'counted the number of moves, not the number of routes' },
@@ -547,13 +573,15 @@ function diagonalsQ(rng: RNG): Generated | null {
 }
 
 function sharingQ(rng: RNG): Generated | null {
-  const b = rng.pick([3, 3, 4]);
+  const b = rng.pick([3, 3, 4, 5]);
   const k = rng.int(b + 3, b + 6);
   const answer = nCr(k - 1, b - 1);
   if (answer > 200) return null;
-  const item = rng.pick(['identical sweets', 'identical stickers', 'identical marbles']);
+  const item = rng.pick(['identical sweets', 'identical stickers', 'identical marbles', 'identical coins', 'identical pencils', 'identical balloons']);
   return {
-    stem: `${cap(WORDS[k])} ${item} are shared between ${WORDS[b]} children so that each child gets at least one. In how many different ways can this be done?`,
+    stem: rng.bool(0.5)
+      ? `${cap(WORDS[k])} ${item} are shared between ${WORDS[b]} children so that each child gets at least one. In how many different ways can this be done?`
+      : `${cap(WORDS[k])} ${item} are to be put into ${WORDS[b]} different boxes so that no box is left empty. In how many different ways can this be done?`,
     answer: { kind: 'exact', value: E(answer) },
     options: countOptions(rng, answer, [
       { value: nCr(k + b - 1, b - 1), trap: 'allowed a child to receive nothing' },

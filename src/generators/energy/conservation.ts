@@ -36,15 +36,6 @@ const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toP
 /** Round away floating-point noise (0.1 x 3 -> 0.3). */
 const r = (x: number): number => Number(x.toPrecision(12));
 
-function tryE(f: () => Exact): Exact | null {
-  try {
-    const v = f();
-    return Number.isFinite(v.toNumber()) ? v : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * A speed or height that is not exact, printed the way the exam prints one: a whole number when it is
  * one, otherwise a single decimal place. Never a surd — the answer to a physics question here is always
@@ -347,15 +338,23 @@ function gpeQ(rng: RNG): Generated | null {
 
 /** Drop heights with 2gh a perfect square, so the speed at the bottom is a whole number. */
 const DROP_HEIGHTS = [0.8, 1.8, 3.2, 5, 7.2, 12.8, 16.2, 20, 28.8, 45, 80, 125];
-const DROPPED = ['stone', 'ball', 'coconut', 'apple', 'brick', 'egg'];
+/** What is dropped, with masses that suit it (an egg is not 5 kg). */
+const DROPPED: [string, number[]][] = [
+  ['stone', [0.5, 1, 2, 5]],
+  ['ball', [0.2, 0.5, 1, 2]],
+  ['coconut', [1, 2]],
+  ['apple', [0.1, 0.2]],
+  ['brick', [2, 3, 5]],
+  ['egg', [0.05, 0.1]],
+];
 
 function dropQ(rng: RNG): Generated | null {
   const h = rng.pick(DROP_HEIGHTS);
-  const m = rng.bool(0.6) ? rng.pick([0.2, 0.5, 1, 2, 5]) : 0;
+  const [object, masses] = rng.pick(DROPPED);
+  const m = rng.bool(0.6) ? rng.pick(masses) : 0;
   const answer = exactRoot(2 * G * h);
   if (!answer) return null;
   const v = answer.toNumber();
-  const object = rng.pick(DROPPED);
   const stem = `${article(object)} ${object}${m ? ` of mass ${n(m)} kg` : ''} is dropped from rest from a height of ${n(h)} m. Air resistance is negligible. ${TAKE_G} Find the speed of the ${object} just before it hits the ground.`;
   return pack(rng, {
     stem,
@@ -386,9 +385,10 @@ function dropQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 3
 
 function throwUpQ(rng: RNG): Generated | null {
-  const u = rng.pick([10, 20, 30, 40, 50]);
+  const u = rng.pick([10, 12, 14, 15, 16, 20, 24, 25, 30, 40, 50]);
   const m = rng.bool(0.5) ? rng.pick([0.2, 0.5, 1, 2]) : 0;
   const h = (u * u) / (2 * G);
+  if (!Number.isInteger(h * 100)) return null;
   return pack(rng, {
     stem: `A ball${m ? ` of mass ${n(m)} kg` : ''} is thrown vertically upwards at $${u}\\ ${U_MS}$. Air resistance is negligible. ${TAKE_G} Find the maximum height reached above the point of release.`,
     answer: E(h),
@@ -401,7 +401,10 @@ function throwUpQ(rng: RNG): Generated | null {
       { value: E((u * u) / 2), trap: 'forgot g' },
       { value: E((2 * u * u) / G), trap: 'put the factor 2 on the wrong side' },
       { value: m ? E(0.5 * m * u * u) : null, trap: 'gave the kinetic energy in joules instead of the height' },
-      { value: E(h / 2), trap: 'halved twice' },
+      { value: E(r(h / 2)), trap: 'halved twice' },
+      { value: E(r(h / 4)), trap: 'divided by 4g instead of 2g' },
+      { value: E(r(u / (2 * G))), trap: 'forgot to square the speed' },
+      { value: E(r(h * 2)), trap: 'doubled the height' },
     ],
     solution: `$\\tfrac12 m u^2 = mgh$, so $h = \\dfrac{u^2}{2g} = \\dfrac{${u * u}}{20} = ${n(h)}\\ \\text{m}$.`,
     trap: 'h = u²/(2g): the ½ from the kinetic energy stays, giving ÷20 with g = 10.',
@@ -415,8 +418,10 @@ function pendulumQ(rng: RNG): Generated | null {
   const byLength = rng.bool(0.4);
   if (byLength) {
     // released from 60° to the vertical: the drop is L(1 − cos 60°) = L/2, so v² = 2g(L/2) = gL
-    const L = rng.pick([0.4, 0.9, 1.6, 2.5, 3.6, 6.4, 10]);
-    const v = Math.sqrt(G * L);
+    const L = rng.pick([0.4, 0.9, 1.6, 2.5, 3.6, 4.9, 6.4, 8.1, 10]);
+    const answer = exactRoot(G * L);
+    if (!answer) return null;
+    const v = answer.toNumber();
     const who = m >= 30 ? `A child of mass ${m} kg sits on a swing whose ropes are ${n(L)} m long. The swing` : `A pendulum bob of mass ${n(m)} kg hangs on a light string of length ${n(L)} m. The bob`;
     return pack(rng, {
       stem: `${who} is pulled aside until the ${m >= 30 ? 'ropes make' : 'string makes'} an angle of $60^{\\circ}$ with the vertical and is released from rest. ${TAKE_G} Find the speed at the lowest point.`,
@@ -430,7 +435,9 @@ function pendulumQ(rng: RNG): Generated | null {
         { value: E(2 * G * L), trap: 'used the whole length as the drop and forgot the square root' },
         { value: E(0.5 * m * G * L), trap: 'gave the kinetic energy at the bottom in joules' },
         { value: E(2 * v), trap: 'doubled the speed' },
-        { value: E(v / 2), trap: 'halved the speed' },
+        { value: E(r(v / 2)), trap: 'halved the speed' },
+        { value: root(2 * G * L * (1 - Math.cos(Math.PI / 6))), trap: 'used cos 30° instead of cos 60° for the drop' },
+        { value: root((G * L) / 2), trap: 'took the drop to be L/4' },
       ],
       solution: `The drop in height is $L - L\\cos 60^{\\circ} = \\tfrac12 L = ${n(L / 2)}\\ \\text{m}$, so $v = \\sqrt{2gh} = \\sqrt{2 \\times 10 \\times ${n(L / 2)}} = \\sqrt{${n(G * L)}} = ${n(v)}\\ ${U_MS}$.`,
       trap: 'The vertical drop is L(1 − cos θ), which for 60° is L/2, not the full length of the string.',
@@ -438,8 +445,10 @@ function pendulumQ(rng: RNG): Generated | null {
       params: { variant: 'pendulum-length', L },
     });
   }
-  const h = rng.pick([0.2, 0.45, 0.8, 1.25, 1.8, 3.2, 5]);
-  const v = Math.sqrt(2 * G * h);
+  const h = rng.pick([0.2, 0.45, 0.8, 1.25, 1.8, 2.45, 3.2, 4.05, 5, 7.2]);
+  const hAnswer = exactRoot(2 * G * h);
+  if (!hAnswer) return null;
+  const v = hAnswer.toNumber();
   const who = m >= 30 ? `A child of mass ${m} kg on a swing is released from rest ${n(h)} m above the lowest point of the swing.` : `A pendulum bob of mass ${n(m)} kg is released from rest at a point ${n(h)} m above its lowest position.`;
   return pack(rng, {
     stem: `${who} Air resistance is negligible. ${TAKE_G} Find the speed at the lowest point.`,
@@ -453,7 +462,9 @@ function pendulumQ(rng: RNG): Generated | null {
       { value: E(G * h), trap: 'forgot the 2 and the square root' },
       { value: E(m * G * h), trap: 'gave the kinetic energy at the bottom in joules' },
       { value: E(2 * v), trap: 'doubled the speed' },
-      { value: E(v / 2), trap: 'halved the speed' },
+      { value: E(r(v / 2)), trap: 'halved the speed' },
+      { value: root(4 * G * h), trap: 'doubled g as well as using the 2' },
+      { value: root((G * h) / 2), trap: 'used v = √(gh/2): halved instead of doubling' },
     ],
     solution: `$mgh = \\tfrac12 m v^2$, so $v = \\sqrt{2gh} = \\sqrt{2 \\times 10 \\times ${n(h)}} = \\sqrt{${n(2 * G * h)}} = ${n(v)}\\ ${U_MS}$.`,
     trap: 'Only the vertical drop matters: v = √(2gh), with the mass cancelling.',

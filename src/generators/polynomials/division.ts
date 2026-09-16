@@ -47,10 +47,6 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   return out;
 }
 
-function options(rng: RNG, answer: Exact, must: Candidate[], extra: Candidate[]) {
-  return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must), cleanOnly(extra)));
-}
-
 /** Options, or null when fewer than four named distractors survive: redraw rather than pad with unlabelled numbers. */
 function optionsOrNull(rng: RNG, answer: Exact, must: Candidate[], extra: Candidate[]) {
   const ds = ranked(rng, answer, cleanOnly(must), cleanOnly(extra));

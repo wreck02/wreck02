@@ -6,3 +6,4 @@ coverage/
 .claude/worktrees/
 scripts/tmp-review/
 scripts/_*
+scripts/.*

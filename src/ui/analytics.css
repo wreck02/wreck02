@@ -1,0 +1,85 @@
+/* Analytics and Review screens: charts, sortable and expandable tables, the ledger queue
+   and the recent-mistakes list. Tokens come from styles.css; .stats/.stat from home.css. */
+
+/* ---------- charts ---------- */
+.chart { display: block; width: 100%; height: auto; max-height: 260px; }
+.chart text { font-family: var(--font); font-size: 11px; fill: var(--muted); }
+.chart text.strong { fill: var(--text); font-weight: 600; }
+.chart .grid, .chart .axis { stroke: var(--border); stroke-width: 1; }
+.spark { display: block; }
+.chart-title { font-size: 0.8rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 0.25rem; }
+.chart-foot { display: flex; gap: 0.4rem 1.25rem; flex-wrap: wrap; font-size: 0.875rem; color: var(--muted); margin-top: 0.5rem; }
+.chart-foot b { color: var(--text); font-weight: 600; }
+.chart-table { margin-top: 0.4rem; }
+.chart-table summary { cursor: pointer; }
+.chart-table table { margin-top: 0.4rem; max-width: 26rem; }
+
+/* ---------- headline tiles ---------- */
+.tiles { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 1rem 0; }
+.tiles .stat .v { font-variant-numeric: normal; }
+.tiles .stat .sub { font-size: 0.75rem; margin-top: 0.1rem; color: var(--muted); }
+
+/* ---------- sortable, expandable tables ---------- */
+.sort-btn {
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 0.2rem; min-height: 28px; white-space: nowrap;
+}
+.sort-btn:hover, .sort-btn.active { color: var(--text); }
+.sort-btn .dir { font-size: 0.6rem; opacity: 0.55; }
+.sort-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+tr.expandable { cursor: pointer; }
+tr.expandable:hover td, tr.expanded td { background: var(--surface-2); }
+tr.detail td { background: var(--surface-2); padding: 0.4rem 0.75rem 1rem; }
+.detail-inner { border-left: 3px solid var(--accent); padding-left: 0.75rem; }
+.detail-inner h3 { font-size: 0.9rem; margin: 0.25rem 0 0.35rem; }
+.row-toggle {
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  display: inline-flex; gap: 0.35rem; align-items: baseline; min-height: 28px;
+}
+.row-toggle .chev { display: inline-block; width: 0.9em; color: var(--muted); transition: transform 0.15s; }
+.row-toggle[aria-expanded='true'] .chev { transform: rotate(90deg); }
+.row-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.table td.nowrap, .table th.nowrap { white-space: nowrap; }
+.table .sub { display: block; font-size: 0.75rem; color: var(--muted); }
+.table td.actions { white-space: nowrap; text-align: right; }
+
+/* ---------- review queue ---------- */
+.wbar { position: relative; height: 8px; border-radius: 4px; background: var(--surface-2); min-width: 70px; overflow: hidden; }
+.wbar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
+.review-controls { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); align-items: start; }
+.review-start { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.25rem; }
+
+/* ---------- recent mistakes ---------- */
+.mistakes { list-style: none; margin: 0; padding: 0; }
+.mistakes > li { border-bottom: 1px solid var(--border); }
+.mistakes > li:last-child { border-bottom: 0; }
+.mistake-head {
+  width: 100%; display: flex; gap: 0.6rem; align-items: center; padding: 0.5rem 0.3rem; min-height: 48px;
+  background: none; border: 0; border-radius: 8px; text-align: left; cursor: pointer; font: inherit; color: inherit;
+}
+.mistake-head:hover { background: var(--surface-2); }
+.mistake-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mistake-head .grow { flex: 1; min-width: 0; }
+.mistake-head .title { font-weight: 600; }
+.mistake-head .preview { display: block; color: var(--muted); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mistake-head .preview .katex { font-size: 1em; }
+.mistake-head .pill { flex: 0 0 auto; min-width: 4.2rem; text-align: center; }
+.mistake-head .when { flex: 0 0 auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+.mistake-head .chev { color: var(--muted); transition: transform 0.15s; }
+.mistake-head[aria-expanded='true'] .chev { transform: rotate(90deg); }
+.mistake-body { padding: 0.25rem 0.75rem 1rem; border-left: 3px solid var(--accent); margin: 0 0 0.75rem 0.3rem; }
+.mistake-body .q-stem { font-size: 1.05rem; }
+.mistake-body .answers { margin-top: 0.6rem; font-size: 0.925rem; }
+.mistake-body .answers .lbl { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 0.35rem; }
+.mistake-body .solution { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
+.mistake-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; align-items: center; }
+
+/* ---------- empty states ---------- */
+.empty { text-align: center; padding: 2rem 1rem; }
+.empty p { max-width: 34rem; margin: 0 auto 1rem; }
+
+@media (max-width: 600px) {
+  .table .hide-sm { display: none; }
+  .mistake-head .when { display: none; }
+  .chart { max-height: 220px; }
+}

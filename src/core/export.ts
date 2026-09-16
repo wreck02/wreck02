@@ -2,24 +2,19 @@
  * Markdown export of a session report (for a personal error ledger).
  */
 import type { SessionReport } from './analytics';
-import { formatSec } from './analytics';
-import { PACE_SECONDS, overPace, type QuestionRecord } from './session';
-import { MODULE_NAMES } from './template';
-import { topicName } from './topics';
+import { formatSec, groupBy } from './analytics';
+import { PACE_SECONDS, overPace, regenerateFromAttempt, type Attempt, type QuestionRecord } from './session';
+import { MODULE_NAMES, type Question } from './template';
+import { TOPICS, TOPIC_BY_KEY, topicName } from './topics';
 import { answerToPlain } from './answers';
+import { latexToText as latexToTextCore } from './latex-text';
 
 function latexToText(s: string): string {
-  return s
-    .replace(/\\sqrt\{([^}]*)\}/g, '√($1)')
-    .replace(/\\t?frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)')
-    .replace(/\\times/g, '×').replace(/\\pi/g, 'π').replace(/\\theta/g, 'θ').replace(/\\circ/g, '°')
-    .replace(/\\text\{([^}]*)\}/g, '$1').replace(/\\mathrm\{([^}]*)\}/g, '$1')
-    .replace(/\\left|\\right/g, '').replace(/\\,|\\ |\;/g, ' ')
-    .replace(/\\le\b/g, '≤').replace(/\\ge\b/g, '≥').replace(/\\ne\b/g, '≠').replace(/\\pm/g, '±').replace(/\\cdot/g, '·').replace(/\\infty/g, '∞')
-    .replace(/\^\{([^}]*)\}/g, '^$1').replace(/_\{([^}]*)\}/g, '_$1')
-    .replace(/\$/g, '')
-    .replace(/\n+/g, ' ');
+  return latexToTextCore(s).replace(/\n+/g, ' ');
 }
+import { getTemplate } from './registry';
+import { reviewWeight, type Ledger, type LedgerEntry } from './srs';
+
 
 export function sessionToMarkdown(report: SessionReport, questions: QuestionRecord[] = []): string {
   const s = report.summary;
@@ -73,6 +68,101 @@ export function sessionToMarkdown(report: SessionReport, questions: QuestionReco
         lines.push(`- **Template:** \`${q.templateId}\` · seed \`${questions.find((r) => r.index === a.index)?.seed}\``);
       }
       lines.push('');
+    }
+  }
+  return lines.join('\n');
+}
+
+/** latexToText plus the display-size variants the session export never meets. */
+function plainText(s: string): string {
+  return latexToText(s.replace(/\\[dt]frac\b/g, '\\frac').replace(/\\displaystyle\s*/g, ''));
+}
+
+function shortDate(ts: number): string {
+  return new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function verdict(a: Attempt): string {
+  if (a.timedOut && !a.correct) return 'timed out';
+  if (a.skipped) return 'skipped';
+  return a.correct ? 'correct but slow' : 'wrong';
+}
+
+/** What the student gave, with the option text and its trap when the answer was a letter. */
+function givenText(a: Attempt, q: Question | null): string {
+  const opt = q && /^[A-H]$/.test(a.given) ? q.options.find((o) => o.key === a.given) : undefined;
+  if (!opt) return a.given;
+  return `${opt.key}: ${plainText(opt.display)}${opt.trap ? ` (${opt.trap})` : ''}`;
+}
+
+/**
+ * Markdown export of the whole error ledger: every template that has been failed,
+ * grouped by topic (in syllabus order) then template (heaviest first), with its most
+ * recent mistakes regenerated so the stem, answer, quick route and trap are all there.
+ */
+export function ledgerToMarkdown(attempts: Attempt[], ledger: Ledger, opts: { now?: number; perTemplate?: number } = {}): string {
+  const now = opts.now ?? Date.now();
+  const perTemplate = Math.max(1, opts.perTemplate ?? 5);
+  const entries = Object.values(ledger).filter((e) => e.failures.length > 0);
+  const lines: string[] = [];
+  lines.push(`# ESAT error ledger — ${new Date(now).toISOString().slice(0, 10)}`);
+  lines.push('');
+  if (entries.length === 0) {
+    lines.push('The ledger is empty: nothing has been answered wrong, skipped or over pace yet.');
+    lines.push('');
+    return lines.join('\n');
+  }
+  const due = entries.filter((e) => now >= e.dueAt).length;
+  const failing = attempts.filter((a) => !a.correct || a.skipped || overPace(a)).sort((a, b) => b.at - a.at);
+  const byTemplate = groupBy(failing, (a) => a.templateId);
+  lines.push(`- **Templates in the ledger:** ${entries.length} (${due} due now)`);
+  lines.push(`- **Rule:** a wrong, skipped or over-pace (${PACE_SECONDS} s) answer adds a failure and brings the template back within hours; clean, on-pace answers in review push the next review out.`);
+  lines.push(`- **Listed below:** the last ${perTemplate} mistake${perTemplate === 1 ? '' : 's'} per template, newest first.`);
+  lines.push('');
+
+  const topicOf = (e: LedgerEntry): string => getTemplate(e.templateId)?.topic ?? byTemplate.get(e.templateId)?.[0]?.topic ?? 'unknown';
+  const byTopic = new Map<string, LedgerEntry[]>();
+  for (const e of entries) {
+    const t = topicOf(e);
+    if (!byTopic.has(t)) byTopic.set(t, []);
+    byTopic.get(t)!.push(e);
+  }
+  const order = [...TOPICS.map((t) => t.key).filter((k) => byTopic.has(k)), ...[...byTopic.keys()].filter((k) => !TOPIC_BY_KEY[k])];
+
+  for (const topic of order) {
+    const info = TOPIC_BY_KEY[topic];
+    lines.push(`## ${topicName(topic)}${info ? ` (${MODULE_NAMES[info.module]})` : ''}`);
+    lines.push('');
+    const es = byTopic.get(topic)!.slice().sort((a, b) => reviewWeight(b, now) - reviewWeight(a, now));
+    for (const e of es) {
+      const t = getTemplate(e.templateId);
+      lines.push(`### ${t?.title ?? e.templateId}`);
+      lines.push('');
+      const last = e.failures[e.failures.length - 1];
+      lines.push(`- **Template:** \`${e.templateId}\``);
+      lines.push(`- **Failures:** ${e.failures.length} · **clean successes:** ${e.successes.length} · **last failed:** ${shortDate(last)} · **next review:** ${now >= e.dueAt ? 'due now' : shortDate(e.dueAt)}`);
+      lines.push('');
+      const xs = (byTemplate.get(e.templateId) ?? []).slice(0, perTemplate);
+      if (xs.length === 0) {
+        lines.push('_No stored attempts for this template._');
+        lines.push('');
+        continue;
+      }
+      for (const a of xs) {
+        const q = regenerateFromAttempt(a);
+        lines.push(`#### ${shortDate(a.at)} — level ${a.level} — ${verdict(a)} in ${formatSec(a.timeMs)}`);
+        lines.push('');
+        lines.push(plainText(q?.stem ?? a.stem));
+        lines.push('');
+        lines.push(`- **Answer:** ${q ? answerToPlain(q.answer) : a.answerText}`);
+        if (!a.skipped && a.given) lines.push(`- **You gave:** ${givenText(a, q)}`);
+        if (q) {
+          lines.push(`- **Quick route:** ${plainText(q.solution)}`);
+          lines.push(`- **Trap:** ${q.trap}`);
+        }
+        lines.push(`- **Seed:** \`${a.questionSeed}\` (session \`${a.sessionSeed}\`, question ${a.index + 1})`);
+        lines.push('');
+      }
     }
   }
   return lines.join('\n');

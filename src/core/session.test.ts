@@ -6,7 +6,8 @@ import { gauntletStep, initialGauntlet } from './gauntlet';
 import { recordAttempts, reviewQueue, reviewWeights } from './srs';
 import type { Attempt } from './session';
 import { heatmap, sessionReport, topicStats } from './analytics';
-import { sessionToMarkdown } from './export';
+import { ledgerToMarkdown, sessionToMarkdown } from './export';
+import { topicName } from './topics';
 import { ALL_FACTS, FACT_DECKS } from './facts';
 import { checkAnswer } from './answers';
 import { isCleanExact } from './clean';
@@ -116,6 +117,32 @@ describe('analytics and export', () => {
     expect(md).toContain('| 2 |');
     expect(md).toContain('Error ledger');
     expect(md).not.toMatch(/undefined|NaN/);
+  });
+  it('ledger markdown groups failed templates by topic with regenerated mistakes', () => {
+    const now = Date.now();
+    const xs = [
+      fakeAttempt({ id: 'e1', index: 0, correct: false, given: 'B', at: now - 3 * 3600e3, questionSeed: 'S#0' }),
+      fakeAttempt({ id: 'e2', index: 1, correct: true, timeMs: 120000, at: now - 2 * 3600e3, questionSeed: 'S#1' }),
+      fakeAttempt({ id: 'e3', index: 2, correct: false, skipped: true, given: '', at: now - 3600e3, questionSeed: 'S#2' }),
+      fakeAttempt({ id: 'e4', index: 3, correct: true, timeMs: 20000, at: now - 1800e3, questionSeed: 'S#3' }),
+    ];
+    const l = recordAttempts({}, xs, now);
+    const md = ledgerToMarkdown(xs, l, { now });
+    expect(md).toContain('# ESAT error ledger');
+    expect(md).toContain(`## ${topicName(TEMPLATES[0].topic)}`);
+    expect(md).toContain(`### ${TEMPLATES[0].title}`);
+    expect(md).toContain('**Failures:** 3');
+    expect(md).toContain('correct but slow');
+    expect(md).toContain('skipped');
+    expect(md).toContain('**You gave:** B:');
+    expect(md).toContain('**Quick route:**');
+    expect(md).toContain('**Trap:**');
+    expect(md).not.toMatch(/undefined|NaN/);
+    // the clean answer is not listed as a mistake
+    expect(md).not.toContain('S#3');
+    // the cap on mistakes per template holds
+    expect(ledgerToMarkdown(xs, l, { now, perTemplate: 1 }).match(/^#### /gm)?.length).toBe(1);
+    expect(ledgerToMarkdown([], {}, { now })).toContain('empty');
   });
 });
 

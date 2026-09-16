@@ -394,6 +394,7 @@ function simplifyInN(rng: RNG): Generated | null {
     steps = `$${numTex} = ${lin(p, p)}$ and $${denTex} = ${lin(q, 0)}$`;
   } else if (shape === 'two-const') {
     const d = rng.int(1, maxC - 1);
+    if (d === c) return null; // (X × 9)/(Y × 9): the exam does not print a factor that cancels on sight
     numTex = `${raise(nTex, p)} \\times ${powerOf(c)}`;
     denTex = `${q === 1 ? nTex : pw(a ** q, 'n')} \\times ${powerOf(d)}`;
     num.push([p, 0], [0, c]); den.push([q, 0], [0, d]);

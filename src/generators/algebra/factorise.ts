@@ -1,5 +1,5 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
-import { E } from '../../core/exact';
+import { E, type Exact } from '../../core/exact';
 import { buildOptions, buildChoiceOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import { gcd, signed } from '../../core/gen-utils';
@@ -110,6 +110,24 @@ function clean(ds: Distractor[]): Distractor[] {
   return ds.filter((d) => Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
+/**
+ * Offer a random mix of below- and above-answer distractors.
+ *
+ * Every candidate is still the result of a named mistake; this only decides which of them the
+ * builder sees first (they are marked `must`), so the number of options larger than the answer
+ * varies from question to question. Without it a fixed mistake set leaves the answer in the same
+ * place in the sorted option list every time — "always the median", "never the largest" — and the
+ * layout alone gives the answer away.
+ */
+function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
+  const below = ds.filter((d) => d.value.cmp(answer) < 0);
+  const above = ds.filter((d) => d.value.cmp(answer) > 0);
+  if (below.length === 0 || above.length === 0 || below.length + above.length < need) return ds;
+  const want = rng.int(Math.max(0, need - below.length), Math.min(above.length, need));
+  const pick = [...rng.shuffle(above).slice(0, want), ...rng.shuffle(below).slice(0, need - want)];
+  return ds.map((d) => (pick.includes(d) ? { ...d, must: true } : d));
+}
+
 function num(x: number): string {
   return Number.isInteger(x) ? `${x}` : `${Number(x.toFixed(2))}`;
 }
@@ -135,6 +153,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { value: E(2 * k * (2 * m - 2 * k)), trap: 'used b + b for the second bracket instead of a + b' },
         { value: E(2 * k * (m + k)), trap: 'multiplied a − b by a instead of by a + b' },
         { value: E(2 * k * m), trap: 'used k instead of 2k for a − b' },
+        { value: E(2 * k + 2 * m), trap: 'added the two brackets instead of multiplying them' },
         ...(nearSquare ? [
           { value: E(a * a - b), trap: 'forgot to square b' },
           { value: E(a * a), trap: 'squared a but never subtracted b²' },
@@ -143,7 +162,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       return {
         stem: `Evaluate $${num(a)}^2 - ${num(b)}^2$.`,
         answer: { kind: 'exact', value: answer },
-        options: buildOptions(rng, answer, ds),
+        options: buildOptions(rng, answer, slant(rng, answer, ds)),
         solution: `Difference of two squares: $${num(a)}^2 - ${num(b)}^2 = (${num(a)} - ${num(b)})(${num(a)} + ${num(b)}) = ${num(2 * k)} \\times ${num(2 * m)} = ${answer.toLatex()}$.`,
         trap: 'a² − b² = (a − b)(a + b): a quick product, not (a − b)², and not just a + b.',
         tags: ['factorise', 'difference-of-squares', 'numeric'],
@@ -240,7 +259,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       return {
         stem: `Evaluate $${num(m)} \\times ${num(n)}$ without a calculator.`,
         answer: { kind: 'exact', value: answer },
-        options: buildOptions(rng, answer, ds),
+        options: buildOptions(rng, answer, slant(rng, answer, ds)),
         solution: `$${num(m)} \\times ${num(n)} = (${num(c)} + ${num(k)})(${num(c)} - ${num(k)}) = ${num(c)}^2 - ${num(k)}^2 = ${num(c * c)} - ${num(k * k)} = ${answer.toLatex()}$.`,
         trap: 'Write the numbers as c ± k; the product is c² − k² (subtract k², not k or 2k).',
         tags: ['factorise', 'difference-of-squares', 'numeric'],
@@ -305,13 +324,19 @@ function build(rng: RNG, variant: Variant): Generated | null {
         // when c − b is a perfect square so is c + b: √(c−b)·√(c+b) is the fast route, and
         // adding the two roots instead of multiplying them lands close to the answer
         ...(Number.isInteger(Math.sqrt(c - b))
-          ? [{ value: E(Math.sqrt(c - b) + Math.sqrt(c + b)), trap: 'added √(c − b) and √(c + b) instead of multiplying them' }]
+          ? [
+            { value: E(Math.sqrt(c - b) + Math.sqrt(c + b)), trap: 'added √(c − b) and √(c + b) instead of multiplying them' },
+            // c, c + b and (c − b)(c + b) all sit above the answer; rooting only one factor
+            // sits below it, so the answer is not stuck near the bottom of the ordering.
+            { value: E(Math.sqrt(c - b)), trap: 'took the root of the first factor only' },
+          ]
           : []),
+        ...(Number.isInteger(Math.sqrt(c + b)) ? [{ value: E(Math.sqrt(c + b)), trap: 'took the root of the second factor only' }] : []),
       ]);
       return {
         stem: `Evaluate $\\sqrt{${c}^2 - ${b}^2}$.`,
         answer: { kind: 'exact', value: answer },
-        options: buildOptions(rng, answer, ds),
+        options: buildOptions(rng, answer, slant(rng, answer, ds)),
         solution: `$${c}^2 - ${b}^2 = (${c} - ${b})(${c} + ${b}) = ${c - b} \\times ${c + b}$, and $\\sqrt{${c - b} \\times ${c + b}} = \\sqrt{${c - b}} \\times \\sqrt{${c + b}} = ${Math.round(Math.sqrt(c - b)) === Math.sqrt(c - b) ? `${Math.sqrt(c - b)} \\times ${Math.sqrt(c + b)}` : `\\sqrt{${a * a}}`} = ${a}$.`,
         trap: 'Factorise inside the root as (c − b)(c + b) rather than squaring both numbers; √(c² − b²) is not c − b.',
         tags: ['factorise', 'difference-of-squares', 'numeric', 'roots'],

@@ -1,5 +1,5 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
-import { E } from '../../core/exact';
+import { E, type Exact } from '../../core/exact';
 import { buildOptions, type Distractor } from '../../core/options';
 import { factor, poly } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
@@ -51,6 +51,24 @@ function ints(ds: { value: number; trap: string }[], answer: number): Distractor
   return ds.filter((d) => Number.isInteger(d.value) && d.value !== answer).map((d) => ({ value: E(d.value), trap: d.trap }));
 }
 
+/**
+ * Offer a random mix of below- and above-answer distractors.
+ *
+ * Every candidate is still the result of a named mistake; this only decides which of them the
+ * builder sees first (they are marked `must`), so the number of options larger than the answer
+ * varies from question to question. Without it a fixed mistake set leaves the answer in the same
+ * place in the sorted option list every time — "always the median", "never the largest" — and the
+ * layout alone gives the answer away.
+ */
+function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
+  const below = ds.filter((d) => d.value.cmp(answer) < 0);
+  const above = ds.filter((d) => d.value.cmp(answer) > 0);
+  if (below.length === 0 || above.length === 0 || below.length + above.length < need) return ds;
+  const want = rng.int(Math.max(0, need - below.length), Math.min(above.length, need));
+  const pick = [...rng.shuffle(above).slice(0, want), ...rng.shuffle(below).slice(0, need - want)];
+  return ds.map((d) => (pick.includes(d) ? { ...d, must: true } : d));
+}
+
 function ask(rng: RNG, expr: string, power: number): string {
   return rng.bool(0.5)
     ? `Find ${NAME[power]} in the expansion of $${expr}$.`
@@ -61,7 +79,7 @@ function finish(rng: RNG, stem: string, answer: number, ds: { value: number; tra
   return {
     stem,
     answer: { kind: 'exact', value: E(answer) },
-    options: buildOptions(rng, E(answer), ints(ds, answer)),
+    options: buildOptions(rng, E(answer), slant(rng, E(answer), ints(ds, answer))),
     solution,
     trap,
     tags: ['expand', ...tags],
@@ -186,15 +204,32 @@ function build(rng: RNG, variant: Variant): Generated | null {
     case 'dots': {
       const a = rng.int(2, 12);
       const expr = rng.bool(0.5) ? `${factor(1, a)}${factor(1, -a)}` : `${factor(1, -a)}${factor(1, a)}`;
-      const answer = -a * a;
-      const ds = [
-        { value: a * a, trap: 'sign error: (x + a)(x − a) = x² − a²' },
-        { value: -2 * a, trap: 'gave −2a as though it were a cross term' },
-        { value: 2 * a, trap: 'added the constants' },
-        { value: -a, trap: 'forgot to square' },
-        { value: 0, trap: 'gave the x coefficient (which is 0) instead of the constant' },
-      ];
-      return finish(rng, ask(rng, expr, 0), answer, ds, `Difference of two squares: $(x + ${a})(x - ${a}) = x^2 - ${a * a}$, so the constant is $${answer}$.`, '(x + a)(x − a) = x² − a²: the cross terms cancel and the constant is negative.', ['difference-of-squares'], [lin(1, a), lin(1, -a)], 0);
+      // Asking for the x coefficient (which is 0, because the cross terms cancel) as well as the
+      // constant keeps the answer off the bottom of the option list: −a² is smaller than every
+      // other value a slip can produce except −2a².
+      const power = rng.bool(0.35) ? 1 : 0;
+      const answer = power === 1 ? 0 : -a * a;
+      const ds = power === 1
+        ? [
+          { value: 2 * a, trap: 'added the two cross terms as though both were positive' },
+          { value: -2 * a, trap: 'added the two cross terms as though both were negative' },
+          { value: a, trap: 'used only one of the two cross terms' },
+          { value: -a, trap: 'used only one of the two cross terms' },
+          { value: -a * a, trap: 'gave the constant term instead of the x coefficient' },
+          { value: a * a, trap: 'gave a² instead: the constant is −a² and the x terms cancel' },
+        ]
+        : [
+          { value: a * a, trap: 'sign error: (x + a)(x − a) = x² − a²' },
+          { value: -2 * a * a, trap: 'doubled the product as though it were a cross term' },
+          { value: -2 * a, trap: 'gave −2a as though it were a cross term' },
+          { value: 2 * a, trap: 'added the constants' },
+          { value: -a, trap: 'forgot to square' },
+          { value: 0, trap: 'gave the x coefficient (which is 0) instead of the constant' },
+        ];
+      const sol = power === 1
+        ? `The cross terms are $+${a}x$ and $-${a}x$: they cancel, so the coefficient of $x$ is $0$.`
+        : `Difference of two squares: $(x + ${a})(x - ${a}) = x^2 - ${a * a}$, so the constant is $${answer}$.`;
+      return finish(rng, ask(rng, expr, power), answer, ds, sol, '(x + a)(x − a) = x² − a²: the cross terms cancel and the constant is negative.', ['difference-of-squares'], [lin(1, a), lin(1, -a)], power);
     }
     case 'cube': {
       const a = rng.nonZeroInt(-5, 5);
@@ -255,6 +290,10 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { value: -2 * a * b, trap: 'sign error in the cross term' },
         { value: a * a, trap: 'gave the x² coefficient' },
         { value: b * b, trap: 'gave the coefficient of 1/x²' },
+        // 4ab and (a + b)² sit on the far side of the answer from ab and 0, so a negative
+        // constant term is not automatically the smallest option.
+        { value: 4 * a * b, trap: 'doubled each of the two cross products: together they give 2ab, not 4ab' },
+        { value: a * a + 2 * a * b + b * b, trap: 'added all three coefficients of the expansion instead of taking the constant term' },
       ];
       return finish(rng, `Find the constant term in the expansion of $${expr}$.`, answer, ds, `$(p + q)^2 = p^2 + 2pq + q^2$; the cross term $2 \\times ${a}x \\times ${bTex.replace('\\frac', '\\tfrac')}$ has the $x$ cancelling, leaving $${answer}$.`, 'The constant comes from the cross term 2·(ax)·(b/x) = 2ab, not from either square.', ['reciprocal', 'perfect-square'], [[[1, a], [-1, b]], [[1, a], [-1, b]]], 0);
     }

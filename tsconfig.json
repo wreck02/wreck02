@@ -18,5 +18,6 @@
     "noEmit": true,
     "types": ["vite/client", "vitest/importMeta", "node"]
   },
-  "include": ["src", "scripts", "vite.config.ts"]
+  "include": ["src", "scripts", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "scripts/_*", "scripts/tmp-review"]
 }

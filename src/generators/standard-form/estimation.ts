@@ -353,42 +353,48 @@ const LITRES = F(1000, 'litres in a cubic metre');
 const GRAMS = F(1000, 'grams in a kilogram');
 const CM2 = F(10000, 'square centimetres in a square metre');
 
-/** Twenty-odd everyday quantities, each with its own randomised data, so a level-4 stem rarely repeats. */
+/**
+ * Twenty-two everyday quantities, each with its own randomised data. The data pools are wide (about
+ * 600 parameter sets in all) because level 4 is the one level a candidate can beat by remembering the
+ * answer to a story rather than estimating it.
+ */
 function scenario(rng: RNG): Scenario {
   switch (rng.int(0, 21)) {
-    case 0: return { stem: 'Estimate the number of seconds in a year (365 days).', num: [DAYS, HOURS, MINS, SECS], den: [], unit: 'seconds' };
-    case 1: { const d = rng.pick([28, 30, 31]); return { stem: `Estimate the number of seconds in a month of ${d} days.`, num: [F(d, 'days in the month'), HOURS, MINS, SECS], den: [], unit: 'seconds' }; }
-    case 2: { const y = rng.pick([10, 50, 100]); return { stem: `Estimate the number of seconds in ${y} years (take a year as 365 days).`, num: [F(y, 'years'), DAYS, HOURS, MINS, SECS], den: [], unit: 'seconds' }; }
-    case 3: { const r = rng.pick([60, 70, 75, 80]); const y = rng.pick([70, 75, 80, 85]); return { stem: `A human heart beats about ${r} times a minute. Estimate the number of times it beats in a lifetime of ${y} years (take a year as 365 days).`, num: [F(r, 'beats per minute'), MINS, HOURS, DAYS, F(y, 'years of life')], den: [], unit: 'beats' }; }
-    case 4: { const r = rng.pick([12, 15, 16, 20]); return { stem: `A person breathes about ${r} times a minute. Estimate the number of breaths taken in a year (365 days).`, num: [F(r, 'breaths per minute'), MINS, HOURS, DAYS], den: [], unit: 'breaths' }; }
-    case 5: { const P = rng.pick([200, 250, 300, 400, 500]); const L = rng.pick([30, 35, 40]); const W = rng.pick([8, 10, 12]); return { stem: `A book has ${P} pages, with about ${L} lines per page and ${W} words per line. Estimate the number of words in the book.`, num: [F(P, 'pages'), F(L, 'lines per page'), F(W, 'words per line')], den: [], unit: 'words' }; }
-    case 6: { const s = rng.pick([4000, 5000, 7000, 8000]); const y = rng.pick([50, 60, 80]); return { stem: `A person walks about ${s} steps a day. Estimate the number of steps walked in ${y} years (take a year as 365 days).`, num: [F(s, 'steps a day'), DAYS, F(y, 'years')], den: [], unit: 'steps' }; }
-    case 7: { const g = rng.pick([0.02, 0.025, 0.03]); const kg = rng.pick([1, 2, 5, 10]); return { stem: `A grain of rice has a mass of about ${g} g. Estimate the number of grains in a ${kg} kg bag of rice.`, num: [F(kg, 'kilograms in the bag'), GRAMS], den: [F(g, 'grams per grain')], unit: 'grains' }; }
-    case 8: { const l = rng.pick([2, 3, 4]); return { stem: `The world population is about $8 \\times 10^{9}$. If each person drinks about ${l} litres of water a day, estimate the total volume of drinking water consumed worldwide in one day, in litres.`, num: [F(8e9, 'people'), F(l, 'litres per person')], den: [], unit: 'litres' }; }
-    case 9: return { stem: 'Light travels at $3 \\times 10^{8}$ m s$^{-1}$. Taking a year as $3 \\times 10^{7}$ s, estimate the distance, in metres, that light travels in a year.', num: [F(3e8, 'metres per second'), F(3e7, 'seconds in a year')], den: [], unit: 'metres' };
-    case 10: { const M = rng.pick([50, 60, 70, 80]); return { stem: `A typical human cell has a mass of about $10^{-12}$ kg. Estimate the number of cells in a person of mass ${M} kg.`, num: [F(M, 'kilograms of person')], den: [F(1e-12, 'kilograms per cell')], unit: 'cells' }; }
-    case 11: { const a = rng.pick([500, 600, 700]); const d = rng.pick([120, 150, 200]); return { stem: `A scalp has an area of about ${a} cm² with about ${d} hairs per cm². Estimate the number of hairs on a head.`, num: [F(a, 'square centimetres of scalp'), F(d, 'hairs per square centimetre')], den: [], unit: 'hairs' }; }
-    case 12: { const cm = rng.pick([1, 2, 5]); return { stem: `An atom has a diameter of about $10^{-10}$ m. Estimate the number of atoms that would fit side by side along a line ${cm} cm long.`, num: [F(cm / 100, 'metres of line')], den: [F(1e-10, 'metres per atom')], unit: 'atoms' }; }
-    case 13: { const L = rng.pick([25, 50]); const W = rng.pick([10, 20, 25]); const D = rng.pick([2, 3]); return { stem: `A swimming pool is ${L} m long, ${W} m wide and ${D} m deep. Given that $1\\ \\text{m}^3 = 1000$ litres, estimate the volume of water in the pool in litres.`, num: [F(L, 'metres long'), F(W, 'metres wide'), F(D, 'metres deep'), LITRES], den: [], unit: 'litres' }; }
-    case 14: { const v = rng.pick([5, 10, 12]); return { stem: `A grain of sand has a volume of about $10^{-3}$ cm³. Estimate the number of grains in a bucket holding ${v} litres (1 litre = 1000 cm³).`, num: [F(v, 'litres in the bucket'), F(1000, 'cubic centimetres in a litre')], den: [F(1e-3, 'cubic centimetres per grain')], unit: 'grains' }; }
-    case 15: { const b = rng.pick([150, 200]); const d = rng.pick([0.05, 0.1]); return { stem: `A bath holds about ${b} litres of water and a drop has a volume of about ${d} ml. Estimate the number of drops in a full bath (1 litre = 1000 ml).`, num: [F(b, 'litres in the bath'), F(1000, 'millilitres in a litre')], den: [F(d, 'millilitres per drop')], unit: 'drops' }; }
-    case 16: { const gb = rng.pick([500, 1000, 2000]); const mb = rng.pick([4, 5, 8]); return { stem: `A hard disk holds ${gb} GB and a photograph takes about ${mb} MB. Given that $1\\ \\text{GB} = 1000\\ \\text{MB}$, estimate the number of photographs the disk can hold.`, num: [F(gb, 'gigabytes on the disk'), F(1000, 'megabytes in a gigabyte')], den: [F(mb, 'megabytes per photograph')], unit: 'photographs' }; }
-    case 17: { const L = rng.pick([100, 105]); const W = rng.pick([64, 70]); const n = rng.pick([2, 3, 5]); return { stem: `A football pitch is about ${L} m long and ${W} m wide, and grass grows about ${n} blades per cm². Estimate the number of blades of grass on the pitch.`, num: [F(L, 'metres long'), F(W, 'metres wide'), CM2, F(n, 'blades per square centimetre')], den: [], unit: 'blades' }; }
-    case 18: { const h = rng.pick([2, 2.5, 3]); const l = rng.pick([10, 20, 30]); return { stem: `A brick wall is ${l} m long and ${h} m high, and each brick covers about 0.02 m² of the face of the wall. Estimate the number of bricks in the face of the wall.`, num: [F(l, 'metres long'), F(h, 'metres high')], den: [F(0.02, 'square metres per brick')], unit: 'bricks' }; }
-    case 19: { const w = rng.pick([10000, 15000, 20000]); const y = rng.pick([60, 70, 80]); return { stem: `A person speaks about ${w} words a day. Estimate the number of words spoken in ${y} years (take a year as 365 days).`, num: [F(w, 'words a day'), DAYS, F(y, 'years')], den: [], unit: 'words' }; }
-    case 20: { const a = rng.pick([50, 100, 150]); const d = rng.pick([3, 4]); return { stem: `A leaf has an area of about ${a} cm² and contains about $10^{${d}}$ cells per cm². Estimate the number of cells in the leaf.`, num: [F(a, 'square centimetres of leaf'), F(10 ** d, 'cells per square centimetre')], den: [], unit: 'cells' }; }
-    default: { const t = rng.pick([1, 2, 5]); const m = rng.pick([0.5, 1]); return { stem: `A grain of sugar has a mass of about ${m} mg. Estimate the number of grains in a ${t} kg bag of sugar (1 g = 1000 mg).`, num: [F(t, 'kilograms in the bag'), GRAMS, F(1000, 'milligrams in a gram')], den: [F(m, 'milligrams per grain')], unit: 'grains' }; }
+    case 0: { const y = rng.pick([365, 366]); return { stem: `Estimate the number of seconds in a year of ${y} days.`, num: [F(y, 'days in the year'), HOURS, MINS, SECS], den: [], unit: 'seconds' }; }
+    case 1: { const d = rng.pick([28, 29, 30, 31]); return { stem: `Estimate the number of seconds in a month of ${d} days.`, num: [F(d, 'days in the month'), HOURS, MINS, SECS], den: [], unit: 'seconds' }; }
+    case 2: { const y = rng.pick([10, 20, 25, 50, 100, 200]); return { stem: `Estimate the number of seconds in ${y} years (take a year as 365 days).`, num: [F(y, 'years'), DAYS, HOURS, MINS, SECS], den: [], unit: 'seconds' }; }
+    case 3: { const r = rng.pick([60, 65, 70, 72, 75, 80]); const y = rng.pick([70, 75, 80, 85, 90]); return { stem: `A human heart beats about ${r} times a minute. Estimate the number of times it beats in a lifetime of ${y} years (take a year as 365 days).`, num: [F(r, 'beats per minute'), MINS, HOURS, DAYS, F(y, 'years of life')], den: [], unit: 'beats' }; }
+    case 4: { const r = rng.pick([12, 14, 15, 16, 18, 20]); return { stem: `A person breathes about ${r} times a minute. Estimate the number of breaths taken in a year (365 days).`, num: [F(r, 'breaths per minute'), MINS, HOURS, DAYS], den: [], unit: 'breaths' }; }
+    case 5: { const P = rng.pick([200, 250, 300, 350, 400, 500, 600]); const L = rng.pick([30, 32, 35, 40, 45]); const W = rng.pick([8, 9, 10, 11, 12]); return { stem: `A book has ${P} pages, with about ${L} lines per page and ${W} words per line. Estimate the number of words in the book.`, num: [F(P, 'pages'), F(L, 'lines per page'), F(W, 'words per line')], den: [], unit: 'words' }; }
+    case 6: { const s = rng.pick([4000, 5000, 6000, 7000, 8000, 10000]); const y = rng.pick([40, 50, 60, 70, 80]); return { stem: `A person walks about ${s} steps a day. Estimate the number of steps walked in ${y} years (take a year as 365 days).`, num: [F(s, 'steps a day'), DAYS, F(y, 'years')], den: [], unit: 'steps' }; }
+    case 7: { const g = rng.pick([0.02, 0.025, 0.03, 0.04, 0.05]); const kg = rng.pick([1, 2, 5, 10, 20]); return { stem: `A grain of rice has a mass of about ${g} g. Estimate the number of grains in a ${kg} kg bag of rice.`, num: [F(kg, 'kilograms in the bag'), GRAMS], den: [F(g, 'grams per grain')], unit: 'grains' }; }
+    case 8: { const l = rng.pick([2, 3, 4, 5]); return { stem: `The world population is about $8 \\times 10^{9}$. If each person drinks about ${l} litres of water a day, estimate the total volume of drinking water consumed worldwide in one day, in litres.`, num: [F(8e9, 'people'), F(l, 'litres per person')], den: [], unit: 'litres' }; }
+    case 9: { const t = rng.pick([{ n: 'an hour', tex: '3600', v: 3600 }, { n: 'a day', tex: '$9 \\times 10^{4}$', v: 9e4 }, { n: 'a year', tex: '$3 \\times 10^{7}$', v: 3e7 }]); return { stem: `Light travels at $3 \\times 10^{8}$ m s$^{-1}$. Taking ${t.n} as ${t.tex} s, estimate the distance, in metres, that light travels in ${t.n}.`, num: [F(3e8, 'metres per second'), F(t.v, `seconds in ${t.n}`)], den: [], unit: 'metres' }; }
+    case 10: { const M = rng.pick([50, 55, 60, 65, 70, 75, 80, 90]); return { stem: `A typical human cell has a mass of about $10^{-12}$ kg. Estimate the number of cells in a person of mass ${M} kg.`, num: [F(M, 'kilograms of person')], den: [F(1e-12, 'kilograms per cell')], unit: 'cells' }; }
+    case 11: { const a = rng.pick([400, 500, 600, 700, 800]); const d = rng.pick([100, 120, 150, 180, 200]); return { stem: `A scalp has an area of about ${a} cm² with about ${d} hairs per cm². Estimate the number of hairs on a head.`, num: [F(a, 'square centimetres of scalp'), F(d, 'hairs per square centimetre')], den: [], unit: 'hairs' }; }
+    case 12: { const cm = rng.pick([1, 2, 3, 5, 10]); return { stem: `An atom has a diameter of about $10^{-10}$ m. Estimate the number of atoms that would fit side by side along a line ${cm} cm long.`, num: [F(cm / 100, 'metres of line')], den: [F(1e-10, 'metres per atom')], unit: 'atoms' }; }
+    case 13: { const L = rng.pick([20, 25, 33, 50]); const W = rng.pick([8, 10, 12, 15, 20, 25]); const D = rng.pick([1.5, 2, 2.5, 3]); return { stem: `A swimming pool is ${L} m long, ${W} m wide and ${D} m deep. Given that $1\\ \\text{m}^3 = 1000$ litres, estimate the volume of water in the pool in litres.`, num: [F(L, 'metres long'), F(W, 'metres wide'), F(D, 'metres deep'), LITRES], den: [], unit: 'litres' }; }
+    case 14: { const v = rng.pick([5, 8, 10, 12, 15]); return { stem: `A grain of sand has a volume of about $10^{-3}$ cm³. Estimate the number of grains in a bucket holding ${v} litres (1 litre = 1000 cm³).`, num: [F(v, 'litres in the bucket'), F(1000, 'cubic centimetres in a litre')], den: [F(1e-3, 'cubic centimetres per grain')], unit: 'grains' }; }
+    case 15: { const b = rng.pick([100, 150, 200, 250]); const d = rng.pick([0.05, 0.1, 0.2]); return { stem: `A bath holds about ${b} litres of water and a drop has a volume of about ${d} ml. Estimate the number of drops in a full bath (1 litre = 1000 ml).`, num: [F(b, 'litres in the bath'), F(1000, 'millilitres in a litre')], den: [F(d, 'millilitres per drop')], unit: 'drops' }; }
+    case 16: { const gb = rng.pick([250, 500, 1000, 2000, 4000]); const mb = rng.pick([3, 4, 5, 6, 8, 10]); return { stem: `A hard disk holds ${gb} GB and a photograph takes about ${mb} MB. Given that $1\\ \\text{GB} = 1000\\ \\text{MB}$, estimate the number of photographs the disk can hold.`, num: [F(gb, 'gigabytes on the disk'), F(1000, 'megabytes in a gigabyte')], den: [F(mb, 'megabytes per photograph')], unit: 'photographs' }; }
+    case 17: { const L = rng.pick([100, 105, 110]); const W = rng.pick([64, 68, 70, 75]); const n = rng.pick([2, 3, 4, 5]); return { stem: `A football pitch is about ${L} m long and ${W} m wide, and grass grows about ${n} blades per cm². Estimate the number of blades of grass on the pitch.`, num: [F(L, 'metres long'), F(W, 'metres wide'), CM2, F(n, 'blades per square centimetre')], den: [], unit: 'blades' }; }
+    case 18: { const h = rng.pick([2, 2.5, 3, 3.5, 4]); const l = rng.pick([10, 15, 20, 25, 30]); const A = rng.pick([0.015, 0.02, 0.025]); return { stem: `A brick wall is ${l} m long and ${h} m high, and each brick covers about ${A} m² of the face of the wall. Estimate the number of bricks in the face of the wall.`, num: [F(l, 'metres long'), F(h, 'metres high')], den: [F(A, 'square metres per brick')], unit: 'bricks' }; }
+    case 19: { const w = rng.pick([5000, 10000, 15000, 20000]); const y = rng.pick([50, 60, 70, 80]); return { stem: `A person speaks about ${w} words a day. Estimate the number of words spoken in ${y} years (take a year as 365 days).`, num: [F(w, 'words a day'), DAYS, F(y, 'years')], den: [], unit: 'words' }; }
+    case 20: { const a = rng.pick([50, 75, 100, 150, 200]); const d = rng.pick([3, 4, 5]); return { stem: `A leaf has an area of about ${a} cm² and contains about $10^{${d}}$ cells per cm². Estimate the number of cells in the leaf.`, num: [F(a, 'square centimetres of leaf'), F(10 ** d, 'cells per square centimetre')], den: [], unit: 'cells' }; }
+    default: { const t = rng.pick([1, 2, 5, 10]); const m = rng.pick([0.5, 1, 2]); return { stem: `A grain of sugar has a mass of about ${m} mg. Estimate the number of grains in a ${t} kg bag of sugar (1 g = 1000 mg).`, num: [F(t, 'kilograms in the bag'), GRAMS, F(1000, 'milligrams in a gram')], den: [F(m, 'milligrams per grain')], unit: 'grains' }; }
   }
 }
 
 /**
- * Nearest power of ten to x; null in the band 3.17 ≤ m < 5.5 where "nearest" on a linear scale (10^e up to
+ * Nearest power of ten to x; null in the band 3.17 ≤ m ≤ 5.5 where "nearest" on a linear scale (10^e up to
  * m = 5.5) and on a log scale (10^e up to m = √10 ≈ 3.16) disagree, so the question stays unambiguous.
  */
 function nearestPower(x: number): number | null {
   const e = Math.floor(Math.log10(x) + 1e-12);
   const m = x / 10 ** e;
-  if (m >= 3.17 && m < 5.5) return null;
+  // m = 5.5 exactly (55 kg ÷ 10^-12 kg) is the same distance from 10^e and 10^(e+1), so it has no
+  // nearest power at all; reject it, and anything a rounding error away from it, with the band.
+  if (m >= 3.17 && m <= 5.5 * (1 + 1e-9)) return null;
   return m < 3.17 ? e : e + 1;
 }
 
@@ -445,7 +451,9 @@ function magnitude(rng: RNG): Generated | null {
   }
   const byExp = new Map<number, { trap: string; generic: boolean }>();
   for (const c of cands) {
-    if (!Number.isFinite(c.e) || c.e === e || Math.abs(c.e - e) > 4 || byExp.has(c.e)) continue;
+    // Every scenario counts discrete things, so a power below 10^0 ("0.1 bricks") is discarded on
+    // sight and would turn a five-option question into a three-option one.
+    if (!Number.isFinite(c.e) || c.e === e || c.e < 0 || Math.abs(c.e - e) > 4 || byExp.has(c.e)) continue;
     byExp.set(c.e, { trap: c.trap, generic: c.generic === true });
   }
   const pool = [...byExp].map(([exp, t]) => ({ exp, trap: t.trap, generic: t.generic }));
@@ -468,7 +476,12 @@ function magnitude(rng: RNG): Generated | null {
     .sort((x, y) => x.exp - y.exp)
     .map((c, i) => ({ key: OPTION_KEYS[i], display: `$10^{${c.exp}}$`, correct: c.correct, trap: c.trap }));
   const [mStr, eStr] = value.toExponential(1).split('e');
-  const calc = sc.num.map((f) => numTex(f.v)).join(times) + (sc.den.length ? ` \\div ${sc.den.map((f) => numTex(f.v)).join(' \\div ')}` : '');
+  // A denominator written in standard form has to go under a fraction bar: "70 \div 1 \times 10^{-12}"
+  // reads left to right as 70 ÷ 1 × 10⁻¹², which is not the calculation. A division by 1 is not a step,
+  // so it is left out of the display (the factor still counts in value and in params).
+  const numCalc = sc.num.map((f) => numTex(f.v)).join(times);
+  const denCalc = sc.den.filter((f) => f.v !== 1).map((f) => numTex(f.v));
+  const calc = denCalc.length ? `\\frac{${numCalc}}{${denCalc.join(times)}}` : numCalc;
   return {
     stem: `${sc.stem}\n\nWhich of the following is closest to the answer?`,
     answer: { kind: 'choice', value: correct },

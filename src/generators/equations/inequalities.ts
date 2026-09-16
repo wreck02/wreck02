@@ -93,6 +93,24 @@ function clean(ds: Distractor[]): Distractor[] {
   return ds.filter((d) => Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
+/**
+ * Offer a random mix of below- and above-answer distractors.
+ *
+ * Every candidate is still the result of a named mistake; this only decides which of them the
+ * builder sees first (they are marked `must`), so the number of options larger than the answer
+ * varies from question to question. Without it a fixed mistake set leaves the answer in the same
+ * place in the sorted option list every time — "always the median", "never the largest" — and the
+ * layout alone gives the answer away.
+ */
+function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
+  const below = ds.filter((d) => d.value.cmp(answer) < 0);
+  const above = ds.filter((d) => d.value.cmp(answer) > 0);
+  if (below.length === 0 || above.length === 0 || below.length + above.length < need) return ds;
+  const want = rng.int(Math.max(0, need - below.length), Math.min(above.length, need));
+  const pick = [...rng.shuffle(above).slice(0, want), ...rng.shuffle(below).slice(0, need - want)];
+  return ds.map((d) => (pick.includes(d) ? { ...d, must: true } : d));
+}
+
 type Variant = 'pos-linear' | 'neg-linear' | 'both-sides' | 'monic-quad' | 'x2-ax' | 'general' | 'x2-k' | 'rearranged' | 'count' | 'count-sqrt' | 'extreme';
 
 const VARIANTS: Record<Level, Variant[]> = {
@@ -300,7 +318,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       return {
         stem: `How many integers $x$ satisfy $${ineqTex(ineq)}$?`,
         answer: { kind: 'exact', value: E(count) },
-        options: buildOptions(rng, E(count), ds),
+        options: buildOptions(rng, E(count), slant(rng, E(count), ds)),
         solution: `$${factored} ${OPTEX[cop]} 0$ gives $${tex(lo)} ${strict ? '<' : '\\le'} x ${strict ? '<' : '\\le'} ${tex(hi)}$. The integers are $${first}, \\dots, ${last}$: $${count}$ of them.`,
         trap: 'Count the integers in the interval carefully: endpoints count for ≤ but not for <, and remember 0 and the negatives.',
         tags: ['inequality', 'quadratic', 'count-integers'],
@@ -324,7 +342,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       return {
         stem: `How many integers $x$ satisfy $${ineqTex(ineq)}$?`,
         answer: { kind: 'exact', value: E(count) },
-        options: buildOptions(rng, E(count), ds),
+        options: buildOptions(rng, E(count), slant(rng, E(count), ds)),
         solution: `$-\\sqrt{${k}} ${OPTEX[strictOp]} x ${OPTEX[strictOp]} \\sqrt{${k}}$ and $${f} < \\sqrt{${k}} < ${f + 1}$, so $x$ runs from $-${f}$ to $${f}$: $2 \\times ${f} + 1 = ${count}$ integers.`,
         trap: 'x² < k gives −√k < x < √k; count both signs and zero.',
         tags: ['inequality', 'quadratic', 'count-integers', 'square-root'],
@@ -386,6 +404,8 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { value: E(Math.max(1, Math.ceil(loV))), trap: 'used the lower root' },
           { value: E(Math.ceil(-loV)), trap: 'used the lower root with its sign dropped' },
           { value: E(1), trap: 'assumed 1 works without checking' },
+          { value: E(Math.abs(d)), trap: `read the root off the factor (${linear(1, d)}) as $${-d}$ with the wrong sign` },
+          { value: E(Math.abs(b)), trap: a === 1 ? 'read the root off the factor with the wrong sign' : `read the root off (${linear(a, b)}) without dividing by ${a}` },
         ]).filter((d) => d.value.isInteger() && d.value.toNumber() >= 1);
       }
       if (answer === 0 && ask !== 'smallest-positive') return null;
@@ -401,7 +421,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       return {
         stem,
         answer: { kind: 'exact', value: E(answer) },
-        options: buildOptions(rng, E(answer), ds, { fallback }),
+        options: buildOptions(rng, E(answer), slant(rng, E(answer), ds), { fallback }),
         solution: `$${factored} ${OPTEX[op]} 0$: roots $${tex(lo)}$ and $${tex(hi)}$, so ${render(region)}. The ${ask === 'smallest-positive' ? 'smallest positive integer in that set' : `${ask} integer in that interval`} is $${answer}$.`,
         trap: 'Solve the inequality fully first, then read off the integer: watch strict versus non-strict at a root and round the right way for a fractional root.',
         tags: ['inequality', 'quadratic', 'integer'],

@@ -169,6 +169,7 @@ function compound(rng: RNG, decrease: boolean): Generated | null {
     { value: E(P).mul(m.pow(n + 1)), trap: `went on for ${n + 1} periods` },
     { value: ans.add(E(P).mulRat(frac(Math.abs(sr) * n, 100).toRat())), trap: 'added simple interest on top of the compounded value' },
     { value: ans.add(E(P).mulRat(frac(Math.abs(sr), 100).toRat())), trap: 'counted one extra period of change on the original amount' },
+    { value: ans.add(ans.sub(E(P))), trap: decrease ? 'subtracted the loss in value a second time' : 'added the interest on to the final value (counted it twice)' },
     { value: E(P).mul(mult(-sr).pow(n)), trap: decrease ? `used the multiplier ${mtex(r)} for a decrease` : `used the multiplier ${mtex(-r)} for an increase` },
     { value: E(P).mul(m.pow(n - 1)), trap: `stopped after ${n - 1} ${n - 1 === 1 ? 'period' : 'periods'}` },
   ].filter((c) => c.value !== null && c.value.cmp(ans) > 0));
@@ -182,6 +183,7 @@ function compound(rng: RNG, decrease: boolean): Generated | null {
     { value: E(P).mul(m.pow(n + 1)), trap: `went on for ${n + 1} periods` },
     { value: ans.add(E(P).mulRat(frac(Math.abs(sr) * n, 100).toRat())), trap: 'added simple interest on top of the compounded value' },
     { value: ans.add(E(P).mulRat(frac(Math.abs(sr), 100).toRat())), trap: 'counted one extra period of change on the original amount' },
+    { value: ans.add(ans.sub(E(P))), trap: decrease ? 'subtracted the loss in value a second time' : 'added the interest on to the final value (counted it twice)' },
     { value: E(P).mul(mult(-sr).pow(n)), trap: decrease ? `used the multiplier ${mtex(r)} for a decrease` : `used the multiplier ${mtex(-r)} for an increase` },
     { value: E(P).sub(ans).abs(), trap: decrease ? 'found the loss in value, not the value' : 'found the interest, not the total value' },
     { value: E(Math.abs(P - simple.toNumber())), trap: 'found the total change using simple interest' },

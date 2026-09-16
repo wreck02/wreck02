@@ -275,7 +275,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       // answer is a single value — at level 5 the size of the answer set must not be a tell.
       const a = rng.pick([1, 1, 2, 3]);
       const c = rng.int(a + 1, a + 4);
-      const p = rng.nonZeroInt(-9, 9), d = rng.nonZeroInt(-9, 9);
+      const p = rng.nonZeroInt(-9, 9), d = rng.int(1, 9);
       const eq: Eq = { L: A(a, p), R: P(c, d) };
       const roots = solveCases(eq);
       if (roots.length !== 1) return null;
@@ -292,6 +292,8 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { value: frac(-(p + d), a - c), trap: 'used a − c with the negative case: the signs must match' },
         { value: frac(d - p, a), trap: 'ignored the cx term on the right-hand side' },
         { value: frac(-p, a), trap: 'set the inside of the modulus to zero' },
+        { value: E(d - p), trap: 'collected the constants but never divided by a − c' },
+        { value: E(-(p + d)), trap: 'collected the constants but never divided by a + c' },
         { value: x.neg(), trap: 'sign error in the final division' },
       ]);
       return exactQ(rng, eq, x, rejected, ds,

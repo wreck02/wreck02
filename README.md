@@ -5,6 +5,9 @@ Cambridge, Imperial and Oxford for engineering). Every question is generated pro
 parameterised template, verified at generation time with exact arithmetic, and answered against the exam's
 real constraint: **27 multiple-choice questions in 40 minutes, no calculator, about 89 seconds each.**
 
+**92 templates across 24 topics** cover Mathematics 1, Mathematics 2 and Physics, each parameterised over
+five difficulty levels, so no two sessions are the same.
+
 Nothing leaves your machine. There is no backend; progress lives in your browser's localStorage.
 
 ## Run it
@@ -25,6 +28,7 @@ Other commands:
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run sample` | prints five sample questions with solutions from five different topics |
 | `npm run sample -- <template-id> [level] [count]` | prints instances of one template, e.g. `npm run sample -- m1.surds.rationalise 5 6` |
+| `npm run stats` | distractor-quality report per template and level: padding, answer-position bias, option spread, stem variety |
 | `SEED=ESAT-K7Q2M9 npm run sample` | reproducible samples |
 
 ## Modes
@@ -63,7 +67,7 @@ error ledger. Settings lets you export or import all data as JSON.
 
 ## How questions are made
 
-* `src/generators/<topic>/<template>.ts` — one file per template. Each exports an `id`, `module`, `topic`,
+* `src/generators/<topic>/<template>.ts` — one file per template (92 of them). Each exports an `id`, `module`, `topic`,
   a description of the parameter ranges for **levels 1–5**, `generate(rng, level)` and an independent
   `verify(question)`.
 * `src/core/exact.ts` — exact arithmetic: rationals, surds and powers of π (`7 + 4√3`, `5π/6`, `3 × 10⁸`).

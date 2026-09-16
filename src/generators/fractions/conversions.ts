@@ -624,7 +624,7 @@ function ordering(rng: RNG): Generated | null {
     if (Math.abs(v - extreme) <= 0.005) return `nearest rival: ${approxPlain(v)} agrees with the answer to two decimal places, so only the third decimal decides`;
     if (it.kind === 'pct') return `read ${it.s}% as ${it.s} and compared it with the decimals without dividing by 100`;
     if (it.kind === 'frac') return `judged ${it.n}/${it.d} by its numerator and denominator instead of converting it (${approxPlain(v)})`;
-    return `took the ${ask} decimal, ${it.s}, on sight without converting the fractions and percentages`;
+    return `picked ${it.s} from the decimals on sight, without converting the fractions and percentages`;
   };
   const wrong = items.map((it, i) => ({ display: itemTex(it), trap: why(it, vals[i]) })).filter((_, i) => i !== idx);
   const order = items.map((_, i) => i).sort((i, j) => (ask === 'largest' ? vals[j] - vals[i] : vals[i] - vals[j]));

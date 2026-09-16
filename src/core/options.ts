@@ -9,6 +9,7 @@
 import { Exact, type NumberFormat } from './exact';
 import type { RNG } from './rng';
 import type { Option } from './template';
+export type { Option };
 import { isCleanExact } from './clean';
 
 export const OPTION_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
@@ -38,24 +39,41 @@ function fmt(v: Exact, cfg: BuildOptionsConfig): string {
   return `$${v.toLatex({ format: cfg.format })}${cfg.unit ? `\\ ${cfg.unit}` : ''}$`;
 }
 
-/** Generic perturbations used only when a template did not provide enough distinct distractors. */
+/**
+ * Generic perturbations, used only when a template did not provide enough distinct
+ * distractors (a smell: give better ones). They stay on the same side of zero as the
+ * answer, because a negative length or a negative probability is eliminated on sight,
+ * and they alternate above and below so padding does not bias the answer's position.
+ */
 export function genericPerturbations(answer: Exact): Exact[] {
   const one = Exact.ONE;
+  const sign = answer.sign();
   const out: Exact[] = [];
-  const push = (x: Exact) => { if (!x.isZero() || !answer.isZero()) out.push(x); };
-  push(answer.neg());
+  const half = Exact.rat(1, 2).toRat();
+  const tenth = Exact.rat(1, 10).toRat();
+  const push = (x: Exact) => {
+    if (!Number.isFinite(x.toNumber())) return;
+    // keep the sign of the answer: a padded option must still look like a possible answer
+    if (sign !== 0 && x.sign() !== 0 && x.sign() !== sign) return;
+    out.push(x);
+  };
+  // alternate larger / smaller so the answer does not end up systematically extreme
   push(answer.mulRat(2));
-  push(answer.mulRat(Exact.rat(1, 2).toRat()));
+  push(answer.mulRat(half));
   push(answer.add(one));
   push(answer.sub(one));
+  push(answer.mulRat(10));
+  push(answer.mulRat(tenth));
   push(answer.add(Exact.int(2)));
   push(answer.sub(Exact.int(2)));
-  push(answer.mulRat(10));
-  push(answer.mulRat(Exact.rat(1, 10).toRat()));
   push(answer.mulRat(3));
   push(answer.add(Exact.int(5)));
-  if (!answer.isZero()) {
-    try { push(answer.inv()); } catch { /* ignore */ }
+  push(answer.sub(Exact.int(5)));
+  if (sign === 0) out.push(one, Exact.int(2), Exact.int(-1), Exact.int(-2));
+  else if (!answer.isZero()) {
+    try { push(answer.inv()); } catch { /* not invertible */ }
+    // the negation is the last resort: it is the least plausible padding
+    out.push(answer.neg());
   }
   return out;
 }

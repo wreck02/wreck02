@@ -11,7 +11,7 @@ interface Props {
   autoFocus?: boolean;
 }
 
-export const TYPED_HINT = '3/4, 0.75, 2√5 or 2sqrt5, pi/6, 3e8, x = 2 or x = 3 — press Enter';
+export const TYPED_HINT = '3/4, 0.75, 2√5 or 2sqrt5, pi/6, 3e8, x = 2 or x = 3 · press Enter';
 
 /** Monospace free-text answer box with a debounced "understood as" echo. */
 export function TypedAnswer({ value, onChange, onSubmit, disabled = false, submitLabel = 'Submit', autoFocus = true }: Props) {
@@ -59,7 +59,7 @@ export function TypedAnswer({ value, onChange, onSubmit, disabled = false, submi
         />
         <button type="button" className="btn primary" disabled={disabled} onClick={onSubmit}>{submitLabel}</button>
       </div>
-      <div className="typed-hint">{TYPED_HINT.replace('—', '·')}</div>
+      <div className="typed-hint">{TYPED_HINT}</div>
       <div className={`typed-echo ${echo && !echo.ok ? 'err' : 'muted'}`} aria-live="polite">
         {echo ? (echo.ok ? `understood as ${echo.text}` : `not understood: ${echo.text}`) : ''}
       </div>

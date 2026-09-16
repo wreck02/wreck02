@@ -23,6 +23,10 @@
 .typed-echo.err { color: var(--warn); }
 
 /* ---------- feedback ---------- */
+/* .ok / .bad are also global text-colour utilities; keep the panel body in normal text and colour only the verdict. */
+.feedback.ok, .feedback.bad { color: var(--text); }
+.feedback.ok .fb-head { color: var(--ok); }
+.feedback.bad .fb-head { color: var(--bad); }
 .fb-head { font-weight: 700; font-size: 1.05rem; display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
 .fb-head .mark { font-size: 1.3rem; line-height: 1; }
 .fb-row { margin-top: 0.5rem; }

@@ -11,7 +11,8 @@ import {
   type Attempt, type Mode, type QuestionRecord, type SessionConfig,
 } from '../../core/session';
 import { RNG } from '../../core/rng';
-import { gauntletStep, initialGauntlet, type GauntletState } from '../../core/gauntlet';
+import { gauntletStep, initialGauntlet, GAUNTLET_START, type GauntletState } from '../../core/gauntlet';
+import type { Level } from '../../core/template';
 import { answerToDisplay, answerToPlain, checkAnswer } from '../../core/answers';
 import { formatSec } from '../../core/analytics';
 import { TEMPLATES } from '../../core/registry';
@@ -72,7 +73,7 @@ function slotFor(config: SessionConfig, record: QuestionRecord): Slot {
 }
 
 /** Gauntlet: one question at a time, template drawn per index from a seeded RNG, never the same template twice running. */
-function gauntletQuestion(config: SessionConfig, index: number, level: GauntletState['level'], lastTemplateId: string | null): QuestionRecord {
+function gauntletQuestion(config: SessionConfig, index: number, level: Level, lastTemplateId: string | null): QuestionRecord {
   const pool = poolFor(config);
   const rng = new RNG(`${config.seed}:gauntlet`).child(index);
   const candidates = pool.length > 1 && lastTemplateId ? pool.filter((t) => t.id !== lastTemplateId) : pool;
@@ -93,12 +94,14 @@ export function Runner({ nav, config }: { nav: Nav; config: SessionConfig }) {
 
   const [startedAt] = useState(() => Date.now());
   const sessionId = useMemo(() => newSessionId(config.seed, startedAt), [config.seed, startedAt]);
-  const [gState, setGState] = useState<GauntletState>(() => initialGauntlet());
+  const gauntletStart: Level = config.level === 'mixed' ? GAUNTLET_START : config.level;
+  const [gState, setGState] = useState<GauntletState>(() => initialGauntlet(gauntletStart));
   const [setupError, setSetupError] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[]>(() => {
     try {
       if (TEMPLATES.length === 0) throw new Error('No question templates are registered yet.');
-      if (isGauntlet) return [slotFor(config, gauntletQuestion(config, 0, initialGauntlet().level, null))];
+      if (poolFor(config).length === 0) throw new Error('No question templates match this selection yet. Choose another module or topic.');
+      if (isGauntlet) return [slotFor(config, gauntletQuestion(config, 0, gauntletStart, null))];
       return buildSession(config).map((r) => slotFor(config, r));
     } catch (e) {
       queueMicrotask(() => setSetupError((e as Error).message));
@@ -352,7 +355,7 @@ export function Runner({ nav, config }: { nav: Nav; config: SessionConfig }) {
     if (k === 'ArrowRight' || k === 'Enter' || k === 'n' || k === 'N') { take(); goTo(Math.min(total - 1, cur.index + 1)); return; }
     if (k === 'ArrowLeft' || k === 'p' || k === 'P') { take(); goTo(Math.max(0, cur.index - 1)); return; }
     if ((k === 's' || k === 'S') && config.allowSkip) { take(); markNoAnswer(); return; }
-    if (k === 'f' || k === 'F') { take(); toggleFlag(); return; }
+    if (k === 'm' || k === 'M') { take(); toggleFlag(); return; }
     if (k === 'Escape') { take(); patchSlot(cur.index, (x) => ({ ...x, selected: null })); }
   });
 
@@ -501,7 +504,7 @@ export function Runner({ nav, config }: { nav: Nav; config: SessionConfig }) {
         {slot.typedUsed ? <span><kbd>Enter</kbd> {immediate ? 'submit' : 'next'}</span> : <span><kbd>A</kbd>–<kbd>{String.fromCharCode(64 + q.options.length)}</kbd> or <kbd>1</kbd>–<kbd>{q.options.length}</kbd> choose</span>}
         {immediate && <span><kbd>Enter</kbd> / <kbd>N</kbd> next</span>}
         {isSim && <span><kbd>&larr;</kbd> <kbd>&rarr;</kbd> move</span>}
-        {isSim && <span><kbd>F</kbd> flag</span>}
+        {isSim && <span><kbd>M</kbd> flag</span>}
         {config.allowSkip && <span><kbd>S</kbd> {isSim ? 'no answer' : 'skip'}</span>}
         <span><kbd>Esc</kbd> clear</span>
       </div>

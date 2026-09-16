@@ -192,7 +192,8 @@ export function presetConfig(mode: Mode, seed: string, overrides: Partial<Sessio
       // The exam shape is fixed: overrides may choose module/topics/seed but not the format.
       return { ...base, ...overrides, count: SIM_QUESTIONS, timeLimitSec: SIM_SECONDS, answerMode: 'mc', immediateFeedback: false, timed: true, allowSkip: true };
     case 'gauntlet':
-      return { ...base, level: 2, count: 30, ...overrides };
+      // Pace is measured (under 89 s counts towards levelling up) but a question never times out.
+      return { ...base, level: 2, count: 30, timed: false, ...overrides };
     case 'review':
       return { ...base, count: 10, timed: false, ...overrides };
   }

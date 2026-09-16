@@ -50,7 +50,7 @@ export function sessionToMarkdown(report: SessionReport, questions: QuestionReco
   lines.push('| # | Topic | Lvl | Result | Time | vs pace |');
   lines.push('|---|---|---|---|---|---|');
   for (const a of report.attempts) {
-    const res = a.skipped ? 'skipped' : a.correct ? '✓' : '✗';
+    const res = a.timedOut && !a.correct ? 'timed out' : a.skipped ? 'skipped' : a.correct ? '✓' : '✗';
     const gap = Math.round(a.timeMs / 1000 - PACE_SECONDS);
     lines.push(`| ${a.index + 1} | ${topicName(a.topic)} | ${a.level} | ${res} | ${formatSec(a.timeMs)} | ${gap >= 0 ? '+' : ''}${gap}s |`);
   }
@@ -61,7 +61,7 @@ export function sessionToMarkdown(report: SessionReport, questions: QuestionReco
     lines.push('');
     for (const a of errors) {
       const q = questions.find((r) => r.index === a.index)?.question;
-      lines.push(`### Q${a.index + 1} — ${topicName(a.topic)} (level ${a.level}) — ${a.skipped ? 'skipped' : a.correct ? 'correct but slow' : 'wrong'} in ${formatSec(a.timeMs)}`);
+      lines.push(`### Q${a.index + 1} — ${topicName(a.topic)} (level ${a.level}) — ${a.timedOut && !a.correct ? 'timed out' : a.skipped ? 'skipped' : a.correct ? 'correct but slow' : 'wrong'} in ${formatSec(a.timeMs)}`);
       lines.push('');
       lines.push(latexToText(q?.stem ?? a.stem));
       lines.push('');

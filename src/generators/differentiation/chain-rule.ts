@@ -59,7 +59,9 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   const grab = (s: -1 | 1) => pool.find((d) => d.value.cmp(answer) === s && !seen.some((x) => x.equals(d.value)));
   while (out.length < count) {
     const above = out.filter((d) => d.value.cmp(answer) > 0).length;
-    const wanted: -1 | 1 = above * 2 <= out.length ? 1 : -1;
+    const last = out.length === count - 1;
+    // Random side each time, but the final slot repairs an all-above or all-below list.
+    const wanted: -1 | 1 = last && above === 0 ? 1 : last && above === out.length ? -1 : (rng.bool(0.5) ? 1 : -1);
     const d = grab(wanted) ?? grab(wanted === 1 ? -1 : 1);
     if (!d) break;
     take(d);

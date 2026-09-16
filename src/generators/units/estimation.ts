@@ -80,7 +80,10 @@ function estimate(rng: RNG, e: Est): Generated | null {
   const disp = (v: number): string => `$${E(round(v)).toLatex({ format })}${e.unit ? `\\ ${e.unit}` : ''}$`;
 
   if (e.mode === 'choice') {
-    const start = rng.int(-3, -1); // the answer is never always in the middle
+    // The ladder runs from target×10^start to target×10^(start+4): drawing start from -4 to 0 puts the
+    // answer at every rank, including the smallest and the largest option. A narrower range would let a
+    // candidate strike out the ends without doing any physics — in the one template about size.
+    const start = rng.int(-4, 0);
     const values: number[] = [];
     for (let k = start; k < start + 5; k++) values.push(round(target * Math.pow(10, k)));
     if (values.some((v) => cleanNum(v) === null)) return null;

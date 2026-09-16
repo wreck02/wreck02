@@ -430,7 +430,7 @@ function energyPtQ(rng: RNG): Generated | null {
   const d = deviceForPower(rng, P);
   // Both minute slips are real, but offering "÷ 60" and "× 60" together would stretch the option list
   // over a factor of 3600, so each question shows one of them.
-  const overshoot = rng.bool(0.4);
+  const overshoot = rng.bool(0.5);
   return pack(rng, {
     stem: `${d.subject} of power ${pText} is switched on for ${tText}. Find the energy it transfers, in ${unitName}.`,
     answer,
@@ -476,12 +476,16 @@ function energyVItQ(rng: RNG): Generated | null {
   if (!answer) return null;
   const d = deviceFor(rng, V, P);
   const tText = `${tStated} minute${tStated === 1 ? '' : 's'}`;
+  // as in energyPtQ, show only one of the two minute slips so the options stay within a readable range
+  const overshoot = rng.bool(0.45);
   return pack(rng, {
     stem: `${d.subject} draws a current of ${n(I)} A from ${supply(V)}. Find the energy it transfers in ${tText}, in ${inKJ ? 'kJ' : 'J'}.`,
     answer,
     unit: inKJ ? U_KJ : U_J,
     must: [
-      { value: val(P * tStated * scale), trap: 'left the time in minutes instead of converting it to seconds' },
+      overshoot
+        ? { value: val(P * t * 60 * scale), trap: 'multiplied by 60 once too often' }
+        : { value: val(P * tStated * scale), trap: 'left the time in minutes instead of converting it to seconds' },
       { value: val(V * I * I * t * scale), trap: 'used P = VI² instead of P = VI' },
     ],
     extra: [

@@ -123,4 +123,21 @@ describe.each(TEMPLATES.map((t) => [t.id, t] as const))('%s', (_id, t) => {
     for (let i = 0; i < 30; i++) stems.add(generateQuestion(t, new RNG(`var${i}`), 3).stem);
     expect(stems.size).toBeGreaterThan(5);
   });
+
+  it('documents all five levels, and consecutive levels really differ', () => {
+    for (const l of LEVELS) {
+      const desc = t.levels[l];
+      expect(desc, `${t.id} level ${l} has no description`).toBeTruthy();
+      expect(desc!.trim().length, `${t.id} level ${l} description is too short`).toBeGreaterThan(7);
+    }
+    const stemsAt = LEVELS.map((l) => {
+      const set = new Set<string>();
+      for (let i = 0; i < 40; i++) set.add(generateQuestion(t, new RNG(`lvl:${t.id}:${l}:${i}`), l).stem);
+      return set;
+    });
+    for (let a = 0; a < LEVELS.length - 1; a++) {
+      const overlap = [...stemsAt[a]].filter((x) => stemsAt[a + 1].has(x)).length;
+      expect(overlap, `${t.id}: levels ${a + 1} and ${a + 2} generate nearly the same questions`).toBeLessThanOrEqual(30);
+    }
+  });
 });

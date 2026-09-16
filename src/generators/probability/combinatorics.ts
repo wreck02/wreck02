@@ -314,7 +314,7 @@ function togetherQ(rng: RNG): Generated | null {
     ];
   } else if (mode === 'apart') {
     answer = f(n) - 2 * f(n - 1);
-    ask = `In how many of the arrangements are ${two} <em>not</em> next to each other?`.replace('<em>not</em>', 'not');
+    ask = `In how many of the arrangements are ${two} not next to each other?`;
     solution = `All $${n}! = ${f(n)}$ arrangements minus the $2 \\times ${n - 1}! = ${2 * f(n - 1)}$ with the pair together: $${f(n)} - ${2 * f(n - 1)} = ${answer}$.`;
     must = [
       { value: 2 * f(n - 1), trap: 'counted the arrangements with the pair together instead' },
@@ -328,7 +328,7 @@ function togetherQ(rng: RNG): Generated | null {
     ];
   } else if (mode === 'triple') {
     answer = 6 * f(n - 2);
-    ask = `In how many of the arrangements are ${three} all standing together?`.replace('all standing together', people ? 'all standing together' : 'all next to each other');
+    ask = `In how many of the arrangements are ${three} ${people ? 'all standing together' : 'all next to each other'}?`;
     solution = `Tie the three together as one object: $${n - 2}$ objects arrange in $${n - 2}! = ${f(n - 2)}$ ways and the block itself in $3! = 6$ ways, giving $6 \\times ${f(n - 2)} = ${answer}$.`;
     must = [
       { value: f(n - 2), trap: 'forgot the $3!$ orders inside the block' },
@@ -455,15 +455,15 @@ function gridQ(rng: RNG): Generated | null {
     stem: `A counter moves along the lines of a grid that is $${a}$ units wide and $${b}$ units tall, starting at the bottom-left corner. Each move takes it one unit right or one unit up. In how many different ways can it reach the top-right corner?`,
     answer: { kind: 'exact', value: E(answer) },
     options: countOptions(rng, answer, [
+      { value: a + b, trap: 'counted the number of moves, not the number of routes' },
       { value: factorial(a + b), trap: 'treated the moves as all different: $(a+b)!$' },
-      { value: nCr(a + b, b), trap: 'chose which moves are ups but then counted the rights as well' },
       { value: 2 ** (a + b), trap: 'allowed a free choice of direction at every step' },
-      { value: nCr(a + b, a) * 2, trap: 'doubled for "right or up"' },
-    ], [
-      { value: nCr(a + b + 1, a), trap: 'counted moves instead of squares (off by one)' },
       { value: nCr(a + b, a - 1), trap: 'off by one in the number of right moves' },
+    ], [
+      { value: factorial(a + b) / factorial(b), trap: 'treated the right moves as different from one another: divided only by the ups' },
+      { value: nCr(a + b, a) * 2, trap: 'doubled for "right or up"' },
+      { value: nCr(a + b + 1, a), trap: 'used one grid line too many' },
       { value: factorial(a) * factorial(b), trap: 'arranged the two kinds of move separately' },
-      { value: a + b, trap: 'counted the number of moves' },
     ]),
     solution: `Every route is $${a}$ rights and $${b}$ ups in some order: choose which $${a}$ of the $${a + b}$ moves are rights, $^{${a + b}}C_{${a}} = ${answer}$.`,
     trap: 'A route is a word made of R and U — count the arrangements, not the squares.',
@@ -512,9 +512,9 @@ function sharingQ(rng: RNG): Generated | null {
       { value: nCr(k + b - 1, b - 1), trap: 'allowed a child to receive nothing' },
       { value: nCr(k, b - 1), trap: 'off by one: used k gaps instead of k − 1' },
       { value: nCr(k, b), trap: 'chose which sweets to give, though they are identical' },
-      { value: b ** (k - b), trap: 'gave each remaining sweet a free choice of child' },
+      { value: factorial(b), trap: 'arranged the children instead of sharing the objects out' },
     ], [
-      { value: factorial(b), trap: 'arranged the children' },
+      { value: b ** (k - b), trap: 'gave each remaining sweet a free choice of child' },
       { value: nCr(k - 1, b), trap: 'off by one in the number of dividers' },
       { value: k * b, trap: 'multiplied the two numbers' },
     ]),

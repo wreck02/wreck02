@@ -81,8 +81,12 @@ function cleanOnly(ds: Candidate[], answer: Exact): Distractor[] {
   });
 }
 
-/** Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled
+ * out; `spare` near-misses (doubled, halved) are taken last, only when the named circuit mistakes did
+ * not yield four distinct clean values.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -92,6 +96,7 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   };
   must.forEach(take);
   rng.shuffle(extra).forEach(take);
+  rng.shuffle(spare).forEach(take);
   return out;
 }
 
@@ -111,6 +116,8 @@ interface Pack {
   unit: string;
   must: Candidate[];
   extra: Candidate[];
+  /** generic near-misses, used only if the named mistakes ran short */
+  spare?: Candidate[];
   solution: string;
   trap: string;
   tags: string[];
@@ -119,7 +126,7 @@ interface Pack {
 
 function pack(rng: RNG, p: Pack): Generated | null {
   if (!isCleanExact(p.answer).ok || p.answer.sign() <= 0 || !readable(p.answer)) return null;
-  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer), cleanOnly(p.extra, p.answer));
+  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer), cleanOnly(p.extra, p.answer), cleanOnly(p.spare ?? [], p.answer));
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,

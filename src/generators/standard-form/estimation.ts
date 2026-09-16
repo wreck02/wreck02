@@ -285,6 +285,9 @@ function root(rng: RNG): Generated | null {
     { value: round1(exactRoot), trap: 'used a calculator-style value and rounded at the end' },
     { value: sf(Math.sqrt(m), k), trap: 'forgot to halve the power of ten' },
     { value: sf(m, k / 2), trap: 'halved the power of ten but did not root the leading number' },
+    // rounded the radicand to the neighbouring square: same magnitude, on both sides of the answer
+    { value: sf(Math.sqrt(m) + 1, k / 2), trap: `rounded ${str} to ${dec(sf((Math.sqrt(m) + 1) ** 2, k))} instead of ${dec(rounded)}` },
+    { value: Math.sqrt(m) > 1 ? sf(Math.sqrt(m) - 1, k / 2) : null, trap: `rounded ${str} to ${dec(sf((Math.sqrt(m) - 1) ** 2, k))} instead of ${dec(rounded)}` },
   ]);
   const rule = twoSf ? 'by rounding the number under the root to 2 significant figures' : 'by rounding the number under the root to 1 significant figure';
   return pack(rng, `Estimate the value of $\\sqrt{${str}}$ ${rule}.`, ans, spread(rng, ans, must, extra, { maxRatio: 30 }),
@@ -317,6 +320,11 @@ function squareProduct(rng: RNG): Generated | null {
     { value: ans.mulRat(E(0.1).toRat()), trap: 'decimal point one place too far left' },
     { value: divide ? sq.mul(B) : sq.div(B), trap: divide ? 'multiplied instead of dividing' : 'divided instead of multiplying' },
     { value: divide ? sq.div(B.mul(B)) : sq.mul(B).mul(B), trap: 'squared both numbers' },
+    // rounded to the neighbouring leading digit: same magnitude, on both sides of the answer
+    { value: divide ? sf((a.d + 1) ** 2, 2 * a.k).div(B) : sf((a.d + 1) ** 2, 2 * a.k).mul(B), trap: `rounded ${a.str} up to ${dec(sf(a.d + 1, a.k))}` },
+    { value: a.d > 1 ? (divide ? sf((a.d - 1) ** 2, 2 * a.k).div(B) : sf((a.d - 1) ** 2, 2 * a.k).mul(B)) : null, trap: `rounded ${a.str} down to ${dec(sf(a.d - 1, a.k))}` },
+    { value: divide ? sq.div(sf(b.d + 1, b.k)) : sq.mul(sf(b.d + 1, b.k)), trap: `rounded ${b.str} up to ${dec(sf(b.d + 1, b.k))}` },
+    { value: b.d > 1 ? (divide ? sq.div(sf(b.d - 1, b.k)) : sq.mul(sf(b.d - 1, b.k))) : null, trap: `rounded ${b.str} down to ${dec(sf(b.d - 1, b.k))}` },
   ]);
   const expr = divide ? `\\frac{${a.str}^2}{${b.str}}` : `${a.str}^2${times}${b.str}`;
   const work = divide ? `\\frac{${dec(A)}^2}{${dec(B)}} = \\frac{${dec(sq)}}{${dec(B)}}` : `${dec(A)}^2${times}${dec(B)} = ${dec(sq)}${times}${dec(B)}`;

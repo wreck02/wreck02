@@ -2,6 +2,7 @@ import { defineTemplate, retry, type Generated, type Level } from '../../core/te
 import { E, Exact } from '../../core/exact';
 import { buildOptions, buildChoiceOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
+import { gcd } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
 
 /**
@@ -374,23 +375,31 @@ const limitTex = ([m, c]: [number, number]): string => {
   return c === 0 ? mn : `${mn} ${c > 0 ? '+' : '-'} ${Math.abs(c)}`;
 };
 
+/** n(An + C), with any common factor taken outside: n(3n + 6) is printed as 3n(n + 2). */
+function linProd(A: number, C: number, div = 1): Form {
+  if (C === 0) {
+    const sq = `${A === 1 ? '' : A}n^2`;
+    return prod([[A, 0], [1, 0]], div, div === 1 ? sq : `\\frac{${sq}}{${div}}`);
+  }
+  const g = gcd(Math.abs(A), Math.abs(C));
+  return g > 1 ? prod([[g, 0], [A / g, C / g]], div) : prod([[1, 0], [A, C]], div);
+}
+
 /** Σ(ar + b) with a even, so the closed form n(An + C) with A = a/2, C = a/2 + b stays tidy. */
 function linearFormula(rng: RNG): FormulaSpec {
   const a = rng.pick([2, 2, 4, 6]);
   const b = rng.int(1 - a, 3);
   const A = a / 2, C = A + b;
-  const correct = C === 0
-    ? prod([[A, 0], [1, 0]], 1, A === 1 ? 'n^2' : `${A}n^2`)
-    : prod([[1, 0], [A, C]]);
   return {
-    id: 'linear', a, b, lo: [0, 1], hi: [1, 0], correct,
+    id: 'linear', a, b, lo: [0, 1], hi: [1, 0],
+    correct: linProd(A, C),
     wrong: [
-      { form: prod([[1, 0], [a, a + b]]), trap: 'forgot the 2 in n(n + 1)/2 when summing ar' },
-      { form: prod([[1, 0], [a, b]]), trap: 'multiplied the last term by n' },
-      { form: prod([[1, 0], [A, C]], 2), trap: 'halved one time too many' },
+      { form: linProd(a, a + b), trap: 'forgot the 2 in n(n + 1)/2 when summing ar' },
+      { form: linProd(a, b), trap: 'multiplied the last term by n' },
+      { form: linProd(A, C, 2), trap: 'halved one time too many' },
       { form: prod([[A, 0], [1, 1]], 1, A === 1 ? 'n(n + 1)' : `${A}n(n + 1)`), trap: 'dropped the constant term' },
       { form: { tex: `${A === 1 ? '' : A}n^2 ${C > 0 ? '+' : '-'} ${Math.abs(C)}`, coeffs: [A, 0, C] }, trap: 'added the constant once instead of n times' },
-      { form: prod([[1, 0], [A, C + 1]]), trap: 'slip of one inside the bracket' },
+      { form: linProd(A, C + 1), trap: 'slip of one inside the bracket' },
     ],
   };
 }

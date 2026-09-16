@@ -116,6 +116,20 @@ function subjectX(s: Quad, y: Exact): Exact | null {
   return den.isZero() ? null : E(s[0]).mul(y).add(E(s[1])).div(den);
 }
 
+/**
+ * (pn y + qn)/(pd y + qd) is a constant function exactly when the 2×2 determinant vanishes.
+ * Such an option ("x = (y − 3)/(y − 3)", i.e. x = 1 for every y) is eliminable on sight.
+ */
+function subjectIsConstant(s: Quad): boolean {
+  return s[0] * s[3] - s[1] * s[2] === 0;
+}
+
+/** Two of these forms are the same function iff every 2×2 minor of the stacked pair vanishes. */
+function sameSubject(u: Quad, v: Quad): boolean {
+  for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) if (u[i] * v[j] - u[j] * v[i] !== 0) return false;
+  return true;
+}
+
 /** Does x = s(y) satisfy y = (ax + b)/(x + c) for the sample y values? */
 function subjectFits(s: Quad, a: number, b: number, c: number): boolean {
   let checked = 0;
@@ -138,10 +152,10 @@ function build(rng: RNG, variant: Variant): Generated | null {
       const c = a * x + b;
       return exact(rng, `Solve $${linear(a, b)} = ${c}$.`, E(x), [
         D(q(c + b, a), 'added b instead of subtracting it'),
-        D(E((c - b) * a), 'multiplied by a instead of dividing'),
+        D(E(c - b), 'forgot to divide by a'),
         D(q(c, a)?.sub(E(b)) ?? null, 'divided only the first term by a'),
         D(q(b - c, a), 'sign error: gave −x'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(c, a + b), 'divided by a + b instead of subtracting b first'),
       ], `$${a}x = ${c} ${b < 0 ? '+' : '-'} ${Math.abs(b)} = ${c - b}$, so $x = ${x}$.`, 'Undo the +b first (subtract it from both sides), then divide the whole of both sides by a.', ['one-step'], [lin(a, b)], [cst(c)], variant);
     }
     case 'x/a+b=c': {
@@ -168,7 +182,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(E(-x), 'sign error: gave −x'),
         c !== 1 ? D(q(d - a * b, a - c), 'forgot to multiply d by c when expanding') : null,
         D(q(c * d + a * b, a - c), 'sign error moving the constant across'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(c * d - a * b, a), 'divided by a instead of by a − c'),
       ], `Expand: $${linear(a, a * b)} = ${linear(c, c * d)}$. Collect: $${a - c}x = ${c * d - a * b}$, so $x = ${x}$.`, 'Multiply every term inside each bracket, then move the x terms to one side and the constants to the other, changing signs as they cross.', ['brackets'], [lin(1, b, a)], [lin(1, d, c)], variant);
     }
     case 'brackets-sum': {
@@ -182,7 +196,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(q(e - b - s * d, a + s * c), 'forgot to multiply the constants inside the brackets'),
         D(E(-x), 'sign error: gave −x'),
         D(q(e - a * b - s * c * d, a * c), 'multiplied the x coefficients instead of adding'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(e, a + s * c), 'ignored the constants inside the brackets'),
       ], `Expand: $${linear(a, a * b)} ${s < 0 ? '-' : '+'} (${linear(c, c * d)}) = ${e}$, so $${linear(a + s * c, a * b + s * c * d)} = ${e}$ and $x = ${x}$.`, 'A minus in front of a bracket changes the sign of every term inside it.', ['brackets'], [lin(1, b, a), lin(1, d, s * c)], [cst(e)], variant);
     }
     case 'frac-diff': {
@@ -201,7 +215,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         s < 0 ? D(q(k * L - A * p + B * qq, den), 'did not distribute the minus over the second numerator') : D(q(k * (m + n) - p - qq, 2), 'added the denominators'),
         D(E(-x), 'sign error: gave −x'),
         D(q(k * L - p - s * qq, den), 'multiplied the x terms but not the constants'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(k * L - B * p - s * A * qq, B + s * A), 'multiplied each numerator by its own denominator instead of the other one'),
       ], `Multiply through by $${L}$: $${A}(${linear(1, p)}) ${s < 0 ? '-' : '+'} ${B}(${linear(1, qq)}) = ${k * L}$, so $${linear(den, A * p + s * B * qq)} = ${k * L}$ and $x = ${x}$.`, 'Multiply every term, including the right-hand side, by the LCM; a minus before a fraction applies to its whole numerator.', ['fractions'], [fracLin(1, p, m), { k: [s, n], num: [1, qq], den: [1] }], [cst(k)], variant);
     }
     case 'cross-frac': {
@@ -218,7 +232,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(q(m * d - n * b, n * a + m * c), 'sign error collecting the x terms'),
         D(E(-x), 'sign error: gave −x'),
         D(q(n * d - m * b, m * a - n * c), 'cross-multiplied the wrong way round'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(d - b, a - c), 'cancelled the denominators instead of cross-multiplying'),
       ], `Cross-multiply: $${n}(${linear(a, b)}) = ${m}(${linear(c, d)})$, so $${linear(n * a, n * b)} = ${linear(m * c, m * d)}$ and $x = ${x}$.`, 'Cross-multiply the whole numerators: each numerator is multiplied by the other denominator.', ['fractions'], [fracLin(a, b, m)], [fracLin(c, d, n)], variant);
     }
     case 'recip': {
@@ -255,7 +269,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(E(c * b), 'forgot to collect the x terms: solved x = cx + cb as x = cb'),
         D(E(-x), 'sign error: gave −x'),
         D(q(b, 1 - c), 'forgot to multiply b by c'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(b, c - 1), 'divided by c instead of multiplying both sides by (x + b)'),
       ], `$x = ${c}(${linear(1, b)}) = ${linear(c, c * b)}$, so $${linear(1 - c, 0)} = ${c * b}$ and $x = ${x}$.`, 'After multiplying up, x appears on both sides: collect the x terms before dividing.', ['denominator'], [over([1, 0], [1, b])], [cst(c)], variant);
     }
     case 'linear-over': {
@@ -268,7 +282,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(q(c * d - b, a + c), 'sign error collecting the x terms'),
         D(E(-x), 'sign error: gave −x'),
         D(q(c * d - b, a), 'forgot the cx term from the right-hand side'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(d - b, a - c), 'forgot to multiply d by c when expanding'),
       ], `$${linear(a, b)} = ${c}(${linear(1, d)}) = ${linear(c, c * d)}$, so $${linear(a - c, 0)} = ${c * d - b}$ and $x = ${x}$.`, 'Multiply by the denominator and expand the right-hand side fully before collecting x.', ['denominator'], [over([a, b], [1, d])], [cst(c)], variant);
     }
     case 'cross': {
@@ -284,7 +298,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(q(c * b - a * d, a + c), 'sign error collecting the x terms'),
         D(E(-x), 'sign error: gave −x'),
         D(q(c * d - a * b, a - c), 'cross-multiplied the wrong way round'),
-        D(E(x + (x > 0 ? 1 : -1)), 'arithmetic slip'),
+        D(q(a * b - c * d, a - c), 'multiplied a by b and c by d instead of crossing over'),
       ], `Cross-multiply: $${a}(${linear(1, d)}) = ${c}(${linear(1, b)})$, so $${linear(a, a * d)} = ${linear(c, c * b)}$, $${linear(a - c, 0)} = ${c * b - a * d}$ and $x = ${x}$.`, 'Cross-multiply: a goes with (x + d) and c with (x + b), then collect the x terms.', ['denominator', 'cross-multiply'], [over([a], [1, b])], [over([c], [1, d])], variant);
     }
     case 'subject': {

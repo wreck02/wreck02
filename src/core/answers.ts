@@ -24,8 +24,26 @@ type Tok =
   | { t: 'sep' }
   | { t: 'end' };
 
-const UNIT_RE =
-  /\s*(m\/s\^?2|m\/s²|m\s?s\^?-?[12]|ms⁻[12]|m\/s|m\^?[23]|m[²³]|cm[²³]|cm\^?[23]|N\s?m|Nm|J\/s|kg\/m\^?3|kg\s?m\^?-3|kgm\^?-3|kg|km\/h|kph|mph|km|cm|mm|mA|kV|kW|MW|GW|kJ|MJ|GJ|kPa|MPa|kHz|MHz|GHz|nm|µm|μm|mol|Hz|Pa|ohms?|Ω|rad|radians?|deg|degrees?|°|units?|seconds?|metres?|meters?|newtons?|joules?|watts?|volts?|amps?|amperes?|N|J|W|A|V|C|K|s|m|g)\s*$/i;
+/**
+ * Trailing units, stripped before parsing. Built from a base-unit alphabet so that
+ * compound units work too: "kg m s^-1", "N s", "m s^-2", "cm^3", "J s^-1", "kW h".
+ */
+const UNIT_WORD =
+  '(?:' +
+  // spelled-out units and angle words
+  'seconds?|secs?|minutes?|mins?|hours?|hrs?|metres?|meters?|kilometres?|kilometers?|centimetres?|centimeters?|millimetres?|millimeters?|' +
+  'grams?|kilograms?|newtons?|joules?|watts?|volts?|amperes?|amps?|coulombs?|ohms?|pascals?|hertz|becquerels?|tesla|moles?|' +
+  'radians?|rad|degrees?|deg|units?|' +
+  // prefixed symbols (longest first) and base symbols
+  // longest symbols first so "Wb" is not read as "W" + "b"
+  '[nµμmcdkMGT]?(?:mol|Wb|Hz|Pa|Wh|eV|Bq|Sv|Gy|lm|lx|N|J|W|A|V|C|K|F|H|T|S|L|l|g|m|s|h)' +
+  '|°C|°F|°|Ω' +
+  ')';
+const UNIT_TOKEN = `${UNIT_WORD}(?:\\s*(?:\\^\\s*-?\\d|⁻?[¹²³]|-\\d))?`;
+const UNIT_RE = new RegExp(`\\s*(?:${UNIT_TOKEN})(?:\\s*[·⋅/.]?\\s*(?:${UNIT_TOKEN}))*\\s*$`);
+
+/** Words that look like units but are far more likely to be part of a typed answer. */
+const NOT_A_UNIT = /^(?:e|pi|inf|infinity|sqrt|root|or|and|abs|cbrt)$/i;
 
 function preprocess(raw: string): string {
   let s = raw.trim();
@@ -43,7 +61,15 @@ function preprocess(raw: string): string {
   s = s.replace(/(\d)\s*[xX]\s*(?=10\s*\^)/g, '$1*');
   // trailing units (only if there is something numeric before them)
   const stripped = s.replace(UNIT_RE, '');
-  if (stripped.length > 0 && /[\d)a-zA-Z]$/.test(stripped) && /[\d)]/.test(stripped)) s = stripped;
+  const removed = s.slice(stripped.length).trim();
+  if (
+    stripped.length > 0 &&
+    /[\d)]$/.test(stripped.trim()) && // a unit only ever follows a number or a bracket
+    /[\d)]/.test(stripped) &&
+    !NOT_A_UNIT.test(removed)
+  ) {
+    s = stripped;
+  }
   // mixed numbers "2 1/2" -> "(2+1/2)"
   s = s.replace(/(^|[^\d./^*])(\d+)\s+(\d+)\s*\/\s*(\d+)(?![\d.])/g, '$1($2+$3/$4)');
   // "**" power

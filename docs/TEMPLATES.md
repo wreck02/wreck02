@@ -67,7 +67,15 @@ Answer kinds (`src/core/template.ts`):
 
 `format` controls display: `'auto'` (default), `'fraction'`, `'decimal'`, `'sf'` (standard form), `'mixed'`.
 Use `'sf'` for standard-form questions, `'decimal'` for physics quantities that read naturally as decimals.
-`unit` is LaTeX appended to the answer and options, e.g. `'\\text{m s}^{-1}'`; still say the unit in the stem.
+**`'auto'` only prints a decimal when the reduced denominator is a power of ten**, so 0.05 (= 1/20) and 87.5
+(= 175/2) render as fractions; pass `'decimal'` explicitly whenever a decimal is what the exam would print.
+
+`unit` is LaTeX appended to the answer and every option, e.g. `'\\text{m s}^{-1}'`, `'\\text{kg m s}^{-1}'`,
+`'\\text{N}'`; still say the unit in the stem. Typed answers ignore a trailing unit, including compound ones
+(`20 kg m s^-1`, `15 N s`, `6 kW h`), so units never make a correct typed answer fail.
+
+**Percentages** are plain numbers (`87.5`) with "as a percentage" in the stem, not a `\\%` unit: a typed `25%`
+is accepted both as 25 and as 1/4, but a `%` unit on the answer would render as `87.5\%` and read oddly.
 
 ### The clean-number rule (`src/core/clean.ts`)
 

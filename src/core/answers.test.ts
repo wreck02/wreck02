@@ -64,6 +64,24 @@ describe('parseAnswer', () => {
     expect(parsed('2.5 m s^-2').exact!.equals(frac(5, 2))).toBe(true);
     expect(parsed('12 Ω').exact!.toInt()).toBe(12);
   });
+  it('compound units are stripped', () => {
+    for (const [input, want] of [
+      ['20 kg m s^-1', 20], ['15 N s', 15], ['9.8 m s^-2', 9.8], ['250 cm^3', 250], ['4 J s^-1', 4],
+      ['3 kg m/s', 3], ['6 kW h', 6], ['1000 kg m^-3', 1000], ['12 N m', 12], ['50 km h^-1', 50],
+      ['7 m s⁻¹', 7], ['2.5 kg', 2.5], ['30 J', 30], ['100 kPa', 100], ['5 MHz', 5], ['8 μm', 8],
+      ['0.5 mol', 0.5], ['45 degrees', 45], ['3 radians', 3],
+    ] as [string, number][]) {
+      expect(parsed(input).approx, input).toBeCloseTo(want, 9);
+    }
+  });
+  it('does not mistake parts of an answer for units', () => {
+    expect(parsed('2sqrt5').exact!.equals(surd(5, 2))).toBe(true);
+    expect(parsed('pi/6').exact!.equals(piFrac(1, 6))).toBe(true);
+    expect(parsed('2pi').exact!.equals(Exact.pi(2))).toBe(true);
+    expect(parsed('3e8').exact!.toInt()).toBe(300000000);
+    expect(parseAnswer('2, 3').values.length).toBe(2);
+    expect(() => parseAnswer('m s')).toThrow();
+  });
   it('sets', () => {
     expect(parseAnswer('x = 2 or x = 3').values.map((v) => v.exact!.toInt())).toEqual([2, 3]);
     expect(parseAnswer('2, 3').values.map((v) => v.exact!.toInt())).toEqual([2, 3]);

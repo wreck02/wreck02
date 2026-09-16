@@ -124,6 +124,76 @@ function waysForTotal(s: number): number {
   return c;
 }
 
+/** "Two fair six-sided dice are rolled…" — the same trial, phrased the two ways the exam phrases it. */
+function twoDiceSetup(rng: RNG, added: boolean): string {
+  return rng.pick(added
+    ? ['Two fair six-sided dice are rolled and their scores are added.',
+      'A red dice and a blue dice, both fair and six-sided, are rolled and the two scores are added.']
+    : ['Two fair six-sided dice are rolled.',
+      'A red dice and a blue dice, both fair and six-sided, are rolled.']);
+}
+
+/** Named mistakes for "how many of the 36 ordered pairs?" — shared by both two-dice variants. */
+function waysDistractors(rng: RNG, answer: Exact, ways: number, totals: boolean): Distractor[] {
+  return ranked(rng, answer, cleanOnly([
+    { value: frac(ways, 12), trap: 'counted only 12 outcomes (two dice, six faces) instead of 36' },
+    { value: E(1).sub(answer), trap: 'found the probability of the opposite event' },
+  ], [0, 1]), cleanOnly([
+    { value: totals ? frac(1, 11) : null, trap: 'treated the 11 possible totals as equally likely' },
+    { value: frac(ways - 1, 36), trap: 'miscounted the successful pairs (forgot a reversed pair)' },
+    { value: frac(ways + 1, 36), trap: 'miscounted the successful pairs' },
+    { value: frac(Math.ceil(ways / 2), 36), trap: 'counted $(a, b)$ and $(b, a)$ as the same outcome' },
+    { value: frac(ways, 18), trap: 'halved the number of outcomes' },
+    { value: frac(ways, 30), trap: 'left the six doubles out of the sample space' },
+  ], [0, 1]));
+}
+
+const PRIME_SCORE = new Set([2, 3, 5, 7, 11]);
+
+/** Two-dice events the exam actually asks about, beyond the total. */
+const DICE_EVENTS: { text: string; ok: (a: number, b: number) => boolean }[] = [
+  { text: 'the two scores are equal', ok: (a, b) => a === b },
+  { text: 'the two scores differ by $1$', ok: (a, b) => Math.abs(a - b) === 1 },
+  { text: 'the two scores differ by at least $3$', ok: (a, b) => Math.abs(a - b) >= 3 },
+  { text: 'the product of the two scores is even', ok: (a, b) => (a * b) % 2 === 0 },
+  { text: 'the product of the two scores is odd', ok: (a, b) => (a * b) % 2 === 1 },
+  { text: 'the product of the two scores is a multiple of $3$', ok: (a, b) => (a * b) % 3 === 0 },
+  { text: 'at least one of the scores is $5$ or more', ok: (a, b) => a >= 5 || b >= 5 },
+  { text: 'both scores are even', ok: (a, b) => a % 2 === 0 && b % 2 === 0 },
+  { text: 'both scores are prime', ok: (a, b) => PRIME_SCORE.has(a) && PRIME_SCORE.has(b) },
+  { text: 'neither score is a six', ok: (a, b) => a !== 6 && b !== 6 },
+  { text: 'the larger of the two scores is $4$', ok: (a, b) => Math.max(a, b) === 4 },
+  { text: 'the total is a prime number', ok: (a, b) => PRIME_SCORE.has(a + b) },
+  { text: 'the total is a multiple of $3$', ok: (a, b) => (a + b) % 3 === 0 },
+  { text: 'the total is a square number', ok: (a, b) => a + b === 4 || a + b === 9 },
+];
+
+function countPairs(ok: (a: number, b: number) => boolean): number {
+  let c = 0;
+  for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) if (ok(a, b)) c++;
+  return c;
+}
+
+function diceEventQ(rng: RNG): Generated | null {
+  const i = rng.int(0, DICE_EVENTS.length - 1);
+  const ev = DICE_EVENTS[i];
+  const ways = countPairs(ev.ok);
+  const answer = frac(ways, 36);
+  if (!isCleanExact(answer).ok || ways === 0 || ways === 36) return null;
+  const distractors = waysDistractors(rng, answer, ways, false);
+  if (distractors.length < 4) return null; // never pad a level-1 question with untrapped fractions
+  return {
+    stem: `${twoDiceSetup(rng, false)} Find the probability that ${ev.text}.`,
+    answer: { kind: 'exact', value: answer, format: 'fraction' },
+    options: probOptions(rng, answer, distractors),
+    solution: `Of the $36$ equally likely ordered pairs, $${ways}$ give ${ev.text}, so the probability is $\\frac{${ways}}{36} = ${tx(answer)}$.`,
+    trap: 'Count ordered pairs out of 36: (2, 5) and (5, 2) are different outcomes.',
+    tags: ['probability', 'dice'],
+    params: { variant: 'dice-event', event: i },
+    typedAllowed: true,
+  };
+}
+
 function diceSumQ(rng: RNG): Generated | null {
   const mode = rng.pick(['equal', 'atleast', 'atmost']);
   const s = rng.int(3, 11);
@@ -134,19 +204,10 @@ function diceSumQ(rng: RNG): Generated | null {
   else { for (let t = 2; t <= s; t++) ways += waysForTotal(t); ask = `the total is at most $${s}$`; }
   const answer = frac(ways, 36);
   if (!isCleanExact(answer).ok || ways === 0 || ways === 36) return null;
-  const distractors = ranked(rng, answer, cleanOnly([
-    { value: frac(ways, 12), trap: 'counted only 12 outcomes (two dice, six faces) instead of 36' },
-    { value: frac(1, 11), trap: 'treated the 11 possible totals as equally likely' },
-    { value: E(1).sub(answer), trap: 'found the probability of the opposite event' },
-    { value: frac(ways - 1, 36), trap: 'miscounted the successful pairs (forgot a reversed pair)' },
-  ], [0, 1]), cleanOnly([
-    { value: frac(ways + 1, 36), trap: 'miscounted the successful pairs' },
-    { value: frac(Math.ceil(ways / 2), 36), trap: 'counted $(a, b)$ and $(b, a)$ as the same outcome' },
-    { value: frac(ways, 18), trap: 'halved the number of outcomes' },
-  ], [0, 1]));
+  const distractors = waysDistractors(rng, answer, ways, true);
   if (distractors.length < 4) return null; // never pad a level-1 question with untrapped fractions
   return {
-    stem: `Two fair six-sided dice are rolled and their scores are added. Find the probability that ${ask}.`,
+    stem: `${twoDiceSetup(rng, true)} Find the probability that ${ask}.`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
     options: probOptions(rng, answer, distractors),
     solution: `There are $36$ equally likely ordered pairs and $${ways}$ of them give ${mode === 'equal' ? `a total of $${s}$` : `a total ${mode === 'atleast' ? 'of at least' : 'of at most'} $${s}$`}, so the probability is $\\frac{${ways}}{36} = ${tx(answer)}$.`,
@@ -159,15 +220,16 @@ function diceSumQ(rng: RNG): Generated | null {
 
 interface Trial { name: string; faces: number; events: { text: string; good: number }[]; unit: string }
 const TRIALS: Trial[] = [
-  { name: 'A fair six-sided dice is rolled', faces: 6, unit: 'rolls', events: [{ text: 'a six', good: 1 }, { text: 'a score of $1$', good: 1 }, { text: 'a number greater than $4$', good: 2 }, { text: 'a multiple of $3$', good: 2 }] },
+  { name: 'A fair six-sided dice is rolled', faces: 6, unit: 'rolls', events: [{ text: 'a six', good: 1 }, { text: 'a score of $1$', good: 1 }, { text: 'a number greater than $4$', good: 2 }, { text: 'a multiple of $3$', good: 2 }, { text: 'an even score', good: 3 }, { text: 'a score of $3$ or more', good: 4 }] },
   { name: 'A fair coin is tossed', faces: 2, unit: 'tosses', events: [{ text: 'a head', good: 1 }, { text: 'a tail', good: 1 }] },
 ];
 
 function atLeastOneQ(rng: RNG): Generated | null {
   const trial = rng.pick(TRIALS);
   const ev = rng.pick(trial.events);
-  // Two tosses of a coin has too small a sample space to offer four different mistakes.
-  const n = trial.faces === 2 ? rng.int(3, 4) : 2;
+  // Two tosses of a coin has too small a sample space to offer four different mistakes; three
+  // rolls of a dice is fine whenever 1 − (bad/6)^3 is still a fraction the exam would print.
+  const n = trial.faces === 2 ? rng.int(3, 5) : rng.pick([2, 2, 3]);
   const total = trial.faces ** n;
   const bad = (trial.faces - ev.good) ** n;
   const answer = frac(total - bad, total);
@@ -524,16 +586,20 @@ function fractionSpinnerQ(rng: RNG): Generated | null {
     must = [
       { value: mean.mul(E(k)), trap: `forgot the $${j > 0 ? '+' : '-'} ${Math.abs(j)}$` },
       { value: mean.add(E(j)), trap: `forgot to multiply $E(X)$ by $${k}$` },
-      { value: mean.add(E(j)).mul(E(k)), trap: `multiplied the constant by $${k}$ as well` },
-      { value: mean.mul(E(k)).sub(E(j)), trap: 'used the constant with the wrong sign' },
     ];
     extra = [
+      { value: mean.add(E(j)).mul(E(k)), trap: `multiplied the constant by $${k}$ as well` },
+      { value: mean.mul(E(k)).sub(E(j)), trap: 'used the constant with the wrong sign' },
       { value: plainMean.mul(E(k)).add(E(j)), trap: 'averaged the three scores, ignoring the probabilities' },
-      { value: mean, trap: 'gave $E(X)$ rather than $E(aX + b)$' },
       { value: reversed.mul(E(k)).add(E(j)), trap: 'paired the scores with the wrong probabilities' },
+      { value: E(k * xs[1] + j), trap: 'used the middle score instead of the mean' },
+      { value: E(k * xs[0] + j), trap: 'used the lowest score instead of the mean' },
+      { value: E(k * xs[2] + j), trap: 'used the highest score instead of the mean' },
+      { value: mean, trap: 'gave $E(X)$ rather than $E(aX + b)$' },
     ];
   }
-  const distractors = ranked(rng, answer, cleanOnly(must), cleanOnly(extra));
+  const distractors = ranked(rng, answer, cleanOnly(must), within(cleanOnly(extra), lo, hi));
+  if (distractors.length < 4) return null;
   return {
     stem: `A biased spinner scores $${xs[0]}$ with probability $${tx(pf[0])}$, $${xs[1]}$ with probability $${tx(pf[1])}$ and $${xs[2]}$ with probability $${tx(pf[2])}$. ${question}`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
@@ -562,7 +628,7 @@ export default defineTemplate({
   },
   generate(rng, level: Level) {
     return retry(rng, () => {
-      if (level === 1) return pickVariant(rng, [diceSumQ, atLeastOneQ]);
+      if (level === 1) return pickVariant(rng, [diceSumQ, diceEventQ, atLeastOneQ]);
       if (level === 2) return spinnerQ(rng);
       if (level === 3) return gameQ(rng);
       if (level === 4) return pickVariant(rng, [trialsQ, distributionQ]);
@@ -586,7 +652,7 @@ export default defineTemplate({
       return out;
     };
     const p = q.params as {
-      variant: string; mode?: string; s?: number; faces?: number; good?: number; n?: number;
+      variant: string; mode?: string; s?: number; event?: number; faces?: number; good?: number; n?: number;
       values?: number[]; freqs?: number[]; pn?: number; pd?: number; qn?: number; qd?: number;
       prize?: number; cost?: number; xs?: number[]; tenths?: number[]; parts?: number[]; d?: number;
       m1?: number; m2?: number; ask?: SpinAsk; k?: number; j?: number;
@@ -602,6 +668,14 @@ export default defineTemplate({
           }
         }
         return close(hits / 36);
+      }
+      case 'dice-event': {
+        // Count the pairs the event does NOT cover and take the complement, so the count is not
+        // the one generate() made.
+        const ok = DICE_EVENTS[p.event!].ok;
+        let miss = 0;
+        for (let code = 0; code < 36; code++) if (!ok((code % 6) + 1, Math.floor(code / 6) + 1)) miss++;
+        return close(1 - miss / 36);
       }
       case 'at-least-one': {
         // Enumerate every sequence of n trials over `faces` faces.

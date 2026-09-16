@@ -159,16 +159,24 @@ function mistakes(f: Power, correct: Exact): Candidate[] {
     out.push({ value: unsigned, trap: isFraction ? 'forgot to invert the fractional base for the negative index' : 'ignored the minus sign in the index' });
     out.push({ value: unsigned ? unsigned.neg() : null, trap: 'made the answer negative instead of taking the reciprocal', group: 'made-negative' });
     out.push({ value: attempt(() => E(1).div(base.mulRat(rat(ap, q)))), trap: 'multiplied the base by the index, then took the reciprocal' });
+    out.push({ value: attempt(() => base.inv()), trap: `took the reciprocal but never took the ${rootName(q)}` });
   } else {
     if (q % 2 === 0) out.push({ value: correct.neg(), trap: `took the negative ${rootName(q)}: a fractional index means the positive root` });
     if (isFraction) out.push({ value: attempt(() => base.inv().powRat(rat(ap, q))), trap: 'inverted the fraction although the index is positive' });
     if (ap !== 1) out.push({ value: base.mulRat(rat(1, q)), trap: 'divided the base by the root index and ignored the power' });
     // 1000^(1/3) = 100, (1/125)^(1/3) = 1/25: one factor short of the root.
     if (ap === 1 && q >= 3) out.push({ value: attempt(() => base.powRat(rat(q - 1, q))), trap: `stopped one factor short of the ${rootName(q)}` });
-    if (ap === 1 && !isFraction && root && root.isInteger()) {
-      const r = root.toInt();
-      out.push({ value: E(r + 1), trap: `near miss: ${r + 1}^${q} is not ${f.bn}` });
-      if (r >= 2) out.push({ value: E(r - 1), trap: `near miss: ${r - 1}^${q} is not ${f.bn}` });
+  }
+  // Off by one in the root itself ("∛64 = 3"), then the power applied as usual. One of the two lands
+  // above the answer and one below, whichever way the index points.
+  if (!isFraction && root && root.isInteger()) {
+    const r0 = root.toInt();
+    for (const rr of [r0 + 1, r0 - 1]) {
+      if (rr < 2) continue;
+      out.push({
+        value: attempt(() => (neg ? E(1).div(E(rr).pow(ap)) : E(rr).pow(ap))),
+        trap: `near miss: ${rr}^${q} is not ${f.bn}`,
+      });
     }
   }
   if (ap !== 1 && root) {

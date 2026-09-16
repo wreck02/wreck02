@@ -41,7 +41,7 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
     const v = typeof d.value === 'number' ? (Number.isFinite(d.value) ? X(d.value) : null) : d.value;
     if (!v) continue;
     const f = v.toNumber();
-    if (!Number.isFinite(f) || f <= 0 || f > 200 * answer || f < answer / 200) continue;
+    if (!Number.isFinite(f) || f <= 0 || f > 100 * answer || f < answer / 100) continue;
     if (!isCleanExact(v).ok) continue;
     out.push({ value: v, trap: d.trap });
   }
@@ -55,7 +55,7 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
  * arithmetic. A candidate that would stretch the option list beyond `maxSpread` is skipped: 3.125 N
  * next to 2000 N is implausible on sight.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 40): Distractor[] {
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 50): Distractor[] {
   const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const mags: number[] = Math.abs(a) > 0 ? [Math.abs(a)] : [];
@@ -178,7 +178,7 @@ function weight(rng: RNG): Generated | null {
     'Weight is a force (N) and mass is in kg: m = W/g, not W itself.',
     ['newton', 'weight'], { ask: 'mass-from-weight', W });
   }
-  const stem = `${obj.charAt(0).toUpperCase() + obj.slice(1)} has a mass of ${q(m, U.kg)}. ${G_NOTE} Find its weight.`;
+  const stem = `${obj.charAt(0).toUpperCase() + obj.slice(1)} has a mass of ${q(m, U.kg)}. ${G_NOTE} Find ${obj === 'a person' ? 'their' : 'its'} weight.`;
   return finish(stem, X(W), U.N, physOptions(rng, X(W), U.N, [
     { value: m, trap: 'quoted the mass as the weight: W = mg' },
     { value: m * G * G, trap: 'multiplied by g twice' },
@@ -235,6 +235,8 @@ function drivingForce(rng: RNG): Generated | null {
       { value: F / a - m > 0 ? F / a - m : null, trap: 'divided the force by a before subtracting the mass' },
       { value: F - m, trap: 'subtracted the mass instead of ma' },
       { value: F - m * G, trap: 'subtracted the weight instead of ma' },
+      { value: F - 2 * m * a, trap: 'subtracted ma twice (once for the car and once again for the resultant)' },
+      { value: (F - m * a) / G, trap: 'divided by g as well' },
     ]),
     `Resultant $= ma = ${m} \\times ${num(a)} = ${m * a}$ N, so resistance $= ${F} - ${m * a} = ${R}$ N.`,
     'Driving force − resistance = ma; the resistance is what is left after ma is subtracted from the driving force.',
@@ -276,6 +278,7 @@ function frictionDecel(rng: RNG): Generated | null {
       { value: (m * a) / G, trap: 'used the friction force ma in place of the acceleration: the mass cancels' },
       { value: a / (G * G), trap: 'divided by g twice' },
       { value: m * a, trap: 'quoted the friction force ma instead of μ' },
+      { value: (G - a) / G, trap: 'used (g − a)/g instead of a/g' },
     ]),
     `Friction $\\mu mg$ is the only horizontal force, so $\\mu mg = ma$ and $\\mu = \\frac{a}{g} = \\frac{${num(a)}}{10} = ${num(mu)}$.`,
     'On a horizontal surface the sliding deceleration is μg, so μ = a/g; the mass cancels.',
@@ -352,8 +355,8 @@ function pushOnRough(rng: RNG): Generated | null {
     { value: P - fr, trap: 'found the resultant force but did not divide by the mass' },
     { value: (P - mu * m) / m, trap: 'forgot g in the friction term' },
     { value: (P - fr) / (m * G), trap: 'divided by the weight mg instead of the mass' },
-    { value: fr / m, trap: 'used the friction force instead of the resultant' },
-    { value: mu * G, trap: 'quoted μg, the deceleration friction alone would give' },
+    { value: fr / m, trap: 'used the friction force instead of the resultant (that is μg)' },
+    { value: (P - fr) / (m * m), trap: 'divided by the mass twice' },
   ]),
   `Friction $= \\mu mg = ${num(mu)} \\times ${m * G} = ${num(fr)}$ N. Resultant $= ${P} - ${num(fr)} = ${num(P - fr)}$ N, so $a = \\frac{${num(P - fr)}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
   'Friction opposes the motion: subtract μmg from the push before dividing by the mass.',
@@ -475,6 +478,7 @@ function atwood(rng: RNG): Generated | null {
     { value: (m1 * G) / (m1 + m2), trap: 'forgot the weight of the lighter particle in the net force' },
     { value: (m1 - m2) / (m1 + m2), trap: 'forgot g (divided the net force by the total weight)' },
     { value: ((m1 - m2) * G) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
+    { value: ((m1 - m2) * G) / (2 * (m1 + m2)), trap: 'gave each particle half the net force: the whole net force accelerates the whole mass' },
   ]),
   `Net force on the system $= (${m1} - ${m2}) \\times 10 = ${(m1 - m2) * G}$ N, total mass $${m1 + m2}$ kg, so $a = \\frac{${(m1 - m2) * G}}{${m1 + m2}} = ${num(a)}$ m s$^{-2}$.`,
   'Treat the system as a whole: a = (m₁ − m₂)g/(m₁ + m₂); the net force acts on both masses.',

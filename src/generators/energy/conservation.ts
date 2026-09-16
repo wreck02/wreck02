@@ -97,6 +97,8 @@ function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count 
   const take = (d: Ranked) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
     const x = d.value.toNumber();
+    // two options that read the same to three significant figures are one option
+    if (nums.some((y) => Math.abs(y - x) < 0.005 * Math.max(Math.abs(y), Math.abs(x)))) return;
     const k = Math.log10(x / a);
     const isShift = Math.abs(k) >= 0.999 && Math.abs(k - Math.round(k)) < 1e-6;
     if (d.wide && wideSlots <= 0) return;

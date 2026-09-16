@@ -73,7 +73,7 @@ function cleanOnly(ds: Candidate[], answer: Exact, pct = false): Ranked[] {
       const den = v.toRat().d;
       if (!(den <= 2n || (x < 1 && Number.isInteger(r(x * 100))))) continue;
     } else {
-      const span = d.wide ? 1000 : 12;
+      const span = d.wide ? 1000 : 10;
       if (x > span * a || x < a / span) continue;
       if (v.isRational() && !Number.isInteger(r(x * 1000))) continue; // decimals must terminate
     }
@@ -95,11 +95,13 @@ function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count 
   const seen: Exact[] = [answer];
   const out: Ranked[] = [];
   const nums: number[] = [a];
-  let wideSlots = rng.bool(0.4) ? 1 : 0;
+  let wideSlots = rng.bool(0.35) ? 1 : 0;
   let shiftSlots = 1; // one power-of-ten option at most: an option list that is a decimal ladder tests only the decimal point
   const take = (d: Ranked) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
     const x = d.value.toNumber();
+    // two options that read the same to three significant figures are one option
+    if (nums.some((y) => Math.abs(y - x) < 0.005 * Math.max(Math.abs(y), Math.abs(x)))) return;
     const k = Math.log10(x / a);
     const isShift = Math.abs(k) >= 0.999 && Math.abs(k - Math.round(k)) < 1e-6;
     if (d.wide && wideSlots <= 0) return;

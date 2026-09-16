@@ -73,13 +73,16 @@ function surdDecimals(): FactCard[] {
     ['1/√2', '0.707', '0.707'], ['√3/2', '0.866', '0.866'], ['π', '3.142', '3.142'], ['π²', '9.870', '9.87'], ['1/π', '0.318', '0.318'], ['√π', '1.772', '1.772'],
     ['e', '2.718', '2.718'], ['ln 2', '0.693', '0.693'], ['ln 10', '2.303', '2.303'], ['2π', '6.283', '6.283'], ['4π', '12.57', '12.57'], ['π/4', '0.785', '0.785'],
   ];
-  return rows.map(([sym, disp, val]) => ({
-    id: `dec_${sym}`,
-    deck: 'decimals',
-    prompt: `$${sym.replace('√', '\\sqrt ').replace('π', '\\pi ').replace('ln', '\\ln ')}$ to 3 s.f.`,
-    answer: dec(val),
-    display: `$\\approx ${disp}$`,
-  }));
+  return rows.map(([sym, disp, val]) => {
+    const sf = val.replace(/^-?0*\.?0*/, '').replace('.', '').length;
+    return {
+      id: `dec_${sym}`,
+      deck: 'decimals',
+      prompt: `$${sym.replace('√', '\\sqrt ').replace('π', '\\pi ').replace('ln', '\\ln ')}$ to ${sf} s.f.`,
+      answer: dec(val),
+      display: `$\\approx ${disp}$`,
+    };
+  });
 }
 
 function trigTable(): FactCard[] {

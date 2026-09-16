@@ -96,7 +96,7 @@ describe('checkAnswer', () => {
   });
   it('numeric fallback within tolerance only', () => {
     expect(checkAnswer('1.4142', ex(surd(2)))).toMatchObject({ correct: true, method: 'numeric' });
-    expect(checkAnswer('1.41', ex(surd(2))).correct).toBe(false);
+    expect(checkAnswer('1.41', ex(surd(2))).correct).toBe(true); // correctly rounded to 3 s.f.
     expect(checkAnswer('0.3333', ex(frac(1, 3))).correct).toBe(true);
     expect(checkAnswer('0.33', ex(frac(1, 3))).correct).toBe(false);
     expect(checkAnswer('0.524', ex(piFrac(1, 6))).correct).toBe(true);
@@ -104,6 +104,30 @@ describe('checkAnswer', () => {
     expect(checkAnswer('1001', ex(E(1000))).correct).toBe(false);
     expect(checkAnswer('333/1000', ex(frac(1, 3))).correct).toBe(false);
     expect(checkAnswer('2^(1/3)', ex(frac(1, 1))).correct).toBe(false);
+  });
+  it('accepts decimals correctly rounded to 3 or more significant figures', () => {
+    expect(checkAnswer('16.7', ex(frac(100, 6))).correct).toBe(true);
+    expect(checkAnswer('33.3', ex(frac(100, 3))).correct).toBe(true);
+    expect(checkAnswer('0.167', ex(frac(1, 6))).correct).toBe(true);
+    expect(checkAnswer('1.41', ex(surd(2))).correct).toBe(true);
+    expect(checkAnswer('1.4', ex(surd(2))).correct).toBe(false);
+    expect(checkAnswer('16.6', ex(frac(100, 6))).correct).toBe(false);
+    expect(checkAnswer('0.17', ex(frac(1, 6))).correct).toBe(false);
+  });
+  it('tiny values are compared relatively, not treated as equal', () => {
+    const e = ex(Exact.decimal('1.6e-19'));
+    expect(checkAnswer('1.6e-19', e).correct).toBe(true);
+    expect(checkAnswer('1.60e-19', e).correct).toBe(true);
+    expect(checkAnswer('1.7e-19', e).correct).toBe(false);
+    expect(checkAnswer('2e-19', e).correct).toBe(false);
+    expect(checkAnswer('0', e).correct).toBe(false);
+    expect(checkAnswer('0', ex(E(0))).correct).toBe(true);
+  });
+  it('percent sign means the plain number on percentage questions and a fraction elsewhere', () => {
+    expect(checkAnswer('25%', ex(E(25))).correct).toBe(true);
+    expect(checkAnswer('25%', ex(frac(1, 4))).correct).toBe(true);
+    expect(checkAnswer('12.5%', ex(frac(25, 2))).correct).toBe(true);
+    expect(checkAnswer('30%', ex(E(25))).correct).toBe(false);
   });
   it('wrong answers', () => {
     expect(checkAnswer('2√3', ex(surd(5, 2))).correct).toBe(false);

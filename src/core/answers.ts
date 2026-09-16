@@ -371,9 +371,26 @@ export interface CheckResult {
 export const NUMERIC_REL_TOL = 1e-3;
 
 function numericallyEqual(a: number, b: number, relTol = NUMERIC_REL_TOL): boolean {
+  if (a === b) return true;
   const scale = Math.max(Math.abs(a), Math.abs(b));
-  if (scale < 1e-12) return true;
+  if (scale === 0) return true;
+  // Always relative: 1.7e-19 is not 1.6e-19 just because both are tiny.
   return Math.abs(a - b) <= relTol * scale;
+}
+
+/** Significant figures of a plain decimal literal such as "16.7", "0.0167", "1.60e-19"; null if not a single literal. */
+export function sigFigsOfLiteral(raw: string): number | null {
+  const m = /^[+-]?(\d*)(?:\.(\d*))?(?:[eE][+-]?\d+)?%?$/.exec(raw.trim());
+  if (!m || (m[1] === '' && !m[2])) return null;
+  const digits = (m[1] ?? '') + (m[2] ?? '');
+  const stripped = digits.replace(/^0+/, '');
+  return stripped.length === 0 ? 1 : stripped.length;
+}
+
+/** Correctly rounded to `sf` significant figures, as a number. */
+function roundSig(x: number, sf: number): number {
+  if (x === 0) return 0;
+  return Number(x.toPrecision(sf));
 }
 
 /**
@@ -382,9 +399,14 @@ function numericallyEqual(a: number, b: number, relTol = NUMERIC_REL_TOL): boole
  * represented exactly (e.g. 2^(1/3)). An exact integer or fraction that differs
  * from the answer is simply wrong, however close (1001 is not 1000).
  */
-function matchValue(input: Val, expected: Exact, allowNumeric: boolean): 'exact' | 'numeric' | null {
+function matchValue(input: Val, expected: Exact, allowNumeric: boolean, literalSigFigs: number | null = null): 'exact' | 'numeric' | null {
   if (input.exact && input.exact.equals(expected)) return 'exact';
-  if ((allowNumeric || input.exact === null) && numericallyEqual(input.approx, expected.toNumber())) return 'numeric';
+  if (allowNumeric || input.exact === null) {
+    const target = expected.toNumber();
+    if (numericallyEqual(input.approx, target)) return 'numeric';
+    // A decimal correctly rounded to at least 3 significant figures is accepted (16.7 for 100/6).
+    if (literalSigFigs !== null && literalSigFigs >= 3 && roundSig(target, literalSigFigs) === input.approx) return 'numeric';
+  }
   return null;
 }
 
@@ -415,16 +437,24 @@ export function checkAnswer(raw: string, answer: Answer, options: Option[] = [])
     return { correct: given === target, method: 'choice', echo: trimmed };
   }
 
+  // "25%" on a question that asks for a percentage means 25; on a probability question it means 0.25.
+  // Try the plain number first, then fall through to the usual parse (which divides by 100).
+  if (/%\s*$/.test(trimmed)) {
+    const plain = checkAnswer(trimmed.replace(/%\s*$/, ''), answer, options);
+    if (plain.correct) return plain;
+  }
+
   let parsed: ParseResult;
   try {
     parsed = parseAnswer(trimmed);
   } catch (e) {
     return { correct: false, method: 'none', error: (e as Error).message };
   }
+  const literalSf = sigFigsOfLiteral(trimmed.replace(/%\s*$/, ''));
 
   if (answer.kind === 'exact') {
     if (parsed.values.length !== 1) return { correct: false, method: 'none', echo: parsed.echo, error: 'expected a single value' };
-    const m = matchValue(parsed.values[0], answer.value, parsed.decimalInput);
+    const m = matchValue(parsed.values[0], answer.value, parsed.decimalInput, literalSf);
     return { correct: m !== null, method: m ?? 'none', echo: parsed.echo };
   }
 

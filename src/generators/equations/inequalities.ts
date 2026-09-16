@@ -409,6 +409,10 @@ function build(rng: RNG, variant: Variant): Generated | null {
         ]).filter((d) => d.value.isInteger() && d.value.toNumber() >= 1);
       }
       if (answer === 0 && ask !== 'smallest-positive') return null;
+      // Small intervals collapse several of the named mistakes onto the same integer. Redraw
+      // rather than let the builder pad: a padded option is an integer with no mistake behind it.
+      const pool = new Set(ds.filter((x) => !x.value.equals(E(answer))).map((x) => x.value.toPlain()));
+      if (pool.size < 4) return null;
       const region = quadRegion(lo, hi, op);
       const stem = ask === 'largest' ? `Find the largest integer $x$ satisfying $${ineqTex(ineq)}$.`
         : ask === 'smallest' ? `Find the smallest integer $x$ satisfying $${ineqTex(ineq)}$.`

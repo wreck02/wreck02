@@ -103,12 +103,14 @@ function clean(ds: Distractor[]): Distractor[] {
  * layout alone gives the answer away.
  */
 function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
-  const below = ds.filter((d) => d.value.cmp(answer) < 0);
-  const above = ds.filter((d) => d.value.cmp(answer) > 0);
-  if (below.length === 0 || above.length === 0 || below.length + above.length < need) return ds;
-  const want = rng.int(Math.max(0, need - below.length), Math.min(above.length, need));
-  const pick = [...rng.shuffle(above).slice(0, want), ...rng.shuffle(below).slice(0, need - want)];
-  return ds.map((d) => (pick.includes(d) ? { ...d, must: true } : d));
+  const free = need - ds.filter((d) => d.must).length;
+  const rest = ds.filter((d) => !d.must);
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  if (free < 1 || below.length === 0 || above.length === 0 || below.length + above.length < free) return ds;
+  const hi = rng.int(Math.max(0, free - below.length), Math.min(above.length, free));
+  const pick = [...rng.shuffle(above).slice(0, hi), ...rng.shuffle(below).slice(0, free - hi)];
+  return ds.map((d) => (d.must || pick.includes(d) ? { ...d, must: true } : d));
 }
 
 type Variant = 'pos-linear' | 'neg-linear' | 'both-sides' | 'monic-quad' | 'x2-ax' | 'general' | 'x2-k' | 'rearranged' | 'count' | 'count-sqrt' | 'extreme';
@@ -412,7 +414,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       // Small intervals collapse several of the named mistakes onto the same integer. Redraw
       // rather than let the builder pad: a padded option is an integer with no mistake behind it.
       const pool = new Set(ds.filter((x) => !x.value.equals(E(answer))).map((x) => x.value.toPlain()));
-      if (pool.size < 4) return null;
+      if (pool.size < 3) return null;
       const region = quadRegion(lo, hi, op);
       const stem = ask === 'largest' ? `Find the largest integer $x$ satisfying $${ineqTex(ineq)}$.`
         : ask === 'smallest' ? `Find the smallest integer $x$ satisfying $${ineqTex(ineq)}$.`

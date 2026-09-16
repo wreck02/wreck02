@@ -98,6 +98,26 @@ function clean(ds: Distractor[]): Distractor[] {
   return ds.filter((d) => Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
+/**
+ * Offer a random mix of below- and above-answer distractors.
+ *
+ * Every candidate is still the result of a named mistake; this only decides which of them the
+ * builder sees first (they are marked `must`), so the number of options larger than the answer
+ * varies from question to question. Without it a fixed mistake set leaves the answer in the same
+ * place in the sorted option list every time — "always the median", "never the largest" — and the
+ * layout alone gives the answer away. Distractors already marked `must` are always kept.
+ */
+function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
+  const free = need - ds.filter((d) => d.must).length;
+  const rest = ds.filter((d) => !d.must);
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  if (free < 1 || below.length === 0 || above.length === 0 || below.length + above.length < free) return ds;
+  const hi = rng.int(Math.max(0, free - below.length), Math.min(above.length, free));
+  const pick = [...rng.shuffle(above).slice(0, hi), ...rng.shuffle(below).slice(0, free - hi)];
+  return ds.map((d) => (d.must || pick.includes(d) ? { ...d, must: true } : d));
+}
+
 type Variant = 'abs-x' | 'abs-x-plus' | 'abs-shift' | 'abs-linear' | 'abs-eq-bx' | 'abs-plus-eq-bx' | 'abs-eq-x-plus' | 'abs-abs' | 'abs-eq-linear' | 'abs-interval';
 
 const VARIANTS: Record<Level, Variant[]> = {
@@ -127,7 +147,7 @@ function exactQ(rng: RNG, eq: Eq, x: Exact, rejected: Exact, ds: Distractor[], s
   return {
     stem: `Solve $${eqTex(eq)}$.`,
     answer: { kind: 'exact', value: x },
-    options: buildOptions(rng, x, clean(ds)),
+    options: buildOptions(rng, x, slant(rng, x, clean(ds))),
     solution,
     trap,
     tags: ['modulus', 'extraneous', ...tags],
@@ -140,6 +160,32 @@ function build(rng: RNG, variant: Variant): Generated | null {
   switch (variant) {
     case 'abs-x':
     case 'abs-x-plus': {
+      // |x| + a = a isolates to |x| = 0, whose answer is the single value 0: without a few of
+      // these, "the answer is always a pair" reads straight off the option list at this level.
+      if (variant === 'abs-x-plus' && rng.bool(0.1)) {
+        const a0 = rng.nonZeroInt(-6, 9);
+        const zero: Eq = { L: A(1, 0), R: K(0) };
+        let opts;
+        try {
+          opts = buildSetOptions(rng, [E(0)], cleanSets([
+            { values: [E(a0), E(-a0)], trap: 'solved |x| = a instead of isolating |x| first' },
+            { values: [E(2 * a0), E(-2 * a0)], trap: 'added the constant instead of subtracting it' },
+            { values: [E(a0)], trap: 'gave the constant from the left-hand side' },
+            { values: [E(0), E(a0)], trap: 'invented a second solution' },
+            { values: [E(-a0)], trap: 'gave the constant with its sign flipped' },
+          ]));
+        } catch { return null; }
+        return {
+          stem: `Solve $|x| ${a0 < 0 ? '-' : '+'} ${Math.abs(a0)} = ${a0}$.`,
+          answer: { kind: 'set', values: [E(0)] },
+          options: opts,
+          solution: `$|x| = ${a0} ${a0 < 0 ? '+' : '-'} ${Math.abs(a0)} = 0$, and a modulus is zero only at $x = 0$: there is no second solution.`,
+          trap: 'Isolate the modulus first; |x| = 0 has the single solution x = 0, not ±0 and not ±a.',
+          tags: ['modulus', 'basic'],
+          params: { kind: 'set', eq: zero },
+          typedAllowed: true,
+        };
+      }
       const k = variant === 'abs-x' ? rng.int(2, 12) : rng.int(1, 12);
       const a = variant === 'abs-x' ? 0 : rng.nonZeroInt(-6, 9);
       const b = k + a;
@@ -174,7 +220,21 @@ function build(rng: RNG, variant: Variant): Generated | null {
       };
     }
     case 'abs-shift': {
-      const a = rng.nonZeroInt(-9, 9), k = rng.int(1, 9);
+      const a = rng.nonZeroInt(-9, 9);
+      // A sprinkling of |x − a| = 0, whose answer is a single value, so that "the answer is
+      // always a pair" is not a reliable reading of the option list at this level.
+      if (rng.bool(0.12)) {
+        const zero: Eq = { L: A(1, -a), R: K(0) };
+        return setQ(rng, zero, [E(a)], [
+          { values: [E(a), E(-a)], trap: 'put ± on the answer, but a modulus is zero at one point only' },
+          { values: [E(-a)], trap: `sign error: solved ${linear(1, a)} = 0` },
+          { values: [E(0)], trap: 'gave the right-hand side instead of solving' },
+          { values: [E(a), E(0)], trap: 'offered x = 0 as a second solution' },
+          { values: [E(a + 1), E(a - 1)], trap: 'solved the equation as though the right-hand side were 1' },
+        ], `$|${linear(1, -a)}| = 0$ only when $${linear(1, -a)} = 0$, so $x = ${a}$ is the only solution.`,
+        'A modulus is zero at exactly one point: |x − a| = 0 gives x = a, with no ± to take.', ['shift']);
+      }
+      const k = rng.int(1, 9);
       const eq: Eq = { L: A(1, -a), R: K(k) };
       const roots = [E(a + k), E(a - k)];
       return setQ(rng, eq, roots, [
@@ -187,6 +247,19 @@ function build(rng: RNG, variant: Variant): Generated | null {
     }
     case 'abs-linear': {
       const a = rng.pick([2, 3, 4, 5]), b = rng.nonZeroInt(-9, 9), k = rng.int(1, 12);
+      // As at level 2, a few instances with a zero right-hand side and a single solution.
+      if (rng.bool(0.12)) {
+        const r = frac(b, a);
+        const zero: Eq = { L: A(a, -b), R: K(0) };
+        return setQ(rng, zero, [r], [
+          { values: [r, r.neg()], trap: 'put ± on the answer, but a modulus is zero at one point only' },
+          { values: [r.neg()], trap: `sign error: solved ${linear(a, b)} = 0` },
+          { values: [E(b)], trap: `forgot to divide by ${a}` },
+          { values: [E(0)], trap: 'gave the right-hand side instead of solving' },
+          { values: [r, E(0)], trap: 'offered x = 0 as a second solution' },
+        ], `$|${linear(a, -b)}| = 0$ only when $${linear(a, -b)} = 0$, so $${a}x = ${b}$ and $x = ${r.toLatex()}$.`,
+        'A modulus is zero at exactly one point: set the inside equal to zero, with no ± to take.', ['linear-inside']);
+      }
       const r1 = frac(b + k, a), r2 = frac(b - k, a);
       if (!r1.isInteger() && !r2.isInteger() && rng.bool(0.7)) return null;
       const eq: Eq = { L: A(a, -b), R: K(k) };
@@ -210,12 +283,16 @@ function build(rng: RNG, variant: Variant): Generated | null {
       // bx >= 0 is the whole point of the level, so exactly one negative option (the genuinely
       // instructive rejected root): more would be eliminable by inspection.
       const ds = [
-        { value: rejected, trap: 'kept the root from the other case, which makes the right-hand side negative' },
+        { value: rejected, trap: 'kept the root from the other case, which makes the right-hand side negative', must: true },
         { value: plus ? frac(a, b + 1) : frac(a, b - 1), trap: 'solved the wrong case' },
         { value: frac(a, b), trap: 'divided a by b' },
         { value: E(a), trap: 'ignored the right-hand side' },
         { value: E(a * (plus ? b - 1 : b + 1)), trap: `multiplied by ${plus ? 'b − 1' : 'b + 1'} instead of dividing by it` },
         { value: E(a + b), trap: 'dropped the x on the right and solved the modulus equal to b' },
+        // Every slip above divides a by something smaller, so without these two the answer is the
+        // smallest positive option in every question of this shape.
+        ...(plus ? [] : [{ value: frac(a, b + 2), trap: `collected (${b + 2})x instead of (${b + 1})x when moving the x term across` }]),
+        { value: frac(plus ? b - 1 : b + 1, a), trap: 'inverted the final division' },
       ];
       const validCase = plus ? `${linear(1, a)} = ${b}x` : `${linear(-1, a)} = ${b}x`;
       const badCase = plus ? `${linear(-1, -a)} = ${b}x` : `${linear(1, -a)} = ${b}x`;
@@ -234,6 +311,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { value: E(a + c), trap: 'forgot to halve' },
         { value: E(a - c), trap: 'forgot to halve' },
         { value: frac(-(a + c), 2), trap: 'sign errors in both terms' },
+        { value: E(c - a), trap: 'solved a − x = x + c as 2x = c − a' },
       ];
       const impossible = `${linear(1, -a)} = ${linear(1, c)}`;
       return exactQ(rng, eq, x, E(a - c + 1000), ds,
@@ -257,6 +335,8 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { values: [E(a - c), E(-(a + c))], trap: 'forgot to divide by the x coefficient in both cases' },
           { values: [E(a - c), x2], trap: 'forgot to divide by the x coefficient in the first case' },
           { values: [x1, E(-(a + c))], trap: 'forgot to divide by the x coefficient in the second case' },
+          { values: [x1.neg(), x2.neg()], trap: 'sign error in both cases' },
+          { values: [frac(a - c, b + 1), frac(-(a + c), b - 1)], trap: `divided by ${b + 1} and ${b - 1} the wrong way round` },
         ]));
       } catch { return null; }
       return {
@@ -287,7 +367,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
       if (!x.isInteger() && rng.bool(0.6)) return null;
       const firstValid = x.equals(cands[0]);
       const ds = clean([
-        { value: rejected, trap: 'kept the root from the case where the right-hand side comes out negative' },
+        { value: rejected, trap: 'kept the root from the case where the right-hand side comes out negative', must: true },
         { value: frac(d - p, a + c), trap: 'used a + c with the positive case: the signs must match' },
         { value: frac(-(p + d), a - c), trap: 'used a − c with the negative case: the signs must match' },
         { value: frac(d - p, a), trap: 'ignored the cx term on the right-hand side' },

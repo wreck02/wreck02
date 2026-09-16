@@ -1,5 +1,5 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
-import { E, Exact, type Rat } from '../../core/exact';
+import { E, frac, Exact, type Rat } from '../../core/exact';
 import { buildOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import { poly } from '../../core/gen-utils';
@@ -30,11 +30,47 @@ function attempt(f: () => Exact): Exact | null {
 
 type Cand = { value: Exact | null; trap: string };
 
-function cleanOnly(ds: Cand[]): Distractor[] {
-  return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
+function cleanOnly(ds: Cand[], maxAbs = Infinity): Distractor[] {
+  return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null
+    && Number.isFinite(d.value.toNumber())
+    && Math.abs(d.value.toNumber()) <= maxAbs
+    && isCleanExact(d.value).ok);
 }
 
-/** Every distinct `must` candidate is used before any `extra` one, so the headline traps are never shuffled out. */
+/**
+ * No option may be identifiable by its shape alone. Two shapes give the answer away for free:
+ * being the only value on the page with its sign, and being the only non-integer (the mirror
+ * case — a lone fractional distractor — is a free elimination). Either is repaired by swapping
+ * a spare candidate in for a distractor that is not carrying a headline trap.
+ */
+function balance(answer: Exact, out: Distractor[], pool: Distractor[]): Distractor[] {
+  let cur = out;
+  const values = () => [answer, ...cur.map((d) => d.value)];
+  const swapIn = (want: (v: Exact) => boolean): boolean => {
+    const cand = pool.find((d) => want(d.value) && !values().some((x) => x.equals(d.value)));
+    if (!cand) return false;
+    for (let i = cur.length - 1; i >= 0; i--) {
+      if (!cur[i].must && !want(cur[i].value)) {
+        const c = cur.slice();
+        c[i] = cand;
+        cur = c;
+        return true;
+      }
+    }
+    return false;
+  };
+  const sign = answer.sign();
+  if (sign !== 0 && !cur.some((d) => d.value.sign() === sign)) swapIn((v) => v.sign() === sign);
+  const nonInt = (v: Exact) => !v.isInteger();
+  if (values().filter(nonInt).length === 1 && !swapIn(nonInt) && answer.isInteger()) swapIn((v) => v.isInteger());
+  return cur;
+}
+
+/**
+ * Every distinct `must` candidate is used before any `extra` one, so the headline traps are never
+ * shuffled out; the remaining slots are drawn alternately from above and below the answer (the last
+ * slot repairing an all-above or all-below list), so "pick the largest" is never a winning strategy.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
@@ -43,9 +79,18 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     seen.push(d.value);
     out.push(d);
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  return out;
+  must.forEach((d) => take({ ...d, must: true }));
+  const pool = rng.shuffle(extra);
+  const grab = (s: -1 | 1) => pool.find((d) => d.value.cmp(answer) === s && !seen.some((x) => x.equals(d.value)));
+  while (out.length < count) {
+    const above = out.filter((d) => d.value.cmp(answer) > 0).length;
+    const last = out.length === count - 1;
+    const wanted: -1 | 1 = last && above === 0 ? 1 : last && above === out.length ? -1 : (rng.bool(0.5) ? 1 : -1);
+    const d = grab(wanted) ?? grab(wanted === 1 ? -1 : 1);
+    if (!d) break;
+    take(d);
+  }
+  return balance(answer, out, pool);
 }
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix of variants. */
@@ -119,6 +164,20 @@ function termBody(c: number, p: number, style: Style): string {
   return `${coef}x^{${p}}`;
 }
 
+/** Plain-text name of the term c·x^p, used inside trap strings. */
+function termWord(c: number, p: number): string {
+  const a = Math.abs(c);
+  const coef = a === 1 ? '' : `${a}`;
+  if (p === 0) return `constant ${a}`;
+  if (p === 1) return `${coef}x`;
+  if (p === 0.5) return `${coef}\u221Ax`;
+  if (p === 1.5) return `${coef}x^(3/2)`;
+  if (p === -1) return `${a}/x`;
+  if (p === -2) return `${a}/x\u00B2`;
+  if (p === -0.5) return `${a}/\u221Ax`;
+  return `${coef}x^${p}`;
+}
+
 function termsTex(terms: Term[], style: Style): string {
   let out = '';
   for (const [c, p] of terms) {
@@ -177,11 +236,28 @@ function derivativeQ(rng: RNG, terms: Term[], k: number, o: DerivOpts): Generate
   const answer = dSum(terms, k, 'ok');
   if (!answer || !isCleanExact(answer).ok) return null;
   if (Math.abs(answer.toNumber()) > (o.maxAbs ?? 150)) return null;
+  // Keep every distractor within a believable factor of the answer.
+  const cap = Math.max(25, 12 * Math.abs(answer.toNumber()));
   const must = cleanOnly([
     { value: dSum(terms, k, 'value'), trap: 'evaluated f(k) instead of f′(k)' },
     { value: dSum(terms, k, 'nolower'), trap: 'applied the power rule without lowering the power' },
     ...(o.must ?? []),
-  ]);
+  ], cap);
+  /**
+   * Several of the generic mistake modes are no-ops on a given set of terms (`negsign` on a
+   * positive power, `nodouble` on a fractional one) and collapse onto the answer. These
+   * term-by-term slips never do, so the builder always has four named distractors to choose from.
+   */
+  const perTerm: Cand[] = [];
+  for (const [c, p] of terms) {
+    if (c === 0 || p === 0) continue;
+    const dt = attempt(() => dTerm(c, p, k, 'ok'));
+    if (!dt || dt.isZero()) continue;
+    const w = termWord(c, p);
+    perTerm.push({ value: attempt(() => answer.sub(dt)), trap: `dropped the ${w} term instead of differentiating it` });
+    perTerm.push({ value: attempt(() => answer.sub(dt).add(E(c).mul(powExact(k, p)))), trap: `left the ${w} term unchanged instead of differentiating it` });
+    perTerm.push({ value: attempt(() => answer.sub(dt).sub(dt)), trap: `sign slip on the ${w} term` });
+  }
   const extra = cleanOnly([
     { value: dSum(terms, k, 'nomult'), trap: 'lowered the power but did not multiply by it' },
     { value: dSum(terms, k, 'negsign'), trap: 'sign of the negative power: d/dx(1/x) = −1/x², not +1/x²' },
@@ -190,7 +266,11 @@ function derivativeQ(rng: RNG, terms: Term[], k: number, o: DerivOpts): Generate
     { value: dSum(terms, k, 'keepconst'), trap: 'kept the constant term when differentiating' },
     { value: answer.neg(), trap: 'sign slip in the final evaluation' },
     ...(o.extra ?? []),
-  ]);
+    ...perTerm,
+  ], cap);
+  // Four named mistakes or nothing: buildOptions must never have to pad this template.
+  const ds = ranked(rng, answer, must, extra);
+  if (ds.length < 4) return null;
   const stem = rng.bool(0.6)
     ? `Given that $f(x) = ${o.fTex}$, find the value of $f'(${k})$.`
     : `$f(x) = ${o.fTex}$. Find $f'(${k})$.`;
@@ -198,7 +278,7 @@ function derivativeQ(rng: RNG, terms: Term[], k: number, o: DerivOpts): Generate
   return {
     stem,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
-    options: buildOptions(rng, answer, ranked(rng, answer, must, extra), FR),
+    options: buildOptions(rng, answer, ds, FR),
     solution: `${expandStep}$f'(x) = ${derivativeTex(terms)}$, so $f'(${k}) = ${answer.toLatex(FR)}$.`,
     trap: o.trap ?? 'Bring each power down as a multiplier and lower it by one; then substitute into f′(x), not into f(x).',
     tags: ['differentiation', ...o.tags],
@@ -333,15 +413,23 @@ function productOverXQ(rng: RNG): Generated | null {
 }
 
 function threeHalvesQ(rng: RNG): Generated | null {
-  // p x^{3/2} + q x^{1/2} at a perfect square
+  // p x^{3/2} + q x^{1/2} at a perfect square. k = 1 is excluded: there x^{1/2} = x^{-1/2} = 1
+  // and "forgot the halves", "did not lower the power" and "gave f(k)" all collapse onto each other.
   const p = rng.pick([1, 1, 2, -1, -2, 4]);
   const q = rng.pick([-8, -6, -4, -3, -2, -1, 1, 2, 3, 4, 6]);
-  const k = rng.pick([1, 4, 4, 9]);
+  const k = rng.pick([4, 4, 9, 9, 16]);
+  const r = Math.sqrt(k); // = √k, an integer
   const terms: Term[] = [[p, 1.5], [q, 0.5]];
   if (rng.bool(0.3)) terms.reverse();
   return derivativeQ(rng, terms, k, {
     fTex: termsTex(terms, 'index'),
     must: [{ value: dSum(terms, k, 'halfdrop'), trap: 'forgot the ½ in the powers 3/2 and 1/2' }],
+    extra: [
+      { value: attempt(() => frac(p * r, 2).add(frac(3 * q, 2 * r))), trap: 'swapped the halves: used ½ on the x^{3/2} term and 3/2 on the x^{1/2} term' },
+      { value: attempt(() => frac(3 * p * r, 2).add(frac(q * r, 2))), trap: 'used x^{1/2} for both derivatives instead of x^{1/2} and x^{−1/2}' },
+      { value: attempt(() => frac(3 * p * k, 2).add(frac(q * k, 2))), trap: 'substituted k without taking its square root' },
+      { value: attempt(() => frac(3 * p * r, 2).sub(frac(q, 2 * r))), trap: `sign slip on the x^{1/2} term` },
+    ],
     trap: 'x^{3/2} differentiates to (3/2)x^{1/2} and x^{1/2} to (1/2)x^{−1/2}; keep the halves and evaluate √k once.',
     variant: 'three-halves',
     tags: ['fractional-powers'],

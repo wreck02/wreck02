@@ -61,12 +61,14 @@ function ints(ds: { value: number; trap: string }[], answer: number): Distractor
  * layout alone gives the answer away.
  */
 function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
-  const below = ds.filter((d) => d.value.cmp(answer) < 0);
-  const above = ds.filter((d) => d.value.cmp(answer) > 0);
-  if (below.length === 0 || above.length === 0 || below.length + above.length < need) return ds;
-  const want = rng.int(Math.max(0, need - below.length), Math.min(above.length, need));
-  const pick = [...rng.shuffle(above).slice(0, want), ...rng.shuffle(below).slice(0, need - want)];
-  return ds.map((d) => (pick.includes(d) ? { ...d, must: true } : d));
+  const free = need - ds.filter((d) => d.must).length;
+  const rest = ds.filter((d) => !d.must);
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  if (free < 1 || below.length === 0 || above.length === 0 || below.length + above.length < free) return ds;
+  const hi = rng.int(Math.max(0, free - below.length), Math.min(above.length, free));
+  const pick = [...rng.shuffle(above).slice(0, hi), ...rng.shuffle(below).slice(0, free - hi)];
+  return ds.map((d) => (d.must || pick.includes(d) ? { ...d, must: true } : d));
 }
 
 function ask(rng: RNG, expr: string, power: number): string {
@@ -198,6 +200,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
             { value: b, trap: 'forgot to square' },
             { value: 2 * b, trap: 'doubled instead of squaring' },
             { value: a * a, trap: 'gave the x² coefficient' },
+            { value: b * b + 2 * a * b, trap: 'added the cross term into the constant' },
           ];
       return finish(rng, ask(rng, expr, power), answer, ds, `$(${a}x ${b < 0 ? '-' : '+'} ${Math.abs(b)})^2 = ${a * a}x^2 ${2 * a * b < 0 ? '-' : '+'} ${Math.abs(2 * a * b)}x + ${b * b}$.`, 'In (ax + b)² the middle term is 2ab·x (double the product, including the a), and the first term is a²x².', ['perfect-square'], [lin(a, b), lin(a, b)], power);
     }
@@ -244,6 +247,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { value: -3 * a, trap: 'sign error' },
           { value: a * a * a, trap: 'gave the constant term' },
           { value: a * a, trap: 'squared instead of tripling' },
+          { value: 4 * a, trap: "used the 4 from the row of Pascal's triangle for (x + a)⁴" },
         ]
         : [
           { value: 3 * a, trap: 'gave the x² coefficient (forgot to square a)' },

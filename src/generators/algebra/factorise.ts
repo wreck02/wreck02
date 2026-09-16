@@ -120,12 +120,14 @@ function clean(ds: Distractor[]): Distractor[] {
  * layout alone gives the answer away.
  */
 function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
-  const below = ds.filter((d) => d.value.cmp(answer) < 0);
-  const above = ds.filter((d) => d.value.cmp(answer) > 0);
-  if (below.length === 0 || above.length === 0 || below.length + above.length < need) return ds;
-  const want = rng.int(Math.max(0, need - below.length), Math.min(above.length, need));
-  const pick = [...rng.shuffle(above).slice(0, want), ...rng.shuffle(below).slice(0, need - want)];
-  return ds.map((d) => (pick.includes(d) ? { ...d, must: true } : d));
+  const free = need - ds.filter((d) => d.must).length;
+  const rest = ds.filter((d) => !d.must);
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  if (free < 1 || below.length === 0 || above.length === 0 || below.length + above.length < free) return ds;
+  const hi = rng.int(Math.max(0, free - below.length), Math.min(above.length, free));
+  const pick = [...rng.shuffle(above).slice(0, hi), ...rng.shuffle(below).slice(0, free - hi)];
+  return ds.map((d) => (d.must || pick.includes(d) ? { ...d, must: true } : d));
 }
 
 function num(x: number): string {

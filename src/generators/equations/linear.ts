@@ -57,6 +57,26 @@ function D(value: Exact | null, trap: string): Distractor | null {
   return value === null ? null : { value, trap };
 }
 
+/**
+ * Offer a random mix of below- and above-answer distractors.
+ *
+ * Every candidate is still the result of a named mistake; this only decides which of them the
+ * builder sees first (they are marked `must`), so the number of options larger than the answer
+ * varies from question to question. Without it a fixed mistake set leaves the answer in the same
+ * place in the sorted option list every time — "always the median", "never the largest" — and the
+ * layout alone gives the answer away. Distractors already marked `must` are always kept.
+ */
+function slant(rng: RNG, answer: Exact, ds: Distractor[], need = 4): Distractor[] {
+  const free = need - ds.filter((d) => d.must).length;
+  const rest = ds.filter((d) => !d.must);
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  if (free < 1 || below.length === 0 || above.length === 0 || below.length + above.length < free) return ds;
+  const hi = rng.int(Math.max(0, free - below.length), Math.min(above.length, free));
+  const pick = [...rng.shuffle(above).slice(0, hi), ...rng.shuffle(below).slice(0, free - hi)];
+  return ds.map((d) => (d.must || pick.includes(d) ? { ...d, must: true } : d));
+}
+
 const par = (n: number) => (n < 0 ? `(${n})` : `${n}`);
 
 /** Fraction with a linear numerator, e.g. \frac{x + 1}{3}. */
@@ -76,7 +96,7 @@ function exact(rng: RNG, stem: string, x: Exact, ds: (Distractor | null)[], solu
   return {
     stem,
     answer: { kind: 'exact', value: x },
-    options: buildOptions(rng, x, clean(ds)),
+    options: buildOptions(rng, x, slant(rng, x, clean(ds))),
     solution,
     trap,
     tags: ['linear-equation', ...tags],

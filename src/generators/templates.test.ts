@@ -34,6 +34,11 @@ function assertQuestion(q: Question, ctx: string) {
   for (const o of q.options) {
     expect(o.display, ctx).not.toMatch(BAD);
     expect(o.key, ctx).toMatch(/^[A-H]$/);
+    // every numeric option must be an exam-plausible number too
+    for (const v of [...(o.value ? [o.value] : []), ...(o.values ?? [])]) {
+      const c = isCleanExact(v);
+      expect(c.ok, `${ctx} unclean option ${v.toPlain()} (${o.display}): ${c.reason}`).toBe(true);
+    }
   }
   const keys = q.options.map((o) => o.key);
   expect(keys, ctx).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].slice(0, keys.length));

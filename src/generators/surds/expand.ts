@@ -7,7 +7,7 @@ import { gcd } from '../../core/gen-utils';
 
 /**
  * Expand brackets with surds.
- * Level 1: √a × √b (√3 × √12 = 6, √2 × √6 = 2√3) and (k√a)² = k²a
+ * Level 1: √a × √b (√3 × √12 = 6, √2 × √6 = 2√3) and (k√a)² = k²a with k ≥ 2
  * Level 2: (a ± √b)² = a² + b ± 2a√b                       (2 + √3)² = 7 + 4√3
  * Level 3: (a + √b)(a − √b) = a² − b, (√a + √b)(√a − √b) = a − b
  * Level 4: (√a ± √b)² with √(ab) simplifying, or (a + p√b)(c + q√b)
@@ -47,7 +47,8 @@ function cleanOnly(ds: { value: Exact | null; trap: string }[]): Distractor[] {
 }
 
 const SQF_SMALL = [2, 3, 5, 6, 7, 10, 11];
-const SQF_MID = [2, 3, 5, 6, 7, 10, 11, 13, 14, 15, 17, 19, 21, 22, 23];
+/** The radicands that actually appear on the paper. */
+const SQF_EXAM = [2, 3, 5, 6, 7, 10, 11, 13, 15];
 
 export default defineTemplate({
   id: 'm1.surds.expand',
@@ -55,7 +56,7 @@ export default defineTemplate({
   topic: 'surds',
   title: 'Expand brackets with surds',
   levels: {
-    1: '√a × √b and (k√a)²: √3 × √12, (2√3)²',
+    1: '√a × √b and (k√a)² with k ≥ 2: √3 × √12, (2√3)²',
     2: '(a ± √b)²: (2 + √3)² = 7 + 4√3',
     3: '(a + √b)(a − √b) and (√a + √b)(√a − √b): an integer',
     4: '(√a ± √b)² with √(ab) simplifying, or (a + p√b)(c + q√b)',
@@ -80,9 +81,9 @@ export default defineTemplate({
       // ------------------------------------------------------------------ level 1
       if (level === 1) {
         if (rng.bool(0.6)) {
-          // √a × √b with b = a·m so the product simplifies
+          // √a × √b with b = a·m (m ≥ 2, so never √a × √a) so the product simplifies
           const a = rng.pick([2, 3, 5, 6, 7]);
-          const m = rng.weighted([1, 2, 3, 4, 5, 6, 8, 9], [2, 3, 3, 3, 1, 1, 1, 2]);
+          const m = rng.weighted([2, 3, 4, 5, 6, 8, 9], [3, 3, 3, 1, 1, 1, 2]);
           const b = a * m;
           if (b > 50 || Math.round(Math.sqrt(b)) ** 2 === b) return null;
           const [x, y] = rng.bool() ? [a, b] : [b, a];
@@ -108,24 +109,23 @@ export default defineTemplate({
             'product', [[[1, x]], [[1, y]]], 1, ['multiply'],
           );
         }
-        // (k√a)²
+        // (k√a)² with k ≥ 2 ((√5)² alone is too slight even for a warm-up)
         const a = rng.pick([2, 3, 5, 6, 7, 10]);
-        const k = rng.weighted([1, 2, 3, 4, 5], [2, 3, 3, 2, 1]);
+        const k = rng.weighted([2, 3, 4, 5], [3, 3, 2, 1]);
         const answer = E(k * k * a);
         const distractors = cleanOnly([
           { value: E(k * a), trap: 'forgot to square the coefficient k' },
           { value: surd(a, k * k), trap: 'squared the coefficient but left the root in place' },
           { value: E(k * k * a * a), trap: 'squared the radicand as well: (√a)² = a, not a²' },
+          { value: E(k * a * a), trap: 'squared the radicand instead of the coefficient' },
           { value: surd(a, 2 * k), trap: 'doubled instead of squaring' },
           { value: E(2 * k * a), trap: 'doubled the coefficient instead of squaring it' },
-          { value: E(k * k + a), trap: 'added k² and a instead of multiplying' },
+          { value: E(k * k + a), trap: `treated ${k}√${a} as ${k} + √${a} and squared each part` },
         ]);
         return pack(
           `Simplify $${sq([[k, a]])}$.`,
           answer, distractors,
-          k === 1
-            ? `Squaring undoes the root: $(\\sqrt{${a}})^2 = ${a}$.`
-            : `Square both parts: $(${k}\\sqrt{${a}})^2 = ${k}^2 \\times (\\sqrt{${a}})^2 = ${k * k} \\times ${a} = ${answer.toLatex()}$.`,
+          `Square both parts: $(${k}\\sqrt{${a}})^2 = ${k}^2 \\times (\\sqrt{${a}})^2 = ${k * k} \\times ${a} = ${answer.toLatex()}$.`,
           '(k√a)² = k² × a: square the coefficient and the root separately; (√a)² is a, not a².',
           'square', [[[k, a]]], 2, ['square'],
         );
@@ -163,7 +163,7 @@ export default defineTemplate({
           // (a + k√b)(a − k√b) = a² − k²b
           const a = rng.int(1, 9);
           const k = rng.bool(0.3) ? rng.pick([2, 3]) : 1;
-          const b = rng.pick(k === 1 ? SQF_MID : SQF_SMALL);
+          const b = rng.pick(k === 1 ? SQF_EXAM : SQF_SMALL);
           if (a * a === k * k * b) return null;
           const s = rng.sign();
           const f1: Terms = [[a, 1], [s * k, b]];
@@ -185,8 +185,9 @@ export default defineTemplate({
             'conjugate', [f1, f2], 1, ['conjugate', 'difference-of-squares'],
           );
         }
-        // (√a + √b)(√a − √b) = a − b
-        const [a, b] = rng.pickDistinct(SQF_MID, 2);
+        // (√a + √b)(√a − √b) = a − b, with √(ab) simple enough that the "kept a cross term" slips are showable
+        const [a, b] = rng.pickDistinct(SQF_EXAM, 2);
+        if (squarefreeDecompose(a * b)[1] > 97) return null;
         const s = rng.sign();
         const f1: Terms = [[1, a], [s, b]];
         const f2: Terms = [[1, a], [-s, b]];

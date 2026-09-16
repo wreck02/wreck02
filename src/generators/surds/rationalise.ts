@@ -8,8 +8,8 @@ import { gcd } from '../../core/gen-utils';
 /**
  * Rationalise a denominator.
  * Level 1: k/√a                       6/√3 = 2√3, 1/√2 = √2/2
- * Level 2: a/(b√c)                    5/(2√5) = √5/2
- * Level 3: 1/(a ± √b)                 1/(2+√3) = 2 − √3
+ * Level 2: a/(b√c)                    5/(2√5) = √5/2, 12/(5√3) = 4√3/5
+ * Level 3: 1/(a ± √b), a² − b > 0     1/(2+√3) = 2 − √3, 1/(3+√7) = (3 − √7)/2
  * Level 4: (a ± √b)/(c ± √b)          (1+√2)/(3−√2) = (5+4√2)/7, positive norm
  * Level 5: negative norm (2+√3)/(1−√3) = −5/2 − 3√3/2, or (√a+√b)/(√a−√b) = 4 + √15
  */
@@ -64,6 +64,19 @@ function splitRational(x: Exact): [Exact, Exact] {
 
 const SQUAREFREE = [2, 3, 5, 6, 7, 10, 11, 13, 14, 15, 17, 19, 21, 22, 23, 26, 29, 30];
 
+/**
+ * Level-3 denominators a ± √b with a small positive norm a² − b, weighted towards norm 1 and 2
+ * (1/(2 + √3) = 2 − √3, 1/(4 − √15) = 4 + √15, 1/(3 + √7) = (3 − √7)/2). Negative norms are level 5.
+ */
+const L3_PAIRS: { a: number; b: number; w: number }[] = [];
+for (let a = 2; a <= 5; a++) {
+  for (const b of SQUAREFREE) {
+    const norm = a * a - b;
+    if (norm < 1 || norm > 7) continue;
+    L3_PAIRS.push({ a, b, w: norm === 1 ? 4 : norm === 2 ? 3 : 1 });
+  }
+}
+
 export default defineTemplate({
   id: 'm1.surds.rationalise',
   module: 'M1',
@@ -71,8 +84,8 @@ export default defineTemplate({
   title: 'Rationalise a denominator',
   levels: {
     1: 'k/√a: 6/√3, 1/√2',
-    2: 'a/(b√c): 5/(2√5)',
-    3: '1/(a ± √b) with a² − b small: 1/(2 + √3)',
+    2: 'a/(b√c) with b not dividing a: 5/(2√5), 12/(5√3)',
+    3: '1/(a ± √b) with a² − b small and positive: 1/(2 + √3)',
     4: '(a ± √b)/(c ± √b) with positive norm: (1 + √2)/(3 − √2)',
     5: 'negative norm (2 + √3)/(1 − √3), or (√a + √b)/(√a − √b)',
   },
@@ -114,8 +127,11 @@ export default defineTemplate({
       if (level === 2) {
         const c = rng.pick([2, 3, 5, 6, 7]);
         const b = rng.pick([2, 3, 4, 5]);
-        const nice = [b, c, b * c, 2 * b, 2 * c, 3 * c].filter((x) => x <= 12);
-        const a = rng.bool(0.6) ? rng.pick(nice) : rng.int(1, 12);
+        // b must not divide a (5/(5√5) and 10/(5√2) cancel to level 1 before any rationalising);
+        // prefer numerators that cancel against c or b·c after the √c step: 12/(5√3) = 4√3/5, 9/(2√3) = 3√3/2.
+        const pool = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter((x) => x % b !== 0);
+        const nice = pool.filter((x) => gcd(x, b * c) > 1);
+        const a = rng.bool(0.65) && nice.length > 0 ? rng.pick(nice) : rng.pick(pool);
         const num: Terms = [[a, 1]];
         const den: Terms = [[b, c]];
         const answer = E(a).div(surd(c, b));
@@ -127,6 +143,7 @@ export default defineTemplate({
           { value: surd(c, rat(b, a)), trap: 'inverted the fraction' },
           { value: surd(c, rat(a, b * c * c)), trap: 'wrote (√c)² = c², not c' },
           { value: surd(c, rat(a * b, c)), trap: 'multiplied the numerator by b√c but the denominator only by √c' },
+          { value: surd(c, rat(a, c)), trap: 'ignored the b: rationalised as if the denominator were just √c' },
         ]);
         const stem = rng.bool(0.6)
           ? `Rationalise the denominator of $${fracTex(num, den)}$.`
@@ -143,12 +160,9 @@ export default defineTemplate({
         };
       }
 
-      // ------------------------------------------------------------------ level 3: 1/(a ± √b)
+      // ------------------------------------------------------------------ level 3: 1/(a ± √b), positive norm
       if (level === 3) {
-        const a = rng.int(1, 5);
-        const choices = SQUAREFREE.filter((b) => b !== a * a && Math.abs(a * a - b) <= 7);
-        if (choices.length === 0) return null;
-        const b = rng.pick(choices);
+        const { a, b } = rng.weighted(L3_PAIRS, L3_PAIRS.map((x) => x.w));
         const s = rng.sign();
         const num: Terms = [[1, 1]];
         const den: Terms = [[a, 1], [s, b]];
@@ -161,7 +175,7 @@ export default defineTemplate({
           { value: toExact(den).mulRat(rat(1, norm)), trap: 'multiplied top and bottom by the denominator itself instead of its conjugate' },
           { value: C.mulRat(rat(1, a * a + b)), trap: 'took the new denominator as a² + b instead of a² − b' },
           { value: frac(1, norm), trap: 'forgot to multiply the numerator by the conjugate' },
-          { value: answer.neg(), trap: 'lost the sign: a² − b is ' + (norm < 0 ? 'negative here' : 'positive here') },
+          { value: answer.neg(), trap: 'flipped the sign of the whole answer: a² − b is positive here' },
           { value: frac(1, a).add(surd(b, rat(s, b))), trap: 'split 1/(a + √b) into 1/a + 1/√b, which is not allowed' },
           { value: a !== b ? C.mulRat(rat(1, a - b)) : null, trap: 'took the new denominator as a − b (forgot to square a)' },
         ]);
@@ -173,7 +187,7 @@ export default defineTemplate({
           answer: { kind: 'exact' as const, value: answer },
           options: buildOptions(rng, answer, distractors),
           solution: `Multiply top and bottom by the conjugate $${tex(conj)}$. The denominator becomes $${a}^2 - ${b} = ${norm}$, so $${fracTex(num, den)} = \\frac{${tex(conj)}}{${norm}} = ${answer.toLatex()}$.`,
-          trap: 'Multiply by the conjugate (sign of the surd flipped), not by the denominator itself; the denominator becomes a² − b, and if that is negative the whole answer changes sign.',
+          trap: 'Multiply by the conjugate (sign of the surd flipped), not by the denominator itself; the new denominator is a² − b and the numerator is the conjugate.',
           tags: ['surds', 'rationalise', 'conjugate'],
           params: { level, variant: 'conjugate', num, den },
           typedAllowed: true,

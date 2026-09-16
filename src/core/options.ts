@@ -9,6 +9,7 @@
 import { Exact, type NumberFormat } from './exact';
 import type { RNG } from './rng';
 import type { Option } from './template';
+import { isCleanExact } from './clean';
 
 export const OPTION_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -62,7 +63,8 @@ export function buildOptions(rng: RNG, answer: Exact, distractors: (Exact | Dist
   const count = cfg.count ?? 5;
   const seen: Exact[] = [answer];
   const chosen: Distractor[] = [];
-  const isNew = (v: Exact) => Number.isFinite(v.toNumber()) && !seen.some((s) => s.equals(v));
+  // Distractors must be exam-plausible numbers too: drop anything failing the clean-number rule.
+  const isNew = (v: Exact) => Number.isFinite(v.toNumber()) && isCleanExact(v).ok && !seen.some((s) => s.equals(v));
   const candidates = rng.shuffle(distractors.map((d) => (d instanceof Exact ? { value: d } : d)));
   for (const d of candidates) {
     if (chosen.length >= count - 1) break;
@@ -74,8 +76,8 @@ export function buildOptions(rng: RNG, answer: Exact, distractors: (Exact | Dist
   }
   if (chosen.length < count - 1) throw new Error('buildOptions: could not build enough distinct options');
   const all: Option[] = [
-    { key: '', display: fmt(answer, cfg), correct: true },
-    ...chosen.map((d) => ({ key: '', display: fmt(d.value, cfg), correct: false, trap: d.trap })),
+    { key: '', display: fmt(answer, cfg), correct: true, value: answer },
+    ...chosen.map((d) => ({ key: '', display: fmt(d.value, cfg), correct: false, trap: d.trap, value: d.value })),
   ];
   return letter(rng.shuffle(all));
 }
@@ -108,7 +110,7 @@ export function buildSetOptions(rng: RNG, answer: Exact[], distractors: (Exact[]
   const count = cfg.count ?? 5;
   const seen: Exact[][] = [answer];
   const chosen: { values: Exact[]; trap?: string }[] = [];
-  const isNew = (v: Exact[]) => !seen.some((s) => sameSet(s, v));
+  const isNew = (v: Exact[]) => v.every((x) => isCleanExact(x).ok) && !seen.some((s) => sameSet(s, v));
   const cands = rng.shuffle(distractors.map((d) => (Array.isArray(d) ? { values: d } : d)));
   for (const d of cands) {
     if (chosen.length >= count - 1) break;
@@ -129,8 +131,8 @@ export function buildSetOptions(rng: RNG, answer: Exact[], distractors: (Exact[]
   }
   if (chosen.length < count - 1) throw new Error('buildSetOptions: not enough options');
   const all: Option[] = [
-    { key: '', display: fmtSet(answer, cfg), correct: true },
-    ...chosen.map((d) => ({ key: '', display: fmtSet(d.values, cfg), correct: false, trap: d.trap })),
+    { key: '', display: fmtSet(answer, cfg), correct: true, values: answer },
+    ...chosen.map((d) => ({ key: '', display: fmtSet(d.values, cfg), correct: false, trap: d.trap, values: d.values })),
   ];
   return letter(rng.shuffle(all));
 }

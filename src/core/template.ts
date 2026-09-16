@@ -35,6 +35,10 @@ export interface Option {
   correct: boolean;
   /** Optional one-line explanation of the mistake this distractor represents. */
   trap?: string;
+  /** The exact value behind a numeric option (set by buildOptions; used by the tests' clean-number check). */
+  value?: Exact;
+  /** The exact values behind a set option (set by buildSetOptions). */
+  values?: Exact[];
 }
 
 export interface Question {

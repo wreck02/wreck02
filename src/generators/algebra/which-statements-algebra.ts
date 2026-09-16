@@ -412,7 +412,24 @@ const DEFS: StatementDef[] = [
         why: `the discriminant is $${brn(b)}^{2} - 4 \\times ${brn(c)} = ${b * b - 4 * c}$`,
       };
     },
-    check: ([b, c]) => b * b - 4 * c > EPS,
+    // Independent of the discriminant: scan for sign changes of x² + bx + c and
+    // require two distinct places where it crosses (or touches) zero.
+    check: ([b, c]) => {
+      const f = (x: number) => x * x + b * x + c;
+      const roots: number[] = [];
+      const lo = -25, step = 0.005;
+      let prev = f(lo);
+      for (let i = 1; i <= 10000; i++) {
+        const x = lo + i * step;
+        const v = f(x);
+        if (Math.abs(v) <= EPS) roots.push(x);
+        else if (prev * v < 0) roots.push(x - step / 2);
+        prev = v;
+      }
+      const distinct: number[] = [];
+      for (const r of roots) if (!distinct.some((s) => Math.abs(s - r) < 0.1)) distinct.push(r);
+      return distinct.length >= 2;
+    },
   },
   {
     id: 'pos-quad',
@@ -517,24 +534,6 @@ const DEFS: StatementDef[] = [
     },
   },
   {
-    id: 'mersenne',
-    build: (rng) => {
-      const f = rng.int(0, 1);
-      return {
-        args: [f],
-        text: f === 0 ? 'If $p$ is a prime number then $2^{p} - 1$ is also prime.' : 'If $2^{p} - 1$ is prime then $p$ is prime.',
-        truth: f === 1,
-        why: f === 1 ? 'a composite index always factorises $2^{p} - 1$' : 'at $p = 11$, $2^{11} - 1 = 2047 = 23 \\times 89$',
-      };
-    },
-    check: ([f]) => {
-      for (let p = 2; p <= 20; p++) {
-        if (f === 0 ? isPrime(p) && !isPrime(2 ** p - 1) : isPrime(2 ** p - 1) && !isPrime(p)) return false;
-      }
-      return true;
-    },
-  },
-  {
     id: 'n3-n',
     build: (rng) => {
       const d = rng.pick([2, 3, 6, 4, 5, 9]);
@@ -609,7 +608,7 @@ const POOLS: Record<Level, string[]> = {
   2: ['sq-ineq', 'mul-k', 'recip-order', 'recip-one', 'add-k', 'odd-power-ineq', 'sq-back'],
   3: ['sqrt-sq', 'sqrt-prod', 'abs-ge', 'abs-sum', 'sqrt-sum-sq', 'sq-gt', 'abs-sym'],
   4: ['perfect-square', 'disc-k', 'ab-zero', 'quad-real', 'pos-quad', 'min-value', 'sum-roots'],
-  5: ['n2n-even', 'two-pow', 'prime-poly', 'mersenne', 'n3-n', 'x-plus-inv', 'sq-eq', 'odd-square', 'consecutive', 'sq-gt', 'sq-ineq'],
+  5: ['n2n-even', 'two-pow', 'prime-poly', 'n3-n', 'x-plus-inv', 'sq-eq', 'odd-square', 'consecutive', 'sq-gt', 'sq-ineq'],
 };
 
 const ROMAN = ['I', 'II', 'III'];

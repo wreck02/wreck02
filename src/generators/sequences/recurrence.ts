@@ -16,6 +16,9 @@ import type { RNG } from '../../core/rng';
 const FRACTION = { format: 'fraction' as const };
 const tx = (x: Exact): string => x.toLatex(FRACTION);
 const plus = (k: number): string => (k >= 0 ? `+ ${k}` : `- ${-k}`);
+/** "a + b - c": join exact terms with the right sign instead of printing "+ -1/4". */
+const signedSum = (xs: Exact[]): string =>
+  xs.map((x, i) => (i === 0 ? tx(x) : x.sign() < 0 ? ` - ${tx(x.neg())}` : ` + ${tx(x)}`)).join('');
 function attempt(f: () => Exact): Exact | null {
   try {
     const v = f();
@@ -267,16 +270,21 @@ function secondOrderQ(rng: RNG): Generated | null {
   const N = rng.pick([10, 12, 15, 20]);
   const answer = E(u1 + (N - 1) * d);
   if (!isCleanExact(answer).ok || Math.abs(answer.toNumber()) > 400) return null;
+  // Distractors stay in the same range as the answer: a wild outlier is not a mistake anyone makes.
+  const near = Math.max(60, 3 * Math.abs(answer.toNumber()));
+  const ratio = u1 !== 0 && u2 % u1 === 0 ? u2 / u1 : null;
+  const geometric = ratio !== null && Math.abs(ratio) > 1 ? u1 * ratio ** (N - 1) : null;
   const distractors = ranked(rng, answer, cleanOnly([
     { value: E(u1 + N * d), trap: 'off by one: used $u_1 + nd$' },
     { value: E(u2 + (N - 1) * d), trap: 'counted the steps from $u_2$' },
     { value: E(u1 + (N - 2) * d), trap: 'one step too few' },
     { value: E(u1 - (N - 1) * d), trap: 'used $u_{n-1} - u_n$ for the common difference' },
-  ]), cleanOnly([
-    { value: E(u1 * 2 ** Math.min(6, N - 1)), trap: 'treated the doubling in the formula as a common ratio' },
+  ], near), cleanOnly([
+    { value: E(u1 + 2 * (N - 2) * d), trap: 'applied the rule as $2u_{n-1} - u_1$, reusing the first term' },
     { value: E(N * d), trap: 'forgot the first term' },
     { value: E(u1 + (N - 1) * u2), trap: 'used $u_2$ as the common difference' },
-  ]));
+    { value: geometric === null ? null : E(geometric), trap: 'read $2u_n$ as a common ratio and doubled each time' },
+  ], near));
   return {
     stem: `A sequence is defined by $u_{n+1} = 2u_n - u_{n-1}$ for $n \\ge 2$, with $u_1 = ${u1}$ and $u_2 = ${u2}$. Find $u_{${N}}$.`,
     answer: { kind: 'exact', value: answer },
@@ -320,7 +328,7 @@ function periodicSumQ(rng: RNG): Generated | null {
       stem: `A sequence is defined by $u_{n+1} = \\frac{1}{1 - u_n}$, with $u_1 = ${tx(u1)}$. Find the sum of the first $${N}$ terms.`,
       answer: { kind: 'exact', value: answer, format: 'fraction' },
       options: options(rng, answer, distractors),
-      solution: `The sequence repeats every $3$ terms and one cycle sums to $${cycle.map(tx).join(' + ')} = ${tx(cycleSum)}$. There are $${N / 3}$ complete cycles, so the sum is $${N / 3} \\times ${cycleSum.sign() < 0 ? `\\left(${tx(cycleSum)}\\right)` : tx(cycleSum)} = ${tx(answer)}$.`,
+      solution: `The sequence repeats every $3$ terms and one cycle sums to $${signedSum(cycle)} = ${tx(cycleSum)}$. There are $${N / 3}$ complete cycles, so the sum is $${N / 3} \\times ${cycleSum.sign() < 0 ? `\\left(${tx(cycleSum)}\\right)` : tx(cycleSum)} = ${tx(answer)}$.`,
       trap: 'Sum one period, then multiply by the number of complete periods.',
       tags: ['sequences', 'recurrence', 'periodic', 'series'],
       params: { variant: 'sum3', pn, pd, n: N },

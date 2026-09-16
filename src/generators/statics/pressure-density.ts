@@ -12,6 +12,11 @@ import type { RNG } from '../../core/rng';
  * Level 4: upthrust = ρ_fluid V g; floating: fraction submerged = ρ_object / ρ_fluid; apparent weight in water
  * Level 5: hydraulic press (force ratio = area ratio, distance ratio is the inverse); density of an alloy
  *
+ * Every distractor is a named mistake: a wrong power of ten in a conversion, the ratio upside down,
+ * g left out, atmospheric pressure added or subtracted when the stem asked for the other one, the force
+ * given instead of the pressure. When fewer than four of them survive, pack() returns null and the
+ * parameters are redrawn — the option list is never padded with "half the answer".
+ *
  * verify() never repeats the arithmetic of generate(): it re-derives the answer in SI base units by a
  * different route — weight of the displaced fluid, the weight of a column of liquid over a chosen area,
  * equality of the pressures under the two pistons, the volume swept by the pistons, or the total mass of
@@ -124,12 +129,12 @@ function densityQ(rng: RNG): Generated | null {
     must: [
       { value: rho / 1000, trap: 'divided by $10^{3}$ instead of $10^{6}$ (cm³ treated as litres)' },
       { value: vCm3 / mKg, trap: 'volume divided by mass instead of mass by volume' },
+      { value: mKg * vCm3, trap: 'multiplied the mass by the volume instead of dividing' },
     ],
     extra: [
-      { value: rho / 10, trap: 'a decimal place lost in the conversion' },
-      { value: rho * 10, trap: 'a decimal place gained in the conversion' },
-      { value: rho / 2, trap: 'arithmetic slip: halved the density' },
-      { value: rho * 2, trap: 'arithmetic slip: doubled the density' },
+      { value: rho * 1000, trap: 'mass left in grams while the volume was converted to $\\text{m}^{3}$' },
+      { value: rho / 10, trap: 'a power of ten lost in the conversion' },
+      { value: rho * 10, trap: 'a power of ten gained in the conversion' },
     ],
     solution: `$${n(vCm3)}\\ \\text{cm}^{3} = ${n(vCm3)} \\times 10^{-6}\\ \\text{m}^{3}$, so $\\rho = \\dfrac{${n(mKg)}}{${n(vCm3)} \\times 10^{-6}} = ${n(rho)}\\ \\text{kg m}^{-3}$.`,
     trap: '1 m³ is 10⁶ cm³, not 10³: dividing by the wrong power of ten is the whole question.',
@@ -155,21 +160,31 @@ function pressureQ(rng: RNG): Generated | null {
     must: cm2
       ? [
           { value: F / aCm2, trap: 'used the area in cm² without converting to m²' },
+          { value: (F * 100) / aCm2, trap: 'converted the area with $10^{2}$ instead of $10^{4}$' },
           { value: aM2 / F, trap: 'divided the area by the force' },
         ]
       : [
+          { value: F, trap: 'gave the force: the area was never used' },
+          { value: F * aM2, trap: 'multiplied by the area instead of dividing' },
           { value: aM2 / F, trap: 'divided the area by the force' },
-          { value: F * aM2, trap: 'multiplied instead of dividing' },
         ],
-    extra: [
-      { value: p / 10, trap: 'a power of ten lost in the conversion' },
-      { value: p * 10, trap: 'a power of ten gained in the conversion' },
-      { value: p / 2, trap: 'arithmetic slip: halved the pressure' },
-      { value: p * 2, trap: 'arithmetic slip: doubled the pressure' },
-      { value: p / 1000, trap: 'gave the pressure in kPa, not Pa' },
-    ],
+    extra: cm2
+      ? [
+          { value: p / 1000, trap: 'gave the pressure in kPa, not Pa' },
+          { value: F * aCm2, trap: 'multiplied by the area in cm² instead of dividing' },
+          { value: p / 10, trap: 'a power of ten lost in the conversion' },
+          { value: p * 10, trap: 'a power of ten gained in the conversion' },
+        ]
+      : [
+          { value: p / 10, trap: 'a decimal point slipped in the area' },
+          { value: p * 10, trap: 'a decimal point slipped in the area the other way' },
+          { value: p / 1000, trap: 'gave the pressure in kPa, not Pa' },
+          { value: F / (aM2 * 1e4), trap: 'treated the area as cm² and divided by $10^{4}$ as well' },
+        ],
     solution: `$p = \\dfrac{F}{A} = \\dfrac{${n(F)}}{${n(aM2)}} = ${n(p)}\\ \\text{Pa}$${cm2 ? ` (first $${n(aCm2)}\\ \\text{cm}^{2} = ${n(aM2)}\\ \\text{m}^{2}$)` : ''}.`,
-    trap: '1 m² is 10⁴ cm², so an area in cm² must be divided by 10⁴ before it goes under the force.',
+    trap: cm2
+      ? '1 m² is 10⁴ cm², so an area in cm² must be divided by 10⁴ before it goes under the force.'
+      : 'Pressure is the force spread over the area: divide by the area, and dividing by a number less than 1 makes the answer bigger.',
     tags: ['pressure', 'units'],
     params: { variant: 'pressure', F, aM2 },
     spread: cm2 ? 15000 : 30,
@@ -189,12 +204,12 @@ function massFromDensityQ(rng: RNG): Generated | null {
     must: [
       { value: mKg * 1000, trap: 'converted cm³ with $10^{3}$ instead of $10^{6}$' },
       { value: rho / vCm3, trap: 'divided the density by the volume' },
+      { value: vCm3 / rho, trap: 'divided the volume by the density' },
     ],
     extra: [
-      { value: mKg / 10, trap: 'a power of ten lost' },
-      { value: mKg * 10, trap: 'a power of ten gained' },
-      { value: mKg / 2, trap: 'arithmetic slip: halved the mass' },
-      { value: mKg * 2, trap: 'arithmetic slip: doubled the mass' },
+      { value: mKg / 1000, trap: 'converted cm³ with $10^{9}$ instead of $10^{6}$' },
+      { value: mKg / 10, trap: 'a power of ten lost in the conversion' },
+      { value: mKg * 10, trap: 'a power of ten gained in the conversion' },
     ],
     solution: `$m = \\rho V = ${n(rho)} \\times ${n(vCm3)} \\times 10^{-6} = ${n(mKg)}\\ \\text{kg}$.`,
     trap: 'The volume must be in m³ (÷10⁶) before it is multiplied by a density in kg m⁻³.',
@@ -206,28 +221,41 @@ function massFromDensityQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 2
 
-const FLUIDS: [string, number][] = [['water', 1000], ['sea water', 1200], ['oil', 800], ['paraffin', 800], ['a liquid', 1500]];
+/**
+ * A liquid needs two names: one that follows an article ("a tank of …", "the surface of …") and a bare
+ * noun for "the … alone" / "a column of …". Storing only "a liquid" produced "the a liquid".
+ */
+interface Fluid { a: string; bare: string; rho: number }
+
+const FLUIDS: Fluid[] = [
+  { a: 'water', bare: 'water', rho: 1000 },
+  { a: 'sea water', bare: 'sea water', rho: 1200 },
+  { a: 'oil', bare: 'oil', rho: 800 },
+  { a: 'paraffin', bare: 'paraffin', rho: 800 },
+  { a: 'a liquid', bare: 'liquid', rho: 1500 },
+];
 
 /** p = ρgh, answered in kPa. */
 function depthPressureQ(rng: RNG): Generated | null {
-  const [name, rho] = rng.pick(FLUIDS);
+  const fluid = rng.pick(FLUIDS);
+  const rho = fluid.rho;
   const h = rng.pick([2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50]);
   const pPa = rho * G * h;
   const pk = round(pPa / 1000);
   if (pk < 10 || pk > 600 || !isMult(pk, 0.5)) return null;
   return pack(rng, {
-    stem: `A tank is filled with ${name} of density $${n(rho)}\\ \\text{kg m}^{-3}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the pressure due to the ${name} alone at a depth of $${n(h)}\\ \\text{m}$ below the surface, in kPa.`,
+    stem: `A tank is filled with ${fluid.a} of density $${n(rho)}\\ \\text{kg m}^{-3}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the pressure due to the ${fluid.bare} alone at a depth of $${n(h)}\\ \\text{m}$ below the surface, in kPa.`,
     answer: pk,
     unit: U_KPA,
     must: [
-      { value: (rho * h) / 1000, trap: 'left $g$ out of $\\rho g h$' },
       { value: pk + P_ATM, trap: 'added atmospheric pressure, although only the liquid was asked for' },
+      { value: (rho * h) / 1000, trap: 'left $g$ out of $\\rho g h$' },
+      { value: (rho * G) / 1000 / h, trap: 'divided by the depth instead of multiplying' },
     ],
     extra: [
       { value: pPa, trap: 'gave the answer in Pa, not kPa' },
+      { value: pk * 10, trap: 'divided by $100$ instead of $1000$ turning Pa into kPa' },
       { value: pk / 2, trap: 'used $\\tfrac12 \\rho g h$' },
-      { value: (rho * G) / 1000 / h, trap: 'divided by the depth instead of multiplying' },
-      { value: pk * 2, trap: 'doubled the pressure' },
       { value: (G * h) / 1000, trap: 'left the density out' },
     ],
     solution: `$p = \\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(pPa)}\\ \\text{Pa} = ${n(pk)}\\ \\text{kPa}$.`,
@@ -240,24 +268,25 @@ function depthPressureQ(rng: RNG): Generated | null {
 
 /** The depth at which the liquid pressure reaches a stated value: h = p/(ρg). */
 function depthFromPressureQ(rng: RNG): Generated | null {
-  const [name, rho] = rng.pick(FLUIDS);
+  const fluid = rng.pick(FLUIDS);
+  const rho = fluid.rho;
   const h = rng.pick([2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30]);
   const pk = round((rho * G * h) / 1000);
   if (pk < 10 || pk > 400 || !isMult(pk, 0.5)) return null;
   return pack(rng, {
-    stem: `The pressure due to a column of ${name} of density $${n(rho)}\\ \\text{kg m}^{-3}$ is $${n(pk)}\\ \\text{kPa}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the depth below the surface at which this pressure occurs.`,
+    stem: `The pressure due to a column of ${fluid.bare} of density $${n(rho)}\\ \\text{kg m}^{-3}$ is $${n(pk)}\\ \\text{kPa}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the depth below the surface at which this pressure occurs.`,
     answer: h,
     unit: '\\text{m}',
     must: [
       { value: round((pk * 1000) / rho), trap: 'left $g$ out, dividing by ρ only' },
-      { value: round(pk / (rho * G)), trap: 'used the pressure in kPa instead of Pa' },
+      { value: round(((pk + P_ATM) * 1000) / (rho * G)), trap: 'added atmospheric pressure, although the stem already gives the liquid’s pressure' },
+      { value: round(((pk - P_ATM) * 1000) / (rho * G)), trap: 'subtracted atmospheric pressure, although the stem gives the liquid’s pressure' },
     ],
     extra: [
-      { value: round(h / 2), trap: 'halved the depth' },
-      { value: round(h * 2), trap: 'doubled the depth' },
-      { value: round(h / 10), trap: 'a power of ten lost' },
-      { value: round(h * 10), trap: 'a power of ten gained' },
-      { value: round(((pk - P_ATM) * 1000) / (rho * G)), trap: 'subtracted atmospheric pressure, although the stem gives the liquid’s pressure' },
+      { value: round((rho * G) / (pk * 1000)), trap: 'the formula upside down: $\\rho g / p$' },
+      { value: round(h * 100), trap: 'gave the depth in centimetres' },
+      { value: round(h / 10), trap: 'a power of ten lost turning kPa into Pa' },
+      { value: round(pk / (rho * G)), trap: 'used the pressure in kPa instead of Pa' },
     ],
     solution: `$h = \\dfrac{p}{\\rho g} = \\dfrac{${n(pk * 1000)}}{${n(rho)} \\times 10} = ${n(h)}\\ \\text{m}$ (the pressure must be in Pa first).`,
     trap: 'Divide by ρg, not by ρ alone, and turn kPa into Pa before dividing.',
@@ -271,13 +300,14 @@ function depthFromPressureQ(rng: RNG): Generated | null {
 
 /** Total pressure at depth = atmospheric + ρgh. */
 function totalPressureQ(rng: RNG): Generated | null {
-  const [name, rho] = rng.pick(FLUIDS);
+  const fluid = rng.pick(FLUIDS);
+  const rho = fluid.rho;
   const h = rng.pick([5, 8, 10, 12, 15, 20, 25, 30, 40, 50]);
   const pk = round((rho * G * h) / 1000);
   const total = round(pk + P_ATM);
   if (pk < 20 || total > 800 || !isMult(total, 0.5)) return null;
   return pack(rng, {
-    stem: `A diver is $${n(h)}\\ \\text{m}$ below the surface of ${name} of density $${n(rho)}\\ \\text{kg m}^{-3}$. Atmospheric pressure at the surface is $100\\ \\text{kPa}$ and $g = 10\\ \\text{m s}^{-2}$.\n\nFind the total pressure on the diver, in kPa.`,
+    stem: `A diver is $${n(h)}\\ \\text{m}$ below the surface of ${fluid.a} of density $${n(rho)}\\ \\text{kg m}^{-3}$. Atmospheric pressure at the surface is $100\\ \\text{kPa}$ and $g = 10\\ \\text{m s}^{-2}$.\n\nFind the total pressure on the diver, in kPa.`,
     answer: total,
     unit: U_KPA,
     must: [
@@ -287,9 +317,10 @@ function totalPressureQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: round(pk / 2 + P_ATM), trap: 'used $\\tfrac12 \\rho g h$' },
-      { value: round(2 * pk + P_ATM), trap: 'doubled the liquid pressure' },
+      { value: round(2 * pk + P_ATM), trap: 'took the pressure at twice the depth' },
       { value: round(pk + 1), trap: 'added 1 kPa instead of 100 kPa' },
-      { value: round(pk * P_ATM), trap: 'multiplied by atmospheric pressure instead of adding it' },
+      { value: round(P_ATM - pk), trap: 'took the liquid’s pressure away from atmospheric pressure' },
+      { value: round(10 * pk + P_ATM), trap: 'a power of ten lost turning the liquid’s pressure into kPa' },
     ],
     solution: `Liquid: $\\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(pk * 1000)}\\ \\text{Pa} = ${n(pk)}\\ \\text{kPa}$. Total $= 100 + ${n(pk)} = ${n(total)}\\ \\text{kPa}$.`,
     trap: 'Total pressure includes the atmosphere pressing on the surface: p = p₀ + ρgh.',
@@ -301,7 +332,8 @@ function totalPressureQ(rng: RNG): Generated | null {
 
 /** Force on a submerged surface from the pressure of the liquid. */
 function forceOnSurfaceQ(rng: RNG): Generated | null {
-  const [name, rho] = rng.pick(FLUIDS);
+  const fluid = rng.pick(FLUIDS);
+  const rho = fluid.rho;
   const h = rng.pick([2, 3, 4, 5, 6, 8, 10, 12, 15, 20]);
   const A = rng.pick([0.02, 0.05, 0.1, 0.2, 0.25, 0.4, 0.5, 1, 2]);
   const p = rho * G * h;
@@ -309,7 +341,7 @@ function forceOnSurfaceQ(rng: RNG): Generated | null {
   if (F < 100 || F > 200000 || !isMult(F, 1)) return null;
   const what = rng.pick(['a circular window', 'an inspection panel', 'a flat hatch']);
   return pack(rng, {
-    stem: `${what.charAt(0).toUpperCase()}${what.slice(1)} of area $${n(A)}\\ \\text{m}^{2}$ is set into the side of a tank of ${name} of density $${n(rho)}\\ \\text{kg m}^{-3}$, at an average depth of $${n(h)}\\ \\text{m}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the force on it due to the pressure of the ${name} alone.`,
+    stem: `${what.charAt(0).toUpperCase()}${what.slice(1)} of area $${n(A)}\\ \\text{m}^{2}$ is set into the side of a tank of ${fluid.bare} of density $${n(rho)}\\ \\text{kg m}^{-3}$, at an average depth of $${n(h)}\\ \\text{m}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the force on it due to the pressure of the ${fluid.bare} alone.`,
     answer: F,
     unit: U_N,
     must: [
@@ -318,10 +350,10 @@ function forceOnSurfaceQ(rng: RNG): Generated | null {
       { value: round(rho * h * A), trap: 'left $g$ out of $\\rho g h$' },
     ],
     extra: [
-      { value: round(F / 2), trap: 'halved the force' },
-      { value: round(F * 2), trap: 'doubled the force' },
       { value: round((p + 100000) * A), trap: 'included atmospheric pressure, although only the liquid was asked for' },
-      { value: round(F / 1000), trap: 'slipped a factor of $10^{3}$' },
+      { value: round(F / 1000), trap: 'left the pressure in kPa when multiplying by the area' },
+      { value: round(rho * G * (h / 2) * A), trap: 'used half the depth, although the average depth was given' },
+      { value: round(p * A * 2), trap: 'counted both faces of the panel' },
     ],
     solution: `$p = \\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(p)}\\ \\text{Pa}$, so $F = pA = ${n(p)} \\times ${n(A)} = ${n(F)}\\ \\text{N}$.`,
     trap: 'Pressure is a force per unit area: multiply by the area (and only the liquid’s pressure is asked for here).',
@@ -335,14 +367,15 @@ function forceOnSurfaceQ(rng: RNG): Generated | null {
 
 /** Upthrust on a fully submerged body. */
 function upthrustQ(rng: RNG): Generated | null {
-  const [name, rho] = rng.pick(FLUIDS);
+  const fluid = rng.pick(FLUIDS);
+  const rho = fluid.rho;
   const vCm3 = rng.pick([200, 250, 400, 500, 800, 1000, 1200, 1500, 2000, 2500, 4000, 5000]);
   const V = round(vCm3 / 1e6);
   const U = round(rho * V * G);
   if (U < 1 || U > 100 || !isMult(U, 0.1)) return null;
   const rhoBody = rng.pick([7000, 8000, 9000].filter((r) => r > rho));
   return pack(rng, {
-    stem: `A metal block of volume $${n(vCm3)}\\ \\text{cm}^{3}$ and density $${n(rhoBody)}\\ \\text{kg m}^{-3}$ is held completely submerged in ${name} of density $${n(rho)}\\ \\text{kg m}^{-3}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the upthrust on the block.`,
+    stem: `A metal block of volume $${n(vCm3)}\\ \\text{cm}^{3}$ and density $${n(rhoBody)}\\ \\text{kg m}^{-3}$ is held completely submerged in ${fluid.a} of density $${n(rho)}\\ \\text{kg m}^{-3}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the upthrust on the block.`,
     answer: U,
     unit: U_N,
     must: [
@@ -351,10 +384,10 @@ function upthrustQ(rng: RNG): Generated | null {
       { value: round(rho * vCm3 * G), trap: 'left the volume in cm³' },
     ],
     extra: [
-      { value: round(U / 2), trap: 'halved the upthrust' },
-      { value: round(U * 10), trap: 'a power of ten gained in the conversion' },
-      { value: round(U / 10), trap: 'a power of ten lost in the conversion' },
+      { value: round(rho * V * G * 1000), trap: 'converted cm³ with $10^{3}$ instead of $10^{6}$' },
       { value: round(rhoBody * V * G - U), trap: 'gave the apparent weight instead of the upthrust' },
+      { value: round((rhoBody - rho) * V * G * 2), trap: 'counted the difference in densities twice' },
+      { value: round(U * 10), trap: 'a power of ten gained in the conversion' },
     ],
     solution: `Upthrust $=$ weight of liquid displaced $= \\rho_{\\text{liquid}} V g = ${n(rho)} \\times ${n(vCm3)} \\times 10^{-6} \\times 10 = ${n(U)}\\ \\text{N}$.`,
     trap: 'The upthrust uses the density of the fluid displaced, never the density of the object.',
@@ -377,10 +410,10 @@ function fractionSubmergedQ(rng: RNG): Generated | null {
     must: [
       { value: round(rhoF / rhoB), trap: 'the ratio of densities taken upside down' },
       { value: round(1 - f), trap: 'gave the fraction above the surface' },
+      { value: round(rhoB / (rhoF - rhoB)), trap: 'divided by the difference of the densities instead of the liquid’s density' },
     ],
     extra: [
-      { value: round(f / 2), trap: 'halved the fraction' },
-      { value: round((1 + f) / 2), trap: 'averaged with 1' },
+      { value: round((1 + f) / 2), trap: 'averaged the ratio with 1' },
       { value: round(f * f), trap: 'squared the ratio' },
       { value: 0.5, trap: 'assumed half of any floating body is submerged' },
     ],
@@ -409,10 +442,9 @@ function densityFromFloatQ(rng: RNG): Generated | null {
       { value: rhoF, trap: 'assumed a floating body has the density of the liquid' },
     ],
     extra: [
-      { value: round(rhoB / 2), trap: 'halved the density' },
-      { value: round(rhoB * 2), trap: 'doubled the density' },
       { value: round(rhoF * f * f), trap: 'squared the fraction' },
       { value: round(rhoF - rhoB), trap: 'subtracted instead of multiplying' },
+      { value: round((rhoF * (1 + f)) / 2), trap: 'averaged the liquid’s density with the answer' },
     ],
     solution: `Weight $=$ upthrust, so $\\rho_{\\text{block}} = ${fr} \\times ${n(rhoF)} = ${n(rhoB)}\\ \\text{kg m}^{-3}$.`,
     trap: 'A floating body’s density is the fraction submerged times the liquid’s density; dividing gives a body denser than the liquid, which would sink.',
@@ -445,8 +477,8 @@ function apparentWeightQ(rng: RNG): Generated | null {
     extra: [
       { value: round(mKg - U), trap: 'mixed a mass in kg with a force in N' },
       { value: round(W - U / 10), trap: 'a power of ten lost in the volume conversion' },
-      { value: round(app / 2), trap: 'halved the reading' },
-      { value: round(W - rhoB * V * G), trap: 'used the block’s own density in the upthrust' },
+      { value: round(W - U / 1000), trap: 'used a density of $1\\ \\text{kg m}^{-3}$ for the water' },
+      { value: round(W - 2 * U), trap: 'subtracted the upthrust twice' },
     ],
     solution: `Weight $= ${n(mKg)} \\times 10 = ${n(W)}\\ \\text{N}$; upthrust $= 1000 \\times ${n(vCm3)} \\times 10^{-6} \\times 10 = ${n(U)}\\ \\text{N}$. Reading $= ${n(W)} - ${n(U)} = ${n(app)}\\ \\text{N}$.`,
     trap: 'Apparent weight = true weight − upthrust, and the upthrust uses the water’s density, not the block’s.',
@@ -484,8 +516,8 @@ function hydraulicQ(rng: RNG, ask: 'force' | 'distance'): Generated | null {
       extra: [
         { value: round(F1 * a2), trap: 'multiplied by the large area instead of the ratio of areas' },
         { value: round(F1 * (k - 1)), trap: 'off by one in the ratio of areas' },
-        { value: round(F2 / 2), trap: 'halved the force' },
-        { value: round(F2 * 2), trap: 'doubled the ratio of areas' },
+        { value: round(F1 * (k + 1)), trap: 'off by one in the ratio of areas the other way' },
+        { value: round(F1 * a2 - F1 * a1), trap: 'used the difference of the areas instead of their ratio' },
       ],
       solution: `The pressure is the same on both pistons, so $F_2 = F_1 \\times \\dfrac{A_2}{A_1} = ${n(F1)} \\times ${n(k)} = ${n(F2)}\\ \\text{N}$ (the ratio of areas needs no unit conversion).`,
       trap: 'The force is multiplied by the ratio of the areas — the larger piston always gives the larger force.',
@@ -501,13 +533,13 @@ function hydraulicQ(rng: RNG, ask: 'force' | 'distance'): Generated | null {
     must: [
       { value: round(d1 * k), trap: 'the area ratio used upside down: the large piston moves less, not more' },
       { value: d1, trap: 'assumed both pistons move the same distance' },
+      { value: round(d1 / a2), trap: 'divided by the large area instead of the ratio of areas' },
     ],
     extra: [
       { value: round(d1 / (k - 1)), trap: 'off by one in the ratio of areas' },
-      { value: round(d1 / 2), trap: 'halved the distance' },
+      { value: round(d1 / (k + 1)), trap: 'off by one in the ratio of areas the other way' },
+      { value: round(d2 * 10), trap: 'gave the answer in mm, not cm' },
       { value: round(d2 / 10), trap: 'a power of ten lost' },
-      { value: round(d2 * 2), trap: 'doubled the distance' },
-      { value: round(d1 / a2), trap: 'divided by the large area instead of the ratio of areas' },
     ],
     solution: `The liquid is incompressible, so the volumes swept are equal: $A_1 d_1 = A_2 d_2$, giving $d_2 = \\dfrac{${n(d1)}}{${n(k)}} = ${n(d2)}\\ \\text{cm}$.`,
     trap: 'The press multiplies force but not energy: the large piston moves as many times less as the force is times bigger.',
@@ -531,13 +563,13 @@ function alloyQ(rng: RNG): Generated | null {
     answer: rho,
     unit: U_RHO,
     must: [
-      { value: round((r1 + r2) / 2, ), trap: 'averaged the two densities, ignoring the volumes' },
+      { value: round((r1 + r2) / 2), trap: 'averaged the two densities, ignoring the volumes' },
       { value: round((r1 * v2 + r2 * v1) / (v1 + v2)), trap: 'paired each density with the other metal’s volume' },
       { value: round(r1 + r2), trap: 'added the densities' },
     ],
     extra: [
       { value: round((r1 * v1 + r2 * v2) / 1000), trap: 'divided by 1000 instead of the total volume' },
-      { value: round(rho / 2), trap: 'halved the result' },
+      { value: Math.abs(r1 - r2), trap: 'subtracted the densities' },
       { value: Math.max(r1, r2), trap: 'took the denser metal’s density' },
       { value: Math.min(r1, r2), trap: 'took the lighter metal’s density' },
     ],

@@ -1,5 +1,5 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
-import { E, Exact, rat } from '../../core/exact';
+import { E, Exact, rat, ratSub, R1 } from '../../core/exact';
 import { buildOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import { poly } from '../../core/gen-utils';
@@ -11,7 +11,10 @@ import type { RNG } from '../../core/rng';
  * Level 2: (3x − 2)⁴ at x = 1 → 12; (1 − 2x)⁵ at x = 0 → −10
  * Level 3: √(x² + 9) at x = 4 → 4/5; 1/(2x + 1)² at x = 0 → −4; √(4x + 1) at x = 2 → 2/3
  * Level 4: (x² − 3)³ at x = 2 → 12; 1/(x² + 1) at x = 1 → −1/2; (x³ + 1)² at x = 1
- * Level 5: (2√x − 1)² at x = 4 → 3; (x + 1/x)² at x = 1 → 0; (x³ + 19)^{1/3} at x = 2 → 4/9; (x² + 9)^{3/2} at x = 4 → 60
+ * Level 5: (2√x − 1)² at x = 4 → 3; (x + 1/x)² at x = 2 → 15/4; (x³ + 19)^{1/3} at x = 2 → 4/9; (x² + 9)^{3/2} at x = 4 → 60
+ *
+ * Parameters with du/dx = 0 at x0 are rejected: there four of the mistake modes collapse
+ * onto the answer (which is then 0) and the option list would have to be padded.
  */
 
 /** A term c·x^p of the inner function. Powers used: 0, 1, 2, 3, 1/2, −1 (all exactly representable). */
@@ -30,11 +33,19 @@ function attempt(f: () => Exact): Exact | null {
 
 type Cand = { value: Exact | null; trap: string };
 
-function cleanOnly(ds: Cand[]): Distractor[] {
-  return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
+function cleanOnly(ds: Cand[], maxAbs: number): Distractor[] {
+  return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null
+    && Number.isFinite(d.value.toNumber())
+    && Math.abs(d.value.toNumber()) <= maxAbs
+    && isCleanExact(d.value).ok);
 }
 
-/** Every distinct `must` candidate is used before any `extra` one, so the headline traps are never shuffled out. */
+/**
+ * Every distinct `must` candidate is used before any `extra` one, so the headline traps are
+ * never shuffled out; the rest are then drawn alternately from above and below the answer, so
+ * the answer lands in the middle of the sorted option list as often as at either end and
+ * "pick the largest" is never a winning strategy.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
@@ -44,14 +55,22 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const pool = rng.shuffle(extra);
+  const grab = (s: -1 | 1) => pool.find((d) => d.value.cmp(answer) === s && !seen.some((x) => x.equals(d.value)));
+  while (out.length < count) {
+    const above = out.filter((d) => d.value.cmp(answer) > 0).length;
+    const wanted: -1 | 1 = above * 2 <= out.length ? 1 : -1;
+    const d = grab(wanted) ?? grab(wanted === 1 ? -1 : 1);
+    if (!d) break;
+    take(d);
+  }
   return out;
 }
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix of variants. */
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
   const f = rng.pick(fns);
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 60; i++) {
     const g = f(rng);
     if (g) return g;
   }
@@ -83,14 +102,17 @@ function innerDeriv(c: Composite): Exact {
 
 /**
  * dy/dx at x0, or the value a specific mistake produces:
- *  ok         coef · (n/d) · u^(n/d − 1) · u'
- *  no-inner   coef · (n/d) · u^(n/d − 1)          (forgot the inner derivative)
- *  no-lower   coef · (n/d) · u^(n/d) · u'         (did not lower the power)
- *  no-power   coef · u^(n/d − 1) · u'             (forgot to multiply by the power — for √u this is the ½ dropped)
- *  inner-only coef · u'                           (differentiated the inside only)
- *  value      y itself
+ *  ok          coef · (n/d) · u^(n/d − 1) · u'
+ *  no-inner    coef · (n/d) · u^(n/d − 1)              (forgot the inner derivative)
+ *  no-lower    coef · (n/d) · u^(n/d) · u'             (did not lower the power)
+ *  no-power    coef · u^(n/d − 1) · u'                 (forgot to multiply by the power — for √u the ½ dropped)
+ *  inner-only  coef · u'                               (differentiated the inside only)
+ *  value       y itself
+ *  du-twice    coef · (n/d) · u^(n/d − 1) · u'²        (chain rule applied twice)
+ *  lower-twice coef · (n/d) · u^(n/d − 2) · u'         (lowered the power by two)
+ *  second      coef · (n/d)(n/d − 1) · u^(n/d − 2) · u'²  (d²y/dx²)
  */
-type Mode = 'ok' | 'no-inner' | 'no-lower' | 'no-power' | 'inner-only' | 'value';
+type Mode = 'ok' | 'no-inner' | 'no-lower' | 'no-power' | 'inner-only' | 'value' | 'du-twice' | 'lower-twice' | 'second';
 
 function chain(c: Composite, mode: Mode): Exact | null {
   return attempt(() => {
@@ -99,12 +121,16 @@ function chain(c: Composite, mode: Mode): Exact | null {
     const du = innerDeriv(c);
     const p = rat(n, d);
     const pm1 = rat(n - d, d);
+    const pm2 = rat(n - 2 * d, d);
     switch (mode) {
       case 'value': return u.powRat(p).mulRat(c.coef);
       case 'no-inner': return u.powRat(pm1).mulRat(p).mulRat(c.coef);
       case 'no-lower': return u.powRat(p).mulRat(p).mul(du).mulRat(c.coef);
       case 'no-power': return u.powRat(pm1).mul(du).mulRat(c.coef);
       case 'inner-only': return du.mulRat(c.coef);
+      case 'du-twice': return u.powRat(pm1).mulRat(p).mul(du).mul(du).mulRat(c.coef);
+      case 'lower-twice': return u.powRat(pm2).mulRat(p).mul(du).mulRat(c.coef);
+      case 'second': return u.powRat(pm2).mulRat(p).mulRat(ratSub(p, R1)).mul(du).mul(du).mulRat(c.coef);
       default: return u.powRat(pm1).mulRat(p).mul(du).mulRat(c.coef);
     }
   });
@@ -180,21 +206,34 @@ interface ChainOpts {
 }
 
 function chainQ(rng: RNG, c: Composite, o: ChainOpts): Generated | null {
+  // A vanishing inner derivative collapses no-power, no-lower, inner-only and the answer onto 0:
+  // the option list would then be three-quarters generic padding, so redraw instead.
+  const du = innerDeriv(c);
+  if (du.isZero()) return null;
   const answer = chain(c, 'ok');
-  if (!answer || !isCleanExact(answer).ok) return null;
-  if (Math.abs(answer.toNumber()) > (o.maxAbs ?? 250)) return null;
+  if (!answer || answer.isZero() || !isCleanExact(answer).ok) return null;
+  const maxAbs = o.maxAbs ?? 250;
+  if (Math.abs(answer.toNumber()) > maxAbs) return null;
+  // Keep every distractor within a believable factor of the answer (no 3-orders-of-magnitude options).
+  const cap = Math.max(30, 12 * Math.abs(answer.toNumber()));
   const isRoot = c.power[1] !== 1;
   const must = cleanOnly([
     { value: chain(c, 'no-inner'), trap: 'forgot to multiply by the derivative of the inside' },
     { value: chain(c, 'no-power'), trap: isRoot ? 'the ½ (or the fractional power) was dropped: d/du(√u) = 1/(2√u)' : 'forgot to multiply by the power' },
-  ]);
+  ], cap);
   const extra = cleanOnly([
     { value: chain(c, 'no-lower'), trap: 'did not lower the power' },
     { value: answer.neg(), trap: 'sign of the inner derivative (or of the negative power) lost' },
     { value: chain(c, 'value'), trap: 'evaluated y instead of dy/dx' },
     { value: chain(c, 'inner-only'), trap: 'differentiated the inside only' },
+    { value: chain(c, 'du-twice'), trap: 'multiplied by the derivative of the inside twice' },
+    { value: chain(c, 'second'), trap: 'differentiated a second time: this is d²y/dx²' },
+    { value: chain(c, 'lower-twice'), trap: 'lowered the power by two instead of by one' },
     ...(o.extra ?? []),
-  ]);
+  ], cap);
+  const ds = ranked(rng, answer, must, extra);
+  // Four named mistakes or nothing: buildOptions must never have to pad this template.
+  if (ds.length < 4) return null;
   const fTex = compositeTex(c);
   const stem = rng.bool(0.5)
     ? `Find the gradient of the curve $y = ${fTex}$ at the point where $x = ${c.x0}$.`
@@ -202,8 +241,8 @@ function chainQ(rng: RNG, c: Composite, o: ChainOpts): Generated | null {
   return {
     stem,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
-    options: buildOptions(rng, answer, ranked(rng, answer, must, extra), FR),
-    solution: `${o.step} By the chain rule $\\frac{dy}{dx} = ${c.coef === 1 ? powerWord(c.power) : `${c.coef} \\times ${c.power[0] < 0 ? `\\left(${powerWord(c.power)}\\right)` : powerWord(c.power)}`}${uPow(c.power)} \\times \\frac{du}{dx}$; at $x = ${c.x0}$, $u = ${innerValue(c).toLatex(FR)}$ and $\\frac{du}{dx} = ${innerDeriv(c).toLatex(FR)}$, giving $${answer.toLatex(FR)}$.`,
+    options: buildOptions(rng, answer, ds, FR),
+    solution: `${o.step} By the chain rule $\\frac{dy}{dx} = ${c.coef === 1 ? powerWord(c.power) : `${c.coef} \\times ${c.power[0] < 0 ? `\\left(${powerWord(c.power)}\\right)` : powerWord(c.power)}`}${uPow(c.power)} \\times \\frac{du}{dx}$; at $x = ${c.x0}$, $u = ${innerValue(c).toLatex(FR)}$ and $\\frac{du}{dx} = ${du.toLatex(FR)}$, giving $${answer.toLatex(FR)}$.`,
     trap: 'Chain rule: bring the power down, lower it by one, then multiply by the derivative of the inside (do not forget that last factor).',
     tags: ['differentiation', 'chain-rule', ...o.tags],
     params: { inner: c.inner, power: c.power, coef: c.coef, x0: c.x0, variant: o.variant },
@@ -217,8 +256,12 @@ function linearAt(a: number, b: number, u: number, maxX = 4): number | null {
   return Number.isInteger(x0) && Math.abs(x0) <= maxX ? x0 : null;
 }
 
-/** The linear inside ax + b, written b − |a|x when a is negative (as the exam prints it). */
+/**
+ * The linear inside ax + b, written b − |a|x when a is negative (as the exam prints it).
+ * A negative a therefore needs a positive b, or the bracket reads "(-3 - 2x)", which no exam sets.
+ */
 const linInner = (a: number, b: number): Term[] => (a < 0 ? [[b, 0], [a, 1]] : [[a, 1], [b, 0]]);
+const linReads = (a: number, b: number) => a > 0 || b > 0;
 const linTex = (a: number, b: number) => innerTex(linInner(a, b));
 const linStep = (a: number, b: number) => `Let $u = ${linTex(a, b)}$, so $\\frac{du}{dx} = ${a}$.`;
 const quadStep = (b: number, c: number) => `Let $u = ${poly([1, b, c])}$, so $\\frac{du}{dx} = ${poly([2, b])}$.`;
@@ -228,12 +271,15 @@ const quadStep = (b: number, c: number) => `Let $u = ${poly([1, b, c])}$, so $\\
 function linearPowerQ(rng: RNG, n: number): Generated | null {
   const a = rng.pick([1, 2, 2, 3, -1, -2, 4]);
   const b = rng.nonZeroInt(-3, 3);
-  const u = rng.pick(n >= 4 ? [1, -1, 2, -2] : [1, -1, 2, -2, 3]);
+  if (!linReads(a, b)) return null;
+  // |u| = 2 or 3 keeps "did not lower the power" (answer × u) away from ±answer.
+  const u = rng.weighted(n >= 4 ? [2, -2, 1, -1] : [2, -2, 3, -3, 1, -1], n >= 4 ? [3, 3, 1, 1] : [3, 3, 2, 2, 1, 1]);
+  // With |a| = 1 and |u| = 1 every mistake mode gives ±1 × the answer: nothing is being tested.
+  if (Math.abs(a) === 1 && Math.abs(u) === 1) return null;
   const x0 = linearAt(a, b, u);
   if (x0 === null) return null;
   return chainQ(rng, { inner: linInner(a, b), power: [n, 1], coef: 1, x0 }, {
     variant: 'linear-power', tags: ['integer-power'], step: linStep(a, b),
-    extra: [{ value: E(n * a * u ** (n - 2) * (n - 1)), trap: 'differentiated twice' }],
   });
 }
 
@@ -255,6 +301,7 @@ function sqrtQuadQ(rng: RNG): Generated | null {
 function reciprocalLinearQ(rng: RNG): Generated | null {
   const a = rng.pick([1, 2, 2, 3, -1, -2, 4]);
   const b = rng.nonZeroInt(-3, 3);
+  if (!linReads(a, b)) return null;
   const u = rng.pick([1, -1, 2, -2]);
   const x0 = linearAt(a, b, u);
   if (x0 === null) return null;
@@ -268,6 +315,7 @@ function reciprocalLinearQ(rng: RNG): Generated | null {
 function sqrtLinearQ(rng: RNG): Generated | null {
   const a = rng.pick([2, 3, 4, 4, 5, 6, 8, -2, -4]);
   const b = rng.nonZeroInt(-5, 9);
+  if (!linReads(a, b)) return null;
   const s = rng.pick([1, 2, 3, 3, 4, 5]);
   const x0 = linearAt(a, b, s * s, 6);
   if (x0 === null) return null;
@@ -304,7 +352,6 @@ function cubicSquareQ(rng: RNG): Generated | null {
   if (c === 0 || Math.abs(c) > 10) return null;
   return chainQ(rng, { inner: [[1, 3], [c, 0]], power: [2, 1], coef: 1, x0 }, {
     variant: 'cubic-square', tags: ['integer-power'], step: `Let $u = ${poly([1, 0, 0, c])}$, so $\\frac{du}{dx} = 3x^{2}$.`,
-    extra: [{ value: E(2 * (x0 ** 3 + c) * 3 * x0 * x0 + 1), trap: 'arithmetic slip' }],
   });
 }
 
@@ -322,10 +369,10 @@ function sqrtInsideSquareQ(rng: RNG): Generated | null {
 }
 
 function xPlusInverseQ(rng: RNG): Generated | null {
-  // (ax + b/x)² at x0
+  // (ax + b/x)² at x0; chainQ rejects the draws with du/dx = 0 (a = b, x0 = 1)
   const a = rng.pick([1, 1, 2]);
   const b = rng.pick([1, 1, -1, 2]);
-  const x0 = rng.pick([1, 1, 2]);
+  const x0 = rng.pick([1, 2, 2]);
   if (a * x0 + b / x0 === 0) return null;
   return chainQ(rng, { inner: [[a, 1], [b, -1]], power: [2, 1], coef: 1, x0 }, {
     variant: 'x-plus-inverse', tags: ['negative-power'], step: `Let $u = ${innerTex([[a, 1], [b, -1]])}$, so $\\frac{du}{dx} = ${a} ${b > 0 ? '-' : '+'} \\frac{${Math.abs(b)}}{x^{2}}$.`,
@@ -354,6 +401,7 @@ function inverseSqrtQ(rng: RNG): Generated | null {
   // 1/√(ax + b) at x0 with ax0 + b = s²: gradient −a/(2s³)
   const a = rng.pick([2, 3, 4, 4, 6, 8, -2]);
   const b = rng.nonZeroInt(-4, 9);
+  if (!linReads(a, b)) return null;
   const s = rng.pick([1, 2, 2, 3, 4]);
   const x0 = linearAt(a, b, s * s, 6);
   if (x0 === null) return null;
@@ -386,7 +434,7 @@ export default defineTemplate({
     2: '(3x − 2)⁴ at x = 1; (1 − 2x)⁵ at x = 0',
     3: '√(x² + 9) at x = 4; 1/(2x + 1)² at x = 0; √(4x + 1) at x = 2',
     4: '(x² − 3)³ at x = 2; 1/(x² + 1) at x = 1; (x³ + 1)² at x = 1',
-    5: '(2√x − 1)² at x = 4; (x + 1/x)² at x = 1; (x³ + 19)^{1/3} at x = 2; (x² + 9)^{3/2} at x = 4',
+    5: '(2√x − 1)² at x = 4; (x + 1/x)² at x = 2; (x³ + 19)^{1/3} at x = 2; (x² + 9)^{3/2} at x = 4',
   },
   generate(rng, level: Level) {
     return retry(rng, () => {

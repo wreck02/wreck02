@@ -175,11 +175,18 @@ function chooseQ(rng: RNG): Generated | null {
   const n = rng.int(5, 8);
   const r = rng.pick([2, 3].filter((v) => v <= n - 2));
   const answer = nCr(n, r);
-  const stem = rng.pick([
-    `In how many ways can a team of ${WORDS[r]} be chosen from ${WORDS[n]} players?`,
-    `A group of ${WORDS[r]} pupils is to be chosen from a class of ${WORDS[n]}. How many different groups are possible?`,
-    `How many different ${r}-topping pizzas can be made from ${WORDS[n]} available toppings?`,
-  ]);
+  // Contexts the neighbouring counting template does not use (it owns teams, committees,
+  // books and pizza toppings), so a session drawing both never looks like it repeated itself.
+  const pairStems = [
+    `Every one of ${WORDS[n]} people at a meeting shakes hands once with each of the others. How many handshakes take place?`,
+    `A flag is made from ${WORDS[r]} of ${WORDS[n]} available colours. How many different pairs of colours can be chosen?`,
+  ];
+  const anyStems = [
+    `A quiz has ${WORDS[n]} questions and each candidate must answer exactly ${WORDS[r]} of them. In how many ways can the questions be chosen?`,
+    `${cap(WORDS[r])} different flavours are to be chosen from ${WORDS[n]} flavours of ice cream. How many different choices are possible?`,
+    `A tasting menu offers ${WORDS[n]} small dishes and a diner may keep ${WORDS[r]} of them. In how many ways can the ${WORDS[r]} dishes be chosen?`,
+  ];
+  const stem = rng.pick(r === 2 ? [...pairStems, ...anyStems] : anyStems);
   return {
     stem,
     answer: { kind: 'exact', value: E(answer) },
@@ -234,7 +241,13 @@ function committeeQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 3
 
-const REPEAT_WORDS = ['LEVEL', 'APPLE', 'TOTAL', 'ERROR', 'RADAR', 'ADDED', 'BANANA', 'LETTER', 'COMMON', 'PEPPER', 'MAXIMA', 'SPEED'];
+/** Words of at most seven letters (so verify can enumerate every permutation) with at least one repeat. */
+const REPEAT_WORDS = [
+  'LEVEL', 'APPLE', 'TOTAL', 'ERROR', 'RADAR', 'ADDED', 'SPEED', 'GREEN', 'FLOOR', 'TEETH',
+  'BANANA', 'LETTER', 'COMMON', 'PEPPER', 'MAXIMA', 'DEGREE', 'MIRROR', 'CANNON', 'EFFECT',
+  'SUMMER', 'TUNNEL', 'YELLOW', 'CARROT', 'BOTTLE', 'MAMMAL', 'ASSESS',
+  'SUCCESS', 'MINIMUM', 'ADDRESS', 'BALLOON', 'LETTERS', 'ELEMENT',
+];
 
 function repeatsQ(rng: RNG): Generated | null {
   const word = rng.pick(REPEAT_WORDS);
@@ -267,28 +280,89 @@ function repeatsQ(rng: RNG): Generated | null {
   };
 }
 
+type BlockMode = 'pair' | 'apart' | 'triple' | 'ends';
+
 function togetherQ(rng: RNG): Generated | null {
+  const mode = rng.pick(['pair', 'apart', 'triple', 'ends'] as BlockMode[]);
   const n = rng.int(4, 6);
-  const answer = 2 * factorial(n - 1);
-  const stem = rng.bool(0.5)
-    ? `${cap(WORDS[n])} people stand in a line. In how many of the arrangements are two particular people standing next to each other?`
-    : `${cap(WORDS[n])} different books are arranged on a shelf. In how many arrangements are two particular books next to each other?`;
+  const people = rng.bool(0.5);
+  const who = people ? 'people' : 'books';
+  const intro = people
+    ? `${cap(WORDS[n])} people stand in a line.`
+    : `${cap(WORDS[n])} different books are arranged in a row on a shelf.`;
+  const two = people ? 'two particular people' : 'two particular books';
+  const three = people ? 'three particular people' : 'three particular books';
+  const f = factorial;
+  let answer: number;
+  let ask: string;
+  let solution: string;
+  let must: { value: number | null; trap: string }[];
+  let extra: { value: number | null; trap: string }[];
+  if (mode === 'pair') {
+    answer = 2 * f(n - 1);
+    ask = `In how many of the arrangements are ${two} next to each other?`;
+    solution = `Tie the pair together as one object: $${n - 1}$ objects arrange in $${n - 1}! = ${f(n - 1)}$ ways, and the pair itself in $2$ ways, giving $2 \\times ${f(n - 1)} = ${answer}$.`;
+    must = [
+      { value: f(n - 1), trap: 'forgot that the pair can be in two orders' },
+      { value: f(n), trap: 'ignored the restriction' },
+      { value: f(n) - 2 * f(n - 1), trap: 'found the arrangements with the pair apart' },
+    ];
+    extra = [
+      { value: 2 * f(n), trap: 'doubled n! instead of (n−1)!' },
+      { value: f(n - 2) * 2, trap: 'treated the block as two removed objects' },
+      { value: f(n) / 2, trap: 'halved n!' },
+    ];
+  } else if (mode === 'apart') {
+    answer = f(n) - 2 * f(n - 1);
+    ask = `In how many of the arrangements are ${two} <em>not</em> next to each other?`.replace('<em>not</em>', 'not');
+    solution = `All $${n}! = ${f(n)}$ arrangements minus the $2 \\times ${n - 1}! = ${2 * f(n - 1)}$ with the pair together: $${f(n)} - ${2 * f(n - 1)} = ${answer}$.`;
+    must = [
+      { value: 2 * f(n - 1), trap: 'counted the arrangements with the pair together instead' },
+      { value: f(n), trap: 'ignored the restriction' },
+      { value: f(n) - f(n - 1), trap: 'forgot the 2 orders inside the block when subtracting' },
+    ];
+    extra = [
+      { value: f(n - 1), trap: 'used $(n-1)!$ for the block and stopped there' },
+      { value: f(n) / 2, trap: 'halved n!, as if the two orders split the arrangements evenly' },
+      { value: f(n - 2) * 2, trap: 'treated the pair as two removed objects' },
+    ];
+  } else if (mode === 'triple') {
+    answer = 6 * f(n - 2);
+    ask = `In how many of the arrangements are ${three} all standing together?`.replace('all standing together', people ? 'all standing together' : 'all next to each other');
+    solution = `Tie the three together as one object: $${n - 2}$ objects arrange in $${n - 2}! = ${f(n - 2)}$ ways and the block itself in $3! = 6$ ways, giving $6 \\times ${f(n - 2)} = ${answer}$.`;
+    must = [
+      { value: f(n - 2), trap: 'forgot the $3!$ orders inside the block' },
+      { value: 2 * f(n - 2), trap: 'used $2!$ instead of $3!$ inside the block' },
+      { value: f(n), trap: 'ignored the restriction' },
+    ];
+    extra = [
+      { value: f(n) - 6 * f(n - 2), trap: 'found the arrangements that are not all together' },
+      { value: 6 * f(n - 1), trap: 'kept all n objects as well as the block' },
+      { value: 3 * f(n - 2), trap: 'used 3 rather than $3!$ for the block' },
+    ];
+  } else {
+    answer = 2 * f(n - 2);
+    ask = `In how many of the arrangements are ${two} at the two ends of the ${people ? 'line' : 'row'}?`;
+    solution = `The two ends can be filled by the pair in $2$ ways, and the remaining $${n - 2}$ ${who} arrange in $${n - 2}! = ${f(n - 2)}$ ways: $2 \\times ${f(n - 2)} = ${answer}$.`;
+    must = [
+      { value: f(n - 2), trap: 'forgot that the two ends can be swapped' },
+      { value: 2 * f(n - 1), trap: 'fixed only one end and arranged the rest' },
+      { value: f(n), trap: 'ignored the restriction' },
+    ];
+    extra = [
+      { value: f(n) - 2 * f(n - 2), trap: 'found the arrangements that do not satisfy the condition' },
+      { value: f(n - 1), trap: 'fixed one end and forgot the second' },
+      { value: 2 * f(n), trap: 'doubled n! instead of (n−2)!' },
+    ];
+  }
   return {
-    stem,
+    stem: `${intro} ${ask}`,
     answer: { kind: 'exact', value: E(answer) },
-    options: countOptions(rng, answer, [
-      { value: factorial(n - 1), trap: 'forgot that the pair can be in two orders' },
-      { value: factorial(n), trap: 'ignored the restriction' },
-      { value: factorial(n) - 2 * factorial(n - 1), trap: 'found the arrangements with the pair apart' },
-    ], [
-      { value: 2 * factorial(n), trap: 'doubled n! instead of (n−1)!' },
-      { value: factorial(n - 2) * 2, trap: 'treated the block as two removed objects' },
-      { value: factorial(n) / 2, trap: 'halved n!' },
-    ]),
-    solution: `Tie the pair together as one object: $${n - 1}$ objects arrange in $${n - 1}! = ${factorial(n - 1)}$ ways, and the pair itself in $2$ ways, giving $2 \\times ${factorial(n - 1)} = ${answer}$.`,
-    trap: 'Treat the pair as a single block, then multiply by 2! for the order inside the block.',
+    options: countOptions(rng, answer, must, extra),
+    solution,
+    trap: 'Treat the restricted objects as a block, then multiply by the arrangements inside the block.',
     tags: ['counting', 'permutations', 'block'],
-    params: { variant: 'together', n },
+    params: { variant: 'together', n, mode },
     typedAllowed: true,
   };
 }
@@ -378,11 +452,11 @@ function gridQ(rng: RNG): Generated | null {
   if (a + b > 8) return null;
   const answer = nCr(a + b, a);
   return {
-    stem: `A counter starts at the bottom-left corner of a grid of squares that is $${a}$ squares wide and $${b}$ squares tall. Each move takes it one square right or one square up. In how many different ways can it reach the top-right corner?`,
+    stem: `A counter moves along the lines of a grid that is $${a}$ units wide and $${b}$ units tall, starting at the bottom-left corner. Each move takes it one unit right or one unit up. In how many different ways can it reach the top-right corner?`,
     answer: { kind: 'exact', value: E(answer) },
     options: countOptions(rng, answer, [
       { value: factorial(a + b), trap: 'treated the moves as all different: $(a+b)!$' },
-      { value: a * b, trap: 'multiplied the two side lengths' },
+      { value: nCr(a + b, b), trap: 'chose which moves are ups but then counted the rights as well' },
       { value: 2 ** (a + b), trap: 'allowed a free choice of direction at every step' },
       { value: nCr(a + b, a) * 2, trap: 'doubled for "right or up"' },
     ], [
@@ -498,8 +572,23 @@ export default defineTemplate({
       case 'repeats':
         return got === countDistinctArrangements(letters(p.word!));
       case 'together': {
-        const items = Array.from({ length: p.n! }, (_, i) => String(i));
-        return got === countPermutations(items, (perm) => Math.abs(perm.indexOf('0') - perm.indexOf('1')) === 1);
+        const n = p.n!;
+        const items = Array.from({ length: n }, (_, i) => String(i));
+        const at = (perm: string[], k: number) => perm.indexOf(String(k));
+        const pred = p.mode === 'apart'
+          ? (perm: string[]) => Math.abs(at(perm, 0) - at(perm, 1)) !== 1
+          : p.mode === 'triple'
+            ? (perm: string[]) => {
+              const ps = [at(perm, 0), at(perm, 1), at(perm, 2)];
+              return Math.max(...ps) - Math.min(...ps) === 2;
+            }
+            : p.mode === 'ends'
+              ? (perm: string[]) => {
+                const ps = [at(perm, 0), at(perm, 1)].sort((x, y) => x - y);
+                return ps[0] === 0 && ps[1] === n - 1;
+              }
+              : (perm: string[]) => Math.abs(at(perm, 0) - at(perm, 1)) === 1;
+        return got === countPermutations(items, pred);
       }
       case 'at-least-one': {
         const { nb, ng, r } = p as { nb: number; ng: number; r: number };

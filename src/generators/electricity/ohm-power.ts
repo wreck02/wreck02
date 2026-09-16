@@ -8,8 +8,8 @@ import type { RNG } from '../../core/rng';
  * V = IR and the three power formulas (P = VI = I²R = V²/R), plus E = Pt.
  * Level 1: V = IR, I = V/R, R = V/I and P = VI with clean numbers
  * Level 2: P = I²R and P = V²/R (values chosen so the power is a whole number of watts)
- * Level 3: E = Pt in J or kJ (the time is always in minutes, so a conversion is always needed);
- *          the current an appliance draws from a 12 V, 24 V or 240 V supply
+ * Level 3: E = Pt in J or kJ (the time is always in minutes, so a conversion is always needed), either
+ *          from a stated power or from V and I; the current an appliance draws from a 12/24/240 V supply
  * Level 4: the resistance of a lamp from its rating (60 W, 240 V → 960 Ω); I = √(P/R); heat in a resistor in t s
  * Level 5: ratios — P ∝ V² when the supply p.d. changes, R ∝ V²/P for two lamps (answer a fraction),
  *          and the power dissipated in one resistor of a series pair
@@ -357,6 +357,7 @@ function powerI2RQ(rng: RNG): Generated | null {
       { value: val(2 * I * R), trap: 'doubled the current instead of squaring it' },
       { value: val((I * I) / R), trap: 'divided by R instead of multiplying' },
       { value: val(I * I * R * R), trap: 'squared the resistance as well as the current' },
+      { value: val(I * I), trap: 'squared the current but forgot to multiply by the resistance' },
     ],
     spare: [
       { value: val(2 * P), trap: 'doubled the power' },
@@ -389,6 +390,10 @@ function powerV2RQ(rng: RNG): Generated | null {
       { value: val(V * V), trap: 'squared the p.d. but forgot to divide by the resistance' },
       { value: val((V * V) / (R * R)), trap: 'squared the resistance as well' },
       { value: val((2 * V) / R), trap: 'doubled the p.d. instead of squaring it' },
+      { value: val(V * V * R), trap: 'multiplied by the resistance instead of dividing by it' },
+      { value: val(R / V), trap: 'inverted the fraction: divided the resistance by the p.d.' },
+      { value: val(R), trap: 'quoted the resistance as the power' },
+      { value: val(V), trap: 'quoted the supply p.d. as the power' },
     ],
     spare: [
       { value: val(2 * P), trap: 'doubled the power' },
@@ -438,6 +443,7 @@ function energyPtQ(rng: RNG): Generated | null {
       { value: overshoot ? val(Ej * scale * 60) : null, trap: 'multiplied by 60 once too often' },
       { value: val((P + t) * scale), trap: 'added the power and the time instead of multiplying' },
       { value: inKW ? val(Pstated * t * scale) : null, trap: 'left the power in kilowatts instead of converting it to watts' },
+      { value: inKJ ? val(Ej / 100) : null, trap: 'divided the joules by 100 instead of 1000 to reach kilojoules' },
     ],
     spare: [
       { value: val(2 * Ej * scale), trap: 'doubled the energy' },
@@ -451,6 +457,46 @@ function energyPtQ(rng: RNG): Generated | null {
       : 'E = Pt needs the time in seconds: multiply the minutes by 60 first, and only once.',
     tags: ['energy', 'power', 'time'],
     params: { variant: 'energy-pt', P, t, inKJ },
+  });
+}
+
+/** E = Pt where the power has to come from VI first: the richest source of named slips at this level. */
+function energyVItQ(rng: RNG): Generated | null {
+  const V = rng.pick([6, 9, 12, 20, 24, 50, 100, 120, 240]);
+  const I = rng.pick([0.5, 1.5, 2, 2.5, 3, 4, 5]);
+  const tStated = rng.pick([1, 2, 3, 5, 10]);
+  const t = tStated * 60;
+  const P = r(V * I);
+  const Ej = r(P * t);
+  if (!Number.isInteger(P) || P < 6 || P > 3000) return null;
+  if (Ej < 500 || Ej > 3e6) return null;
+  const inKJ = Ej >= 10000;
+  const scale = inKJ ? 1 / 1000 : 1;
+  const answer = val(Ej * scale);
+  if (!answer) return null;
+  const d = deviceFor(rng, V, P);
+  const tText = `${tStated} minute${tStated === 1 ? '' : 's'}`;
+  return pack(rng, {
+    stem: `${d.subject} draws a current of ${n(I)} A from ${supply(V)}. Find the energy it transfers in ${tText}, in ${inKJ ? 'kJ' : 'J'}.`,
+    answer,
+    unit: inKJ ? U_KJ : U_J,
+    must: [
+      { value: val(P * tStated * scale), trap: 'left the time in minutes instead of converting it to seconds' },
+      { value: val(V * I * I * t * scale), trap: 'used P = VI² instead of P = VI' },
+    ],
+    extra: [
+      { value: val(I * t * scale), trap: 'forgot the p.d. — that product is the charge in coulombs' },
+      { value: val(V * t * scale), trap: 'forgot the current' },
+      { value: val((V / I) * t * scale), trap: 'divided the p.d. by the current instead of multiplying' },
+    ],
+    spare: [
+      { value: val(2 * Ej * scale), trap: 'doubled the energy' },
+      { value: val((Ej * scale) / 2), trap: 'halved the energy' },
+    ],
+    solution: `$P = VI = ${V} \\times ${n(I)} = ${n(P)}\\ \\text{W}$, so $E = Pt = ${n(P)} \\times ${t} = ${n(Ej)}\\ \\text{J}${inKJ ? ` = ${n(Ej / 1000)}\\ \\text{kJ}` : ''}$.`,
+    trap: 'Find the power VI first, then multiply by the time in seconds — the minutes must be converted.',
+    tags: ['energy', 'power', 'time'],
+    params: { variant: 'energy-vit', V, I, t, inKJ },
   });
 }
 
@@ -476,6 +522,9 @@ function currentFromRatingQ(rng: RNG): Generated | null {
       { value: val((V * V) / P), trap: 'gave the resistance of the appliance, not the current' },
       { value: inKW ? val(Pstated) : null, trap: 'quoted the power rating in kilowatts as the current' },
       { value: val(P * V), trap: 'multiplied instead of dividing: I = P/V' },
+      { value: val(P - V), trap: 'subtracted the p.d. from the power' },
+      { value: val(Math.sqrt(P / V)), trap: 'used P = VI² and took a square root' },
+      { value: val(P / (V * V)), trap: 'divided by V² instead of V' },
     ],
     spare: [
       { value: val((P / V) * 10), trap: 'slipped a decimal place' },
@@ -557,6 +606,9 @@ function heatInResistorQ(rng: RNG): Generated | null {
       { value: val(I * I * R * R * t * scale), trap: 'squared the resistance as well' },
       // the power in watts is only a plausible wrong answer when the answer itself is in joules
       { value: inKJ ? null : val(P), trap: 'gave the power in watts, not the energy' },
+      { value: val(I * R * R * t * scale), trap: 'squared the resistance instead of the current' },
+      { value: val(I * I * t * scale), trap: 'forgot the resistance' },
+      { value: inKJ ? val(Ej / 100) : null, trap: 'divided the joules by 100 instead of 1000 to reach kilojoules' },
     ],
     spare: [
       { value: val(2 * Ej * scale), trap: 'doubled the energy' },
@@ -754,7 +806,7 @@ export default defineTemplate({
       switch (level) {
         case 1: return pickVariant(rng, [ohmVQ, ohmIQ, ohmRQ, powerVIQ]);
         case 2: return pickVariant(rng, [powerI2RQ, powerV2RQ]);
-        case 3: return pickVariant(rng, [energyPtQ, currentFromRatingQ]);
+        case 3: return pickVariant(rng, [energyPtQ, energyVItQ, energyVItQ, currentFromRatingQ]);
         case 4: return pickVariant(rng, [bulbResistanceQ, heatInResistorQ, currentFromPRQ]);
         default: return pickVariant(rng, [voltageScaledQ, resistanceRatioQ, seriesPowerQ]);
       }
@@ -803,6 +855,13 @@ export default defineTemplate({
         // accumulate P joules for each second
         let E = 0;
         for (let i = 0; i < p.t; i++) E += p.P;
+        return close(p.inKJ ? E / 1000 : E);
+      }
+      case 'energy-vit': {
+        // charge route: It coulombs pass, and each gains V joules
+        let Q = 0;
+        for (let i = 0; i < p.t; i++) Q += p.I;
+        const E = Q * p.V;
         return close(p.inKJ ? E / 1000 : E);
       }
       case 'current-from-rating':

@@ -5,7 +5,7 @@ Cambridge, Imperial and Oxford for engineering). Every question is generated pro
 parameterised template, verified at generation time with exact arithmetic, and answered against the exam's
 real constraint: **27 multiple-choice questions in 40 minutes, no calculator, about 89 seconds each.**
 
-**92 templates across 24 topics** cover Mathematics 1, Mathematics 2 and Physics, each parameterised over
+**92 templates across 26 topics** cover Mathematics 1, Mathematics 2 and Physics, each parameterised over
 five difficulty levels, so no two sessions are the same.
 
 Nothing leaves your machine. There is no backend; progress lives in your browser's localStorage.

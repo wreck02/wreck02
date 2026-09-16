@@ -1,0 +1,75 @@
+/* Facts drill screen (setup, drill, summary). Tokens come from styles.css. */
+
+/* every control on this screen is a comfortable touch target */
+.facts .seg button, .facts .btn.sm, .facts .toggle { min-height: 44px; }
+
+/* ---------- setup ---------- */
+.facts-decks { list-style: none; margin: 0; padding: 0; }
+.deck-row {
+  display: flex; gap: 0.75rem; align-items: center; padding: 0.55rem 0.25rem; min-height: 44px;
+  border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.facts-decks li:last-child .deck-row { border-bottom: 0; }
+.deck-row input { width: 1.15rem; height: 1.15rem; flex: 0 0 auto; margin: 0; }
+.deck-row .grow { flex: 1; min-width: 0; }
+.deck-row .deck-name { font-weight: 600; }
+.deck-row .deck-desc { font-size: 0.85rem; color: var(--muted); }
+.deck-row .deck-stats { display: flex; gap: 0.35rem; flex-wrap: wrap; justify-content: flex-end; }
+.facts-setup-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; flex-wrap: wrap; margin-top: 0.75rem; }
+
+/* ---------- drill ---------- */
+.facts-head { display: flex; align-items: center; gap: 0.5rem 0.9rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.facts-head .count { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.facts-head .spacer { flex: 1; }
+.fact-timer {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.95rem;
+  padding: 0.25rem 0.7rem; min-width: 4.5rem; text-align: center;
+}
+
+.fact-card { text-align: center; padding: 1.5rem 1rem 1.25rem; }
+.fact-prompt { font-size: 1.5rem; line-height: 1.4; min-height: 3.4rem; display: flex; align-items: center; justify-content: center; }
+.fact-prompt .katex { font-size: 1.45em; }
+.fact-prompt p { margin: 0; }
+.fact-input { display: flex; gap: 0.5rem; margin: 1.25rem auto 0; max-width: 460px; }
+.fact-input .input { font-family: var(--mono); font-size: 1.3rem; text-align: center; }
+.fact-input .input.ok { border-color: var(--ok); background: var(--ok-soft); }
+.fact-input .input.bad { border-color: var(--bad); background: var(--bad-soft); }
+.fact-hint { margin-top: 0.5rem; font-size: 0.8rem; color: var(--muted); }
+.fact-answer { margin-top: 1.1rem; font-size: 1.35rem; line-height: 1.4; }
+.fact-answer .katex { font-size: 1.35em; }
+.fact-answer .lbl { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 0.5rem; vertical-align: middle; }
+.fact-verdict { display: flex; align-items: center; justify-content: center; gap: 0.6rem; font-weight: 700; font-size: 1.1rem; margin-top: 1rem; flex-wrap: wrap; }
+.fact-verdict .mark { font-size: 1.5rem; line-height: 1; }
+.fact-verdict.ok { color: var(--ok); }
+.fact-verdict.bad { color: var(--bad); }
+.fact-echo { margin-top: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+.fact-actions { display: flex; gap: 0.6rem; justify-content: center; flex-wrap: wrap; margin-top: 1.25rem; }
+.fact-actions .btn { min-width: 8.5rem; }
+.fact-actions .btn.grade { min-height: 56px; font-size: 1.05rem; min-width: 10rem; }
+.fact-actions .btn.grade.missed { color: var(--bad); border-color: var(--bad); }
+.fact-actions .btn kbd, .facts-head .btn kbd { margin-left: 0.15rem; }
+.btn.primary kbd { background: rgba(255, 255, 255, 0.2); border-color: transparent; color: inherit; }
+
+/* ---------- summary ---------- */
+.facts-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
+.fstat { background: var(--surface-2); border-radius: 10px; padding: 0.6rem 0.8rem; }
+.fstat .v { font-size: 1.35rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.fstat .v small { font-size: 0.85rem; color: var(--muted); font-weight: 600; margin-left: 0.2rem; }
+.fstat .k { font-size: 0.75rem; color: var(--muted); }
+.missed-list { list-style: none; margin: 0; padding: 0; }
+.missed-list li { display: flex; gap: 0.5rem 0.9rem; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.missed-list li:last-child { border-bottom: 0; }
+.missed-list .mprompt { flex: 1; min-width: 160px; }
+.missed-list .manswer { font-weight: 600; }
+.missed-list .mgiven { font-size: 0.8rem; color: var(--muted); font-family: var(--mono); }
+.facts-summary-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+
+@media (max-width: 600px) {
+  .fact-prompt { font-size: 1.25rem; }
+  .fact-card { padding: 1.1rem 0.75rem 1rem; }
+  .fact-input { flex-direction: column; }
+  .fact-actions .btn { flex: 1 1 8rem; }
+  .deck-row { flex-wrap: wrap; }
+  .deck-row .deck-stats { justify-content: flex-start; width: 100%; padding-left: 1.9rem; }
+  .facts-summary-actions .btn { flex: 1 1 40%; }
+}

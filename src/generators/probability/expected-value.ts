@@ -54,6 +54,8 @@ function cleanOnly(ds: { value: Exact | null; trap: string }[], range?: [number,
 /**
  * Choose the distractors that go to buildOptions: every distinct `must` candidate (the spec-named traps)
  * is used before any `extra` one, so the headline mistakes are never shuffled out by weaker ones.
+ * The remaining slots are filled from both sides of the answer, aiming for a random number of options
+ * below it, so "the expected value is the middle option" stops being a winning guess.
  */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
@@ -64,8 +66,29 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const wantBelow = rng.int(0, count);
+  const pool = rng.shuffle(extra).filter((d) => Number.isFinite(d.value.toNumber()) && !seen.some((s) => s.equals(d.value)));
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  while (out.length < count && pool.length > 0) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    let i = pool.findIndex((d) => isBelow(d) === needBelow);
+    if (i < 0) i = 0;
+    take(pool[i]);
+    pool.splice(i, 1);
+  }
   return out;
+}
+
+/**
+ * An expectation always lies between the smallest and the largest value the variable can take, so
+ * an option outside that range is eliminated without computing anything (a spinner scoring 4 to 10
+ * cannot have a mean of 57). Every candidate for a mean is passed through this.
+ */
+function within(ds: Distractor[], lo: number, hi: number): Distractor[] {
+  return ds.filter((d) => {
+    const v = d.value.toNumber();
+    return v >= lo - 1e-9 && v <= hi + 1e-9;
+  });
 }
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix of variants. */
@@ -198,17 +221,23 @@ function spinnerQ(rng: RNG): Generated | null {
   if (naive.equals(answer)) return null; // the weighting would make no difference
   const maxF = Math.max(...freqs);
   const uniqueMode = freqs.filter((f) => f === maxF).length === 1;
-  const distractors = ranked(rng, answer, cleanOnly([
+  // Σ f·x with the frequencies attached to the wrong scores: still a weighted mean, so still a
+  // number the spinner could average to.
+  const paired = (order: number[]) => frac(values.reduce((acc, v, i) => acc + v * freqs[order[i]], 0), n);
+  const distractors = ranked(rng, answer, within(cleanOnly([
     { value: naive, trap: 'averaged the three different scores, ignoring how many sectors show each' },
-    { value: E(total), trap: 'forgot to divide by the number of sectors' },
+    { value: paired([2, 1, 0]), trap: 'paired the scores with the wrong number of sectors' },
+  ]), values[0], values[2]), within(cleanOnly([
     { value: uniqueMode ? E(values[freqs.indexOf(maxF)]) : null, trap: 'gave the most likely score instead of the mean' },
-    { value: frac(total - values[2] * freqs[2], n), trap: 'dropped the last term of $\\sum x p$' },
-  ]), cleanOnly([
-    { value: frac(total, 3), trap: 'divided by the number of different scores' },
+    { value: paired([1, 0, 2]), trap: 'swapped the sector counts of the two smaller scores' },
+    { value: E(values[1]), trap: 'gave the middle score instead of the mean' },
+    { value: E(values[0]), trap: 'gave the lowest score' },
     { value: E(values[2]), trap: 'gave the highest score' },
-    { value: frac(values[0] + values[1] + values[2], n), trap: 'added the scores once each, not once per sector' },
-    { value: frac(total, n).add(E(1)), trap: 'slip of one' },
-  ]));
+    { value: frac(values[0] + values[2], 2), trap: 'took the halfway point between the lowest and highest scores' },
+    { value: frac(total, n - 1), trap: 'divided by one sector too few' },
+    { value: frac(total - values[2] * freqs[2], n), trap: 'dropped the last term of $\\sum x p$' },
+  ]), values[0], values[2]));
+  if (distractors.length < 4) return null;
   const list = values.map((v, i) => `${WORDS[freqs[i]]} ${freqs[i] === 1 ? 'shows' : 'show'} $${v}$`);
   return {
     stem: `A spinner has $${n}$ equal sectors: ${list.slice(0, 2).join(', ')} and ${list[2]}. Find the expected score for one spin.`,
@@ -279,16 +308,18 @@ function trialsQ(rng: RNG): Generated | null {
   const p = frac(pn, pd);
   const answer = p.mul(E(n));
   if (!answer.isInteger() || !isCleanExact(answer).ok) return null;
-  const distractors = ranked(rng, answer, cleanOnly([
+  // an expected count lies between 0 and the number of trials; candidates sit on both sides of np
+  const distractors = ranked(rng, answer, within(cleanOnly([
     { value: E(1).sub(p).mul(E(n)), trap: 'found the expected number of failures instead' },
     { value: p, trap: 'gave the probability, not the expected number' },
+  ]), 0, n), within(cleanOnly([
     { value: attempt(() => E(n).div(answer)), trap: 'divided the wrong way round' },
-    { value: E(n).sub(answer), trap: 'subtracted from the number of trials' },
-  ]), cleanOnly([
     { value: answer.mul(E(2)), trap: 'doubled' },
     { value: answer.add(E(1)), trap: 'slip of one' },
+    { value: answer.sub(E(1)), trap: 'slip of one the other way' },
+    { value: answer.mul(frac(1, 2)), trap: 'halved the expected number' },
     { value: E(n), trap: 'gave the number of trials' },
-  ]));
+  ]), 0, n));
   return {
     stem: `${setup} Find the expected number of ${what}.`,
     answer: { kind: 'exact', value: answer },
@@ -314,17 +345,22 @@ function distributionQ(rng: RNG): Generated | null {
   const mean = frac(xs[0] + xs[1] + xs[2], 3);
   const maxT = Math.max(...tenths);
   const uniqueMode = tenths.filter((t) => t === maxT).length === 1;
-  const distractors = ranked(rng, answer, decimalOnly(cleanOnly([
+  // E(X) lies between the smallest and the largest value X can take: Σx and 3E(X) are outside
+  // that range and cost a distractor slot, so every candidate here is a possible mean.
+  const paired = (order: number[]) => xs.reduce((acc, x, i) => acc.add(frac(tenths[order[i]] * x, 10)), Exact.ZERO);
+  const distractors = ranked(rng, answer, within(decimalOnly(cleanOnly([
     { value: mean, trap: 'averaged the values, ignoring the probabilities' },
-    { value: E(xs[0] + xs[1] + xs[2]), trap: 'added the values' },
-    { value: answer.mul(E(3)), trap: 'multiplied by the number of values' },
+    { value: paired([2, 1, 0]), trap: 'paired the values with the wrong probabilities' },
+  ])), xs[0], xs[2]), within(decimalOnly(cleanOnly([
     { value: uniqueMode ? E(xs[tenths.indexOf(maxT)]) : null, trap: 'gave the most likely value' },
-  ])), decimalOnly(cleanOnly([
+    { value: paired([1, 0, 2]), trap: 'swapped the probabilities of the two smaller values' },
     { value: E(xs[1]), trap: 'gave the middle value instead of the mean' },
+    { value: E(xs[0]), trap: 'gave the smallest value' },
+    { value: E(xs[2]), trap: 'gave the largest value' },
+    { value: frac(xs[0] + xs[2], 2), trap: 'took the halfway point between the smallest and largest values' },
     { value: answer.add(E(1)), trap: 'slip of one' },
-    { value: answer.mul(frac(1, 2)), trap: 'halved the total' },
-    { value: xs.reduce((acc, x, i) => acc.add(frac(tenths[2 - i] * x, 10)), Exact.ZERO), trap: 'paired the values with the wrong probabilities' },
-  ])));
+    { value: answer.sub(E(1)), trap: 'slip of one the other way' },
+  ])), xs[0], xs[2]));
   if (distractors.length < 4) return null;
   const probs = tenths.map((t) => (t / 10).toString());
   return {
@@ -444,20 +480,27 @@ function fractionSpinnerQ(rng: RNG): Generated | null {
   let solution: string;
   let must: { value: Exact | null; trap: string }[];
   let extra: { value: Exact | null; trap: string }[];
+  // the range the asked-for quantity can possibly take: anything outside it is eliminated on sight
+  const lo = ask === 'single' ? xs[0] : ask === 'two' ? 2 * xs[0] : k * xs[0] + j;
+  const hi = ask === 'single' ? xs[2] : ask === 'two' ? 2 * xs[2] : k * xs[2] + j;
   const sumTerms = xs.map((x, i) => `${tx(pf[i])} \\times ${x}`).join(' + ');
+  const paired = (order: number[]) => xs.reduce((acc, x, i) => acc.add(frac(parts[order[i]] * x, d)), Exact.ZERO);
   if (ask === 'single') {
     question = 'Find the expected score for one spin.';
     solution = `$E(X) = ${sumTerms} = ${tx(mean)}$.`;
     must = [
       { value: plainMean, trap: 'averaged the three scores, ignoring the probabilities' },
-      { value: E(xs[0] + xs[1] + xs[2]), trap: 'added the scores' },
-      { value: uniqueMode ? E(xs[parts.indexOf(maxPart)]) : null, trap: 'gave the most likely score' },
       { value: reversed, trap: 'paired the scores with the wrong probabilities' },
     ];
     extra = [
-      { value: mean.mul(E(3)), trap: 'multiplied by the number of outcomes' },
+      { value: uniqueMode ? E(xs[parts.indexOf(maxPart)]) : null, trap: 'gave the most likely score' },
+      { value: paired([1, 0, 2]), trap: 'swapped the probabilities of the two smaller scores' },
+      { value: E(xs[1]), trap: 'gave the middle score instead of the mean' },
+      { value: E(xs[0]), trap: 'gave the lowest score' },
+      { value: E(xs[2]), trap: 'gave the highest score' },
+      { value: frac(xs[0] + xs[2], 2), trap: 'took the halfway point between the lowest and highest scores' },
       { value: mean.add(E(1)), trap: 'slip of one' },
-      { value: mean.mul(frac(1, 2)), trap: 'halved the total' },
+      { value: mean.sub(E(1)), trap: 'slip of one the other way' },
     ];
   } else if (ask === 'two') {
     question = 'The spinner is spun twice. Find the expected value of the total score.';
@@ -465,13 +508,15 @@ function fractionSpinnerQ(rng: RNG): Generated | null {
     must = [
       { value: mean, trap: 'gave the expected score for one spin only' },
       { value: mean.mul(mean), trap: 'multiplied the two spins instead of adding them' },
-      { value: plainMean.mul(E(2)), trap: 'averaged the three scores, ignoring the probabilities' },
-      { value: reversed.mul(E(2)), trap: 'paired the scores with the wrong probabilities' },
     ];
     extra = [
-      { value: E(2 * (xs[0] + xs[1] + xs[2])), trap: 'added the scores and doubled' },
-      { value: mean.mul(frac(1, 2)), trap: 'halved instead of doubling' },
+      { value: plainMean.mul(E(2)), trap: 'averaged the three scores, ignoring the probabilities' },
+      { value: reversed.mul(E(2)), trap: 'paired the scores with the wrong probabilities' },
       { value: E(2 * xs[2]), trap: 'assumed the highest score both times' },
+      { value: E(2 * xs[0]), trap: 'assumed the lowest score both times' },
+      { value: E(xs[0] + xs[2]), trap: 'added the lowest and highest scores' },
+      { value: answer.add(E(1)), trap: 'slip of one' },
+      { value: answer.sub(E(1)), trap: 'slip of one the other way' },
     ];
   } else {
     question = `The random variable $X$ is the score on one spin. Find $E(${k}X ${j > 0 ? `+ ${j}` : `- ${-j}`})$.`;

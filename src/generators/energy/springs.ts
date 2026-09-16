@@ -66,7 +66,7 @@ function cleanOnly(ds: Candidate[], answer: Exact): Ranked[] {
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) continue;
     const x = v.toNumber();
     if (x < 0.001 || x > 2e6) continue;
-    const span = d.wide ? 100 : 12;
+    const span = d.wide ? 100 : 25;
     if (x > span * a || x < a / span) continue;
     if (v.isRational() && !Number.isInteger(r(x * 1000))) continue; // decimals must terminate: no 10/3 among 30 and 0.3
     out.push({ value: v, trap: d.trap, wide: d.wide });

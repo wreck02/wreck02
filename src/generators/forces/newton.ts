@@ -266,18 +266,20 @@ function frictionDecel(rng: RNG): Generated | null {
   const askMu = rng.bool(0.3);
   const obj = rng.pick(['A block', 'A puck', 'A book', 'A wooden block']);
   if (askMu) {
-    const stem = `${obj} slides across a rough horizontal floor and decelerates uniformly at ${q(a, U.a)}. ${G_NOTE} Find the coefficient of friction between ${obj.toLowerCase().replace(/^a /, 'the ')} and the floor.`;
+    const stem = `${obj} of mass ${q(m, U.kg)} slides across a rough horizontal floor and decelerates uniformly at ${q(a, U.a)}. ${G_NOTE} Find the coefficient of friction between ${obj.toLowerCase().replace(/^a /, 'the ')} and the floor.`;
     return finish(stem, X(mu), undefined, physOptions(rng, X(mu), undefined, [
       { value: a * G, trap: 'multiplied by g instead of dividing: μ = a/g' },
       { value: G / a, trap: 'divided the wrong way round' },
     ], [
       { value: a, trap: 'quoted the deceleration as μ' },
-      { value: mu / 2, trap: 'an extra ½ crept in' },
-      { value: 2 * mu, trap: 'doubled μ' },
+      { value: a / (m * G), trap: 'divided by the weight mg instead of by g: the mass cancels' },
+      { value: (m * a) / G, trap: 'used the friction force ma in place of the acceleration: the mass cancels' },
+      { value: a / (G * G), trap: 'divided by g twice' },
+      { value: m * a, trap: 'quoted the friction force ma instead of μ' },
     ]),
     `Friction $\\mu mg$ is the only horizontal force, so $\\mu mg = ma$ and $\\mu = \\frac{a}{g} = \\frac{${num(a)}}{10} = ${num(mu)}$.`,
     'On a horizontal surface the sliding deceleration is μg, so μ = a/g; the mass cancels.',
-    ['friction', 'coefficient'], { ask: 'mu-from-decel', a });
+    ['friction', 'coefficient'], { ask: 'mu-from-decel', a, m });
   }
   const stem = `${obj} of mass ${q(m, U.kg)} slides across a rough horizontal floor. The coefficient of friction is $${num(mu)}$. ${G_NOTE} Find the deceleration of ${obj.toLowerCase().replace(/^a /, 'the ')}.`;
   return finish(stem, X(a), U.a, physOptions(rng, X(a), U.a, [
@@ -378,7 +380,8 @@ function slope(rng: RNG): Generated | null {
     ], [
       { value: mg.mul(sin), trap: 'found the force mg sin θ (in N) rather than the acceleration' },
       { value: g.mul(sin).div(cos), trap: 'used tan θ' },
-      { value: g.mul(sin).mulRat(X(0.5).toRat()), trap: 'halved g sin θ' },
+      { value: sin, trap: 'forgot g: the acceleration is g sin θ' },
+      { value: g.mul(sin).div(E(G)).mul(sin), trap: 'resolved twice: used g sin²θ' },
     ]),
     `Along the slope: $mg\\sin ${theta}^{\\circ} = ma$, so $a = g\\sin ${theta}^{\\circ} = 10 \\times ${sin.toLatex()} = ${a.toLatex()}$ m s$^{-2}$ (independent of the mass).`,
     'The component of weight along a slope is mg sin θ, so a = g sin θ; cos θ belongs to the normal reaction.',
@@ -424,7 +427,8 @@ function slope(rng: RNG): Generated | null {
   ], [
     { value: a.mulRat(t * t).mulRat(X(0.5).toRat()), trap: 'found the distance ½at² instead of the speed' },
     { value: a, trap: 'quoted the acceleration' },
-    { value: a.mulRat(2 * t), trap: 'doubled the speed' },
+    { value: sin.mulRat(t), trap: 'forgot g: the acceleration is g sin θ' },
+    { value: a.mulRat(t).mulRat(X(0.5).toRat()), trap: 'used ½at, the average speed, instead of the final speed' },
   ]),
   `$a = g\\sin ${theta}^{\\circ} = ${a.toLatex()}$ m s$^{-2}$, so after $${t}$ s, $v = at = ${a.toLatex()} \\times ${t} = ${v.toLatex()}$ m s$^{-1}$.`,
   'On a smooth slope a = g sin θ; then v = at from rest (not gt).',
@@ -469,6 +473,8 @@ function atwood(rng: RNG): Generated | null {
     { value: (m1 - m2) * G, trap: 'found the net force but did not divide by the total mass' },
     { value: G, trap: 'used g: the heavier particle does not fall freely' },
     { value: (m1 * G) / (m1 + m2), trap: 'forgot the weight of the lighter particle in the net force' },
+    { value: (m1 - m2) / (m1 + m2), trap: 'forgot g (divided the net force by the total weight)' },
+    { value: ((m1 - m2) * G) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
   ]),
   `Net force on the system $= (${m1} - ${m2}) \\times 10 = ${(m1 - m2) * G}$ N, total mass $${m1 + m2}$ kg, so $a = \\frac{${(m1 - m2) * G}}{${m1 + m2}} = ${num(a)}$ m s$^{-2}$.`,
   'Treat the system as a whole: a = (m₁ − m₂)g/(m₁ + m₂); the net force acts on both masses.',
@@ -496,8 +502,10 @@ function tablePulley(rng: RNG): Generated | null {
       { value: m1 * G, trap: 'used the weight of the particle on the table (its weight is balanced by the table)' },
     ], [
       { value: m2 * (G + a), trap: 'sign error: for the hanging particle m₂g − T = m₂a' },
-      { value: (m1 + m2) * a, trap: 'multiplied the total mass by a (that is the hanging weight, not the tension)' },
-      { value: (m2 * G) / 2, trap: 'halved the hanging weight' },
+      { value: m2 * a, trap: 'used the hanging mass in T = ma: the string pulls the particle on the table' },
+      { value: (m1 * m2) / (m1 + m2), trap: 'forgot g' },
+      { value: m1 > m2 ? (m1 * m2 * G) / (m1 - m2) : null, trap: 'used the difference of the masses instead of their sum' },
+      { value: m1 * G * m2, trap: 'multiplied the two weights' },
     ]),
     `System: $a = \\frac{${m2} \\times 10}{${m1} + ${m2}} = ${num(a)}$ m s$^{-2}$. Table particle: $T = m_1 a = ${m1} \\times ${num(a)} = ${num(T)}$ N.`,
     'Only the hanging weight drives the system, but the whole mass accelerates; then T = m₁a for the particle on the smooth table.',
@@ -508,8 +516,9 @@ function tablePulley(rng: RNG): Generated | null {
     { value: G, trap: 'used g: the hanging particle does not fall freely because of the string' },
   ], [
     { value: m2 * G, trap: 'found the driving force but did not divide by the total mass' },
-    { value: ((m1 + m2) * G) / (m1 + m2) / 2, trap: 'used half of g' },
+    { value: m2 / (m1 + m2), trap: 'forgot g (divided the hanging mass by the total mass)' },
     { value: (m1 * G) / (m1 + m2), trap: 'used the wrong weight as the driving force' },
+    { value: (m2 * G) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
   ]),
   `The only unbalanced force is the hanging weight $${m2 * G}$ N acting on a total mass of $${m1 + m2}$ kg: $a = \\frac{${m2 * G}}{${m1 + m2}} = ${num(a)}$ m s$^{-2}$.`,
   'Driving force is the hanging weight m₂g; it accelerates the total mass m₁ + m₂, so a = m₂g/(m₁ + m₂).',
@@ -520,34 +529,50 @@ function tow(rng: RNG): Generated | null {
   const M = rng.pick([800, 1000, 1200, 1500]);
   const m = rng.pick([200, 400, 500, 600, 800, 1000]);
   const a = rng.pick([0.5, 1, 1.5, 2, 2.5, 3]);
-  const F = (M + m) * a;
-  const T = m * a;
+  // Most draws give the car and the trailer a resistance. Without them every named mistake overshoots
+  // the tow-bar tension ma (F, Ma and mg are all larger, because a < g), so the answer is the smallest
+  // option in almost every question; "forgot the trailer's resistance" is the mistake that undershoots.
+  const rough = rng.bool(0.75);
+  const RM = rough ? rng.pick([200, 300, 400, 500, 600]) : 0;
+  const Rm = rough ? rng.pick([100, 150, 200, 250, 300]) : 0;
+  const F = (M + m) * a + RM + Rm;
+  const T = m * a + Rm;
   const askT = rng.bool(0.6);
-  const intro = `A car of mass ${q(M, U.kg)} tows a trailer of mass ${q(m, U.kg)} along a straight level road with a driving force of ${q(F, U.N)}. Resistances are negligible.`;
+  const intro = rough
+    ? `A car of mass ${q(M, U.kg)} tows a trailer of mass ${q(m, U.kg)} along a straight level road with a driving force of ${q(F, U.N)}. The resistances to motion are ${q(RM, U.N)} on the car and ${q(Rm, U.N)} on the trailer.`
+    : `A car of mass ${q(M, U.kg)} tows a trailer of mass ${q(m, U.kg)} along a straight level road with a driving force of ${q(F, U.N)}. Resistances are negligible.`;
+  const params = { M, m, F, RM, Rm };
   if (askT) {
     return finish(`${intro} Find the tension in the tow bar.`, X(T), U.N, physOptions(rng, X(T), U.N, [
-      { value: F, trap: 'took the tension equal to the driving force: the tow bar only has to accelerate the trailer' },
-      { value: M * a, trap: 'multiplied the car\'s mass by a instead of the trailer\'s' },
+      { value: F, trap: 'took the tension equal to the driving force: the tow bar only has to move the trailer' },
+      { value: M * a + Rm, trap: 'used the car\'s mass instead of the trailer\'s' },
     ], [
-      { value: F / 2, trap: 'halved the driving force' },
+      { value: rough ? m * a : null, trap: 'forgot the resistance on the trailer: T − R = ma' },
+      { value: rough ? Rm : null, trap: 'quoted the resistance on the trailer' },
+      { value: rough ? m * a + RM : null, trap: 'used the car\'s resistance instead of the trailer\'s' },
+      { value: rough ? F - RM : null, trap: 'subtracted only the car\'s resistance from the driving force' },
       { value: (F * m) / M, trap: 'shared the force in the ratio of the masses the wrong way' },
       { value: m * G, trap: 'used the weight of the trailer' },
+      { value: (m * a) / 2, trap: 'halved: the trailer needs the whole of ma' },
     ]),
-    `Whole system: $a = \\frac{${F}}{${M + m}} = ${num(a)}$ m s$^{-2}$. Trailer alone: $T = ma = ${m} \\times ${num(a)} = ${T}$ N.`,
-    'Find a from the whole system (F over the total mass), then the tow-bar tension is the trailer\'s mass × a.',
-    ['connected particles', 'towing', 'tension'], { ask: 'tow-T', M, m, F });
+    `Whole system: $a = \\frac{${F}${rough ? ` - ${RM} - ${Rm}` : ''}}{${M + m}} = ${num(a)}$ m s$^{-2}$. Trailer alone: $T ${rough ? `- ${Rm} ` : ''}= ma = ${m} \\times ${num(a)} = ${m * a}$, so $T = ${T}$ N.`,
+    'Find a from the whole system (driving force minus all resistances, over the total mass), then look at the trailer alone: T − R = ma.',
+    ['connected particles', 'towing', 'tension'], { ask: 'tow-T', ...params });
   }
   return finish(`${intro} Find the acceleration.`, X(a), U.a, physOptions(rng, X(a), U.a, [
-    { value: F / M, trap: 'divided by the mass of the car only: the trailer accelerates too' },
-    { value: F / m, trap: 'divided by the mass of the trailer only' },
+    { value: (F - RM - Rm) / M, trap: 'divided by the mass of the car only: the trailer accelerates too' },
+    { value: (F - RM - Rm) / m, trap: 'divided by the mass of the trailer only' },
   ], [
-    { value: F / (M + m) / 2, trap: 'halved the acceleration' },
-    { value: F / (M - m), trap: 'subtracted the masses' },
-    { value: (F / (M + m)) * 2, trap: 'doubled the acceleration' },
+    { value: rough ? F / (M + m) : null, trap: 'ignored the resistances' },
+    { value: rough ? (F - RM) / (M + m) : null, trap: 'forgot the resistance on the trailer' },
+    { value: rough ? (RM + Rm) / (M + m) : null, trap: 'used the resistance as the resultant force' },
+    { value: (F - RM - Rm) / ((M + m) * G), trap: 'divided by the total weight instead of the total mass' },
+    { value: (F + RM + Rm) / (M + m), trap: 'added the resistances instead of subtracting them' },
+    { value: M > m ? (F - RM - Rm) / (M - m) : null, trap: 'subtracted the masses instead of adding them' },
   ]),
-  `Whole system: $F = (M + m)a$, so $a = \\frac{${F}}{${M} + ${m}} = \\frac{${F}}{${M + m}} = ${num(a)}$ m s$^{-2}$.`,
-  'The driving force accelerates the car and the trailer together: divide by the total mass.',
-  ['connected particles', 'towing', 'acceleration'], { ask: 'tow-a', M, m, F });
+  `Whole system: $F - R = (M + m)a$, so $a = \\frac{${F}${rough ? ` - ${RM} - ${Rm}` : ''}}{${M} + ${m}} = \\frac{${(M + m) * a}}{${M + m}} = ${num(a)}$ m s$^{-2}$.`,
+  'The driving force less every resistance accelerates the car and the trailer together: divide by the total mass.',
+  ['connected particles', 'towing', 'acceleration'], { ask: 'tow-a', ...params });
 }
 
 function lift(rng: RNG): Generated | null {
@@ -656,8 +681,9 @@ export default defineTemplate({
       case 'atwood-T': { const a = (p.m1 * G - ans) / p.m1; return close(ans - p.m2 * G, p.m2 * a); }
       case 'table-a': { const T = p.m1 * ans; return close(p.m2 * G - T, p.m2 * ans); }
       case 'table-T': { const a = ans / p.m1; return close(p.m2 * G - ans, p.m2 * a); }
-      case 'tow-a': { const T = p.m * ans; return close(p.F - T, p.M * ans); }
-      case 'tow-T': { const a = ans / p.m; return close(p.F - ans, p.M * a); }
+      // trailer: T − R_m = m a; substitute the answer and check the car's own equation F − R_M − T = M a
+      case 'tow-a': { const T = p.m * ans + p.Rm; return close(p.F - p.RM - T, p.M * ans); }
+      case 'tow-T': { const a = (ans - p.Rm) / p.m; return close(p.F - p.RM - ans, p.M * a); }
       case 'lift-reading': return close(ans - p.m * G, p.m * p.a);
       case 'lift-cable': return close(ans - (p.M + p.m) * G, (p.M + p.m) * p.a);
       default: return false;

@@ -3,6 +3,7 @@ import { E, frac, Exact, rat, ratToDecimalString } from '../../core/exact';
 import { buildOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import { gcd } from '../../core/gen-utils';
+import type { RNG } from '../../core/rng';
 
 /**
  * Evaluate a^(p/q) without a calculator.
@@ -16,7 +17,12 @@ import { gcd } from '../../core/gen-utils';
 /** base = bn/bd raised to the power p/q (p may be negative). `dec` = show the base as a decimal. */
 interface Power { bn: number; bd: number; p: number; q: number; dec?: boolean }
 
-type Candidate = { value: Exact | null; trap: string };
+/**
+ * `group` marks candidates that are the *same* misconception written two ways (making the answer
+ * negative instead of taking a reciprocal, say): at most one of a group is ever offered, because two
+ * of them waste a slot and tell the candidate which family to strike out.
+ */
+type Candidate = { value: Exact | null; trap: string; group?: string };
 
 const ROOT_NAME: Record<number, string> = { 2: 'square root', 3: 'cube root', 4: 'fourth root', 5: 'fifth root', 6: 'sixth root' };
 const rootName = (q: number) => ROOT_NAME[q] ?? `${q}th root`;
@@ -48,8 +54,62 @@ function withinCap(v: Exact): boolean {
   return (r.n < 0n ? -r.n : r.n) <= CAP && (r.d <= CAP || r.d === 10000n);
 }
 
-function cleanOnly(ds: Candidate[]): Distractor[] {
-  return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && withinCap(d.value));
+/**
+ * The answer stays inside CAP; an *option* may be a whole number of up to twenty times the answer.
+ * Without that room every overshoot (the root raised to one power too many: 3^6 = 729 beside
+ * 9^{5/2} = 243) is silently deleted by the cap, and the answer to a level-2 question is then simply
+ * the largest number on the page.
+ */
+function usableOption(v: Exact, answer: Exact): boolean {
+  if (withinCap(v)) return true;
+  if (!v.isRational() || v.toRat().d !== 1n || !isCleanExact(v).ok) return false;
+  return Math.abs(v.toNumber()) <= 20 * Math.abs(answer.toNumber());
+}
+
+/**
+ * De-duplicate the candidate mistakes and drop the ones that cannot be offered together.
+ *
+ * Only one option may be negative: every negative value here comes from the single misconception
+ * "a minus sign in the index makes the answer negative", and the question's own trap line tells the
+ * candidate to strike them out — three of them turn a five-option question into a one-in-two guess.
+ * The same rule applies to any explicit exclusivity `group`.
+ */
+function candidatePool(rng: RNG, answer: Exact, cands: Candidate[]): Distractor[] {
+  const seen: Exact[] = [answer];
+  const groups = new Set<string>();
+  const pool: Distractor[] = [];
+  for (const c of rng.shuffle(cands)) {
+    const v = c.value;
+    if (!v || !usableOption(v, answer)) continue;
+    if (seen.some((s) => s.equals(v))) continue;
+    const g = c.group ?? (v.sign() < 0 ? 'made-negative' : null);
+    if (g !== null) {
+      if (groups.has(g)) continue;
+      groups.add(g);
+    }
+    seen.push(v);
+    pool.push({ value: v, trap: c.trap });
+  }
+  return pool;
+}
+
+/** How many of the surviving candidates overshoot the answer. */
+function countAbove(answer: Exact, pool: Distractor[]): number {
+  return pool.filter((d) => d.value.toNumber() > answer.toNumber()).length;
+}
+
+/**
+ * Take `count` of them with a randomly drawn number below the answer, so the correct option is not
+ * pinned to one slot in the sorted list.
+ */
+function splitPick(rng: RNG, answer: Exact, pool: Distractor[], count = 4): Distractor[] {
+  const a = answer.toNumber();
+  const below = pool.filter((d) => d.value.toNumber() < a);
+  const above = pool.filter((d) => d.value.toNumber() > a);
+  const lo = Math.max(0, count - above.length);
+  const hi = Math.min(count, below.length);
+  const nBelow = lo <= hi ? rng.int(lo, hi) : hi;
+  return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
 }
 
 const baseExact = (f: Power): Exact => frac(f.bn, f.bd);
@@ -85,10 +145,19 @@ function mistakes(f: Power, correct: Exact): Candidate[] {
     if (k === q) continue;
     out.push({ value: attempt(() => base.powRat(rat(p, k))), trap: `took the ${rootName(k)} instead of the ${rootName(q)}` });
   }
+  if (root) {
+    // One power too many. This is the one slip in the catalogue that *overshoots* a positive answer,
+    // so it is what keeps the answer off the top of the option list.
+    const over = neg ? attempt(() => root.inv().pow(ap + 1)) : attempt(() => root.pow(ap + 1));
+    out.push({
+      value: over,
+      trap: ap === 1 ? `squared the ${rootName(q)} instead of stopping at it` : `raised the ${rootName(q)} to the power ${ap + 1} instead of ${ap}`,
+    });
+  }
   if (neg) {
-    out.push({ value: correct.neg(), trap: 'a negative index means a reciprocal, not a negative answer' });
+    out.push({ value: correct.neg(), trap: 'a negative index means a reciprocal, not a negative answer', group: 'made-negative' });
     out.push({ value: unsigned, trap: isFraction ? 'forgot to invert the fractional base for the negative index' : 'ignored the minus sign in the index' });
-    out.push({ value: unsigned ? unsigned.neg() : null, trap: 'made the answer negative instead of taking the reciprocal' });
+    out.push({ value: unsigned ? unsigned.neg() : null, trap: 'made the answer negative instead of taking the reciprocal', group: 'made-negative' });
     out.push({ value: attempt(() => E(1).div(base.mulRat(rat(ap, q)))), trap: 'multiplied the base by the index, then took the reciprocal' });
   } else {
     if (q % 2 === 0) out.push({ value: correct.neg(), trap: `took the negative ${rootName(q)}: a fractional index means the positive root` });
@@ -185,12 +254,15 @@ export default defineTemplate({
   },
   generate(rng, level: Level) {
     return retry(rng, () => {
-      const finish = (stem: string, factors: Power[], op: 'mul' | 'div', answer: Exact, candidates: Candidate[], solution: string, trap: string, tags: string[], format?: 'decimal') => {
+      const finish = (stem: string, factors: Power[], op: 'mul' | 'div', answer: Exact, candidates: Candidate[], solution: string, trap: string, tags: string[], format?: 'decimal', minAbove = 0) => {
         if (!withinCap(answer)) return null;
+        const pool = candidatePool(rng, answer, candidates);
+        // Redraw rather than offer a list every one of whose wrong answers is smaller than the right one.
+        if (countAbove(answer, pool) < minAbove) return null;
         return {
           stem,
           answer: { kind: 'exact' as const, value: answer, format },
-          options: buildOptions(rng, answer, cleanOnly(candidates), { format }),
+          options: buildOptions(rng, answer, splitPick(rng, answer, pool), { format }),
           solution,
           trap,
           tags: ['indices', 'fractional-index', ...tags],
@@ -229,6 +301,8 @@ export default defineTemplate({
           `Root first, then power: $${powTex(f)} = (${rootTex(q, `${f.bn}`)})^{${p}} = ${r}^{${p}} = ${answer.toLatex()}$.`,
           'For x^(p/q) take the q-th root first (keeps the numbers small), then raise to the power p; the base is never simply multiplied by the index.',
           ['power'],
+          undefined,
+          2,
         );
       }
 

@@ -1,6 +1,6 @@
-import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
+import { defineTemplate, retry, type Generated, type Level, type Option } from '../../core/template';
 import { E, Exact } from '../../core/exact';
-import { buildOptions, fixedOptions, type Distractor } from '../../core/options';
+import { buildOptions, OPTION_KEYS, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import type { RNG } from '../../core/rng';
 
@@ -340,25 +340,44 @@ function squareProduct(rng: RNG): Generated | null {
 // Level 4: orders of magnitude
 // ---------------------------------------------------------------------------
 
-interface Scenario { stem: string; num: number[]; den: number[]; unit: string }
+/** One quantity in a Fermi estimate, with the reason it is there: the reason names the mistake of dropping it. */
+interface Factor { v: number; why: string }
+interface Scenario { stem: string; num: Factor[]; den: Factor[]; unit: string }
 
+const F = (v: number, why: string): Factor => ({ v, why });
+const SECS = F(60, 'seconds in a minute');
+const MINS = F(60, 'minutes in an hour');
+const HOURS = F(24, 'hours in a day');
+const DAYS = F(365, 'days in a year');
+const LITRES = F(1000, 'litres in a cubic metre');
+const GRAMS = F(1000, 'grams in a kilogram');
+const CM2 = F(10000, 'square centimetres in a square metre');
+
+/** Twenty-odd everyday quantities, each with its own randomised data, so a level-4 stem rarely repeats. */
 function scenario(rng: RNG): Scenario {
-  const choice = rng.int(0, 13);
-  switch (choice) {
-    case 0: return { stem: 'Estimate the number of seconds in a year (365 days).', num: [365, 24, 60, 60], den: [], unit: 'seconds' };
-    case 1: return { stem: 'Estimate the number of seconds in a month of 30 days.', num: [30, 24, 60, 60], den: [], unit: 'seconds' };
-    case 2: return { stem: 'Estimate the number of seconds in a century (100 years of 365 days).', num: [100, 365, 24, 60, 60], den: [], unit: 'seconds' };
-    case 3: { const r = rng.pick([60, 70]); const y = rng.pick([70, 75, 80]); return { stem: `A human heart beats about ${r} times a minute. Estimate the number of times it beats in a lifetime of ${y} years (take a year as 365 days).`, num: [r, 60, 24, 365, y], den: [], unit: 'beats' }; }
-    case 4: { const r = rng.pick([12, 15, 20]); return { stem: `A person breathes about ${r} times a minute. Estimate the number of breaths taken in a year (365 days).`, num: [r, 60, 24, 365], den: [], unit: 'breaths' }; }
-    case 5: { const P = rng.pick([200, 300, 400]); const L = rng.pick([30, 40]); const W = rng.pick([10, 12]); return { stem: `A book has ${P} pages, with about ${L} lines per page and ${W} words per line. Estimate the number of words in the book.`, num: [P, L, W], den: [], unit: 'words' }; }
-    case 6: { const s = rng.pick([5000, 7000, 8000]); return { stem: `A person walks about ${s} steps a day. Estimate the number of steps walked in ${80} years (take a year as 365 days).`, num: [s, 365, 80], den: [], unit: 'steps' }; }
-    case 7: return { stem: 'A grain of rice has a mass of about 0.02 g. Estimate the number of grains in a 2 kg bag of rice.', num: [2000], den: [0.02], unit: 'grains' };
-    case 8: { const l = rng.pick([2, 3]); return { stem: `The world population is about $8 \\times 10^{9}$. If each person drinks about ${l} litres of water a day, estimate the total volume of drinking water consumed worldwide in one day, in litres.`, num: [8e9, l], den: [], unit: 'litres' }; }
-    case 9: return { stem: 'Light travels at $3 \\times 10^{8}$ m s$^{-1}$. Taking a year as $3 \\times 10^{7}$ s, estimate the distance, in metres, that light travels in a year.', num: [3e8, 3e7], den: [], unit: 'metres' };
-    case 10: return { stem: 'A typical human cell has a mass of about $10^{-12}$ kg. Estimate the number of cells in a person of mass 70 kg.', num: [70], den: [1e-12], unit: 'cells' };
-    case 11: { const a = rng.pick([500, 600]); const d = rng.pick([150, 200]); return { stem: `A scalp has an area of about ${a} cm² with about ${d} hairs per cm². Estimate the number of hairs on a head.`, num: [a, d], den: [], unit: 'hairs' }; }
-    case 12: return { stem: 'An atom has a diameter of about $10^{-10}$ m. Estimate the number of atoms that would fit side by side along a line 1 cm long.', num: [0.01], den: [1e-10], unit: 'atoms' };
-    default: { const L = rng.pick([50]); const W = rng.pick([20, 25]); const D = 2; return { stem: `A swimming pool is ${L} m long, ${W} m wide and ${D} m deep. Given that $1\\ \\text{m}^3 = 1000$ litres, estimate the volume of water in the pool in litres.`, num: [L, W, D, 1000], den: [], unit: 'litres' }; }
+  switch (rng.int(0, 21)) {
+    case 0: return { stem: 'Estimate the number of seconds in a year (365 days).', num: [DAYS, HOURS, MINS, SECS], den: [], unit: 'seconds' };
+    case 1: { const d = rng.pick([28, 30, 31]); return { stem: `Estimate the number of seconds in a month of ${d} days.`, num: [F(d, 'days in the month'), HOURS, MINS, SECS], den: [], unit: 'seconds' }; }
+    case 2: { const y = rng.pick([10, 50, 100]); return { stem: `Estimate the number of seconds in ${y} years (take a year as 365 days).`, num: [F(y, 'years'), DAYS, HOURS, MINS, SECS], den: [], unit: 'seconds' }; }
+    case 3: { const r = rng.pick([60, 70, 75, 80]); const y = rng.pick([70, 75, 80, 85]); return { stem: `A human heart beats about ${r} times a minute. Estimate the number of times it beats in a lifetime of ${y} years (take a year as 365 days).`, num: [F(r, 'beats per minute'), MINS, HOURS, DAYS, F(y, 'years of life')], den: [], unit: 'beats' }; }
+    case 4: { const r = rng.pick([12, 15, 16, 20]); return { stem: `A person breathes about ${r} times a minute. Estimate the number of breaths taken in a year (365 days).`, num: [F(r, 'breaths per minute'), MINS, HOURS, DAYS], den: [], unit: 'breaths' }; }
+    case 5: { const P = rng.pick([200, 250, 300, 400, 500]); const L = rng.pick([30, 35, 40]); const W = rng.pick([8, 10, 12]); return { stem: `A book has ${P} pages, with about ${L} lines per page and ${W} words per line. Estimate the number of words in the book.`, num: [F(P, 'pages'), F(L, 'lines per page'), F(W, 'words per line')], den: [], unit: 'words' }; }
+    case 6: { const s = rng.pick([4000, 5000, 7000, 8000]); const y = rng.pick([50, 60, 80]); return { stem: `A person walks about ${s} steps a day. Estimate the number of steps walked in ${y} years (take a year as 365 days).`, num: [F(s, 'steps a day'), DAYS, F(y, 'years')], den: [], unit: 'steps' }; }
+    case 7: { const g = rng.pick([0.02, 0.025, 0.03]); const kg = rng.pick([1, 2, 5, 10]); return { stem: `A grain of rice has a mass of about ${g} g. Estimate the number of grains in a ${kg} kg bag of rice.`, num: [F(kg, 'kilograms in the bag'), GRAMS], den: [F(g, 'grams per grain')], unit: 'grains' }; }
+    case 8: { const l = rng.pick([2, 3, 4]); return { stem: `The world population is about $8 \\times 10^{9}$. If each person drinks about ${l} litres of water a day, estimate the total volume of drinking water consumed worldwide in one day, in litres.`, num: [F(8e9, 'people'), F(l, 'litres per person')], den: [], unit: 'litres' }; }
+    case 9: return { stem: 'Light travels at $3 \\times 10^{8}$ m s$^{-1}$. Taking a year as $3 \\times 10^{7}$ s, estimate the distance, in metres, that light travels in a year.', num: [F(3e8, 'metres per second'), F(3e7, 'seconds in a year')], den: [], unit: 'metres' };
+    case 10: { const M = rng.pick([50, 60, 70, 80]); return { stem: `A typical human cell has a mass of about $10^{-12}$ kg. Estimate the number of cells in a person of mass ${M} kg.`, num: [F(M, 'kilograms of person')], den: [F(1e-12, 'kilograms per cell')], unit: 'cells' }; }
+    case 11: { const a = rng.pick([500, 600, 700]); const d = rng.pick([120, 150, 200]); return { stem: `A scalp has an area of about ${a} cm² with about ${d} hairs per cm². Estimate the number of hairs on a head.`, num: [F(a, 'square centimetres of scalp'), F(d, 'hairs per square centimetre')], den: [], unit: 'hairs' }; }
+    case 12: { const cm = rng.pick([1, 2, 5]); return { stem: `An atom has a diameter of about $10^{-10}$ m. Estimate the number of atoms that would fit side by side along a line ${cm} cm long.`, num: [F(cm / 100, 'metres of line')], den: [F(1e-10, 'metres per atom')], unit: 'atoms' }; }
+    case 13: { const L = rng.pick([25, 50]); const W = rng.pick([10, 20, 25]); const D = rng.pick([2, 3]); return { stem: `A swimming pool is ${L} m long, ${W} m wide and ${D} m deep. Given that $1\\ \\text{m}^3 = 1000$ litres, estimate the volume of water in the pool in litres.`, num: [F(L, 'metres long'), F(W, 'metres wide'), F(D, 'metres deep'), LITRES], den: [], unit: 'litres' }; }
+    case 14: { const v = rng.pick([5, 10, 12]); return { stem: `A grain of sand has a volume of about $10^{-3}$ cm³. Estimate the number of grains in a bucket holding ${v} litres (1 litre = 1000 cm³).`, num: [F(v, 'litres in the bucket'), F(1000, 'cubic centimetres in a litre')], den: [F(1e-3, 'cubic centimetres per grain')], unit: 'grains' }; }
+    case 15: { const b = rng.pick([150, 200]); const d = rng.pick([0.05, 0.1]); return { stem: `A bath holds about ${b} litres of water and a drop has a volume of about ${d} ml. Estimate the number of drops in a full bath (1 litre = 1000 ml).`, num: [F(b, 'litres in the bath'), F(1000, 'millilitres in a litre')], den: [F(d, 'millilitres per drop')], unit: 'drops' }; }
+    case 16: { const gb = rng.pick([500, 1000, 2000]); const mb = rng.pick([4, 5, 8]); return { stem: `A hard disk holds ${gb} GB and a photograph takes about ${mb} MB. Given that $1\\ \\text{GB} = 1000\\ \\text{MB}$, estimate the number of photographs the disk can hold.`, num: [F(gb, 'gigabytes on the disk'), F(1000, 'megabytes in a gigabyte')], den: [F(mb, 'megabytes per photograph')], unit: 'photographs' }; }
+    case 17: { const L = rng.pick([100, 105]); const W = rng.pick([64, 70]); const n = rng.pick([2, 3, 5]); return { stem: `A football pitch is about ${L} m long and ${W} m wide, and grass grows about ${n} blades per cm². Estimate the number of blades of grass on the pitch.`, num: [F(L, 'metres long'), F(W, 'metres wide'), CM2, F(n, 'blades per square centimetre')], den: [], unit: 'blades' }; }
+    case 18: { const h = rng.pick([2, 2.5, 3]); const l = rng.pick([10, 20, 30]); return { stem: `A brick wall is ${l} m long and ${h} m high, and each brick covers about 0.02 m² of the face of the wall. Estimate the number of bricks in the face of the wall.`, num: [F(l, 'metres long'), F(h, 'metres high')], den: [F(0.02, 'square metres per brick')], unit: 'bricks' }; }
+    case 19: { const w = rng.pick([10000, 15000, 20000]); const y = rng.pick([60, 70, 80]); return { stem: `A person speaks about ${w} words a day. Estimate the number of words spoken in ${y} years (take a year as 365 days).`, num: [F(w, 'words a day'), DAYS, F(y, 'years')], den: [], unit: 'words' }; }
+    case 20: { const a = rng.pick([50, 100, 150]); const d = rng.pick([3, 4]); return { stem: `A leaf has an area of about ${a} cm² and contains about $10^{${d}}$ cells per cm². Estimate the number of cells in the leaf.`, num: [F(a, 'square centimetres of leaf'), F(10 ** d, 'cells per square centimetre')], den: [], unit: 'cells' }; }
+    default: { const t = rng.pick([1, 2, 5]); const m = rng.pick([0.5, 1]); return { stem: `A grain of sugar has a mass of about ${m} mg. Estimate the number of grains in a ${t} kg bag of sugar (1 g = 1000 mg).`, num: [F(t, 'kilograms in the bag'), GRAMS, F(1000, 'milligrams in a gram')], den: [F(m, 'milligrams per grain')], unit: 'grains' }; }
   }
 }
 
@@ -373,7 +392,7 @@ function nearestPower(x: number): number | null {
   return m < 3.17 ? e : e + 1;
 }
 
-/** A factor for the solution line: 365, 0.02, or 8 \times 10^{9} for very large / small values. */
+/** A factor for the solution line: 365, 0.02, or 8 \\times 10^{9} for very large / small values. */
 function numTex(v: number): string {
   if (v >= 1e5 || v < 0.001) {
     const [m, e] = v.toExponential(0).split('e');
@@ -382,24 +401,82 @@ function numTex(v: number): string {
   return `${v}`;
 }
 
+/** The same factor in plain text, for a trap line: "60", "0.02", "3 x 10^8". */
+function numPlain(v: number): string {
+  if (v >= 1e5 || v < 0.001) {
+    const [m, e] = v.toExponential(0).split('e');
+    return `${m} x 10^${Number(e)}`;
+  }
+  return `${v}`;
+}
+
+/**
+ * The five powers of ten are the answer and four *named* slips (a factor of 60 or 1000 dropped, a
+ * conversion used twice, a power of ten lost when the exponents were added), chosen so that the answer
+ * can be the smallest or the largest of them: a ladder built around the answer put it at B, C or D in
+ * every question, which is a free elimination of two options for a candidate who never reads the stem.
+ */
 function magnitude(rng: RNG): Generated | null {
   const sc = scenario(rng);
-  const value = sc.num.reduce((p, v) => p * v, 1) / sc.den.reduce((p, v) => p * v, 1);
+  const value = sc.num.reduce((p, f) => p * f.v, 1) / sc.den.reduce((p, f) => p * f.v, 1);
   const e = nearestPower(value);
   if (e === null) return null;
-  const lo = e - rng.int(1, 3);
-  const displays = [0, 1, 2, 3, 4].map((i) => `$10^{${lo + i}}$`);
+  const expOf = (x: number) => Math.round(Math.log10(x));
+  const cands: { e: number; trap: string; generic?: boolean }[] = [];
+  const nums = rng.shuffle(sc.num);
+  for (const f of nums) {
+    cands.push({ e: expOf(value / f.v), trap: `forgot the factor of ${numPlain(f.v)} (${f.why})` });
+    cands.push({ e: expOf(value * f.v), trap: `used the factor of ${numPlain(f.v)} (${f.why}) twice` });
+  }
+  for (const f of rng.shuffle(sc.den)) {
+    cands.push({ e: expOf(value * f.v), trap: `forgot to divide by ${numPlain(f.v)} (${f.why})` });
+    cands.push({ e: expOf(value / f.v), trap: `divided by ${numPlain(f.v)} (${f.why}) twice` });
+    cands.push({ e: expOf(value * f.v * f.v), trap: `multiplied by ${numPlain(f.v)} (${f.why}) instead of dividing` });
+  }
+  // two conversions missed at once, which is where the bigger shifts come from
+  for (let i = 0; i < nums.length; i++) {
+    for (let j = i + 1; j < nums.length; j++) {
+      cands.push({ e: expOf(value / (nums[i].v * nums[j].v)), trap: `forgot the factors of ${numPlain(nums[i].v)} (${nums[i].why}) and ${numPlain(nums[j].v)} (${nums[j].why})` });
+      cands.push({ e: expOf((value * nums[i].v) / nums[j].v), trap: `used the factor of ${numPlain(nums[i].v)} (${nums[i].why}) twice and forgot the ${numPlain(nums[j].v)} (${nums[j].why})` });
+    }
+  }
+  for (const k of [1, -1, 2, -2, 3, -3, 4, -4]) {
+    cands.push({ e: e + k, trap: `${Math.abs(k)} power${Math.abs(k) === 1 ? '' : 's'} of ten too ${k > 0 ? 'many' : 'few'} when the powers of ten were added up`, generic: true });
+  }
+  const byExp = new Map<number, { trap: string; generic: boolean }>();
+  for (const c of cands) {
+    if (!Number.isFinite(c.e) || c.e === e || Math.abs(c.e - e) > 4 || byExp.has(c.e)) continue;
+    byExp.set(c.e, { trap: c.trap, generic: c.generic === true });
+  }
+  const pool = [...byExp].map(([exp, t]) => ({ exp, trap: t.trap, generic: t.generic }));
+  // named mistakes first, the plain "lost a power of ten" fillers only if a side would otherwise run out
+  const ordered = (side: typeof pool) => [...rng.shuffle(side.filter((c) => !c.generic)), ...rng.shuffle(side.filter((c) => c.generic))];
+  const below = ordered(pool.filter((c) => c.exp < e));
+  const above = ordered(pool.filter((c) => c.exp > e));
+  if (pool.length < 4) return null;
+  // how many of the four wrong powers sit below the answer: every position A–E must be reachable
+  const want = rng.weighted([0, 1, 2, 3, 4], [1, 2, 2, 2, 1]);
+  const chosen = [
+    ...below.slice(0, Math.min(want, below.length)),
+    ...above,
+    ...below,
+  ].filter((c, i, all) => all.indexOf(c) === i).slice(0, 4);
+  if (chosen.length < 4) return null;
   const correct = `$10^{${e}}$`;
+  // the exam lists powers of ten in ascending order
+  const options: Option[] = [...chosen.map((c) => ({ exp: c.exp, trap: c.trap as string | undefined, correct: false })), { exp: e, trap: undefined, correct: true }]
+    .sort((x, y) => x.exp - y.exp)
+    .map((c, i) => ({ key: OPTION_KEYS[i], display: `$10^{${c.exp}}$`, correct: c.correct, trap: c.trap }));
   const [mStr, eStr] = value.toExponential(1).split('e');
-  const calc = sc.num.map(numTex).join(times) + (sc.den.length ? ` \\div ${sc.den.map(numTex).join(' \\div ')}` : '');
+  const calc = sc.num.map((f) => numTex(f.v)).join(times) + (sc.den.length ? ` \\div ${sc.den.map((f) => numTex(f.v)).join(' \\div ')}` : '');
   return {
     stem: `${sc.stem}\n\nWhich of the following is closest to the answer?`,
     answer: { kind: 'choice', value: correct },
-    options: fixedOptions(displays, e - lo),
+    options,
     solution: `$${calc} \\approx ${mStr}${times}10^{${Number(eStr)}}$ ${sc.unit}, so the nearest power of ten is $10^{${e}}$.`,
     trap: 'Round each factor to 1 s.f. and add the powers of ten; a missing factor of 60 or 1000 shifts the answer by one or more powers of ten.',
     tags: ['estimation', 'order-of-magnitude', 'powers-of-ten'],
-    params: { variant: 'magnitude', num: sc.num, den: sc.den },
+    params: { variant: 'magnitude', num: sc.num.map((f) => f.v), den: sc.den.map((f) => f.v) },
     typedAllowed: false,
   };
 }
@@ -450,10 +527,14 @@ function standardForm(rng: RNG): Generated | null {
     ]);
     extra = keep([
       { value: sf(2 * A.d, 2 * A.exp).div(b), trap: 'doubled the mantissa instead of squaring it' },
-      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way (factor of 10)' },
-      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way (factor of 10)' },
+      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way: a factor of 10 too big' },
+      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way: a factor of 10 too small' },
       { value: round1(exactA.mul(exactA).div(exactB).toNumber()), trap: 'calculated exactly and rounded at the end' },
       { value: sf(A.trunc * A.trunc, 2 * A.exp).div(sf(B.trunc, B.exp)), trap: 'truncated instead of rounding' },
+      { value: sf((A.d + 1) ** 2, 2 * A.exp).div(b), trap: `rounded the mantissa ${A.mant} up to ${A.d + 1}` },
+      { value: A.d > 1 ? sf((A.d - 1) ** 2, 2 * A.exp).div(b) : null, trap: `rounded the mantissa ${A.mant} down to ${A.d - 1}` },
+      { value: a.mul(a).div(sf(B.d + 1, B.exp)), trap: `rounded the mantissa ${B.mant} up to ${B.d + 1}` },
+      { value: B.d > 1 ? a.mul(a).div(sf(B.d - 1, B.exp)) : null, trap: `rounded the mantissa ${B.mant} down to ${B.d - 1}` },
     ]);
   } else if (form === 'mul-div') {
     ans = a.mul(c).div(b);
@@ -465,11 +546,16 @@ function standardForm(rng: RNG): Generated | null {
       { value: sf(A.d * C.d, A.exp * C.exp).div(b), trap: 'multiplied the exponents when multiplying' },
     ]);
     extra = keep([
-      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way (factor of 10)' },
-      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way (factor of 10)' },
+      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way: a factor of 10 too big' },
+      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way: a factor of 10 too small' },
       { value: round1(exactA.mul(exactC).div(exactB).toNumber()), trap: 'calculated exactly and rounded at the end' },
       { value: a.div(c).div(b), trap: 'divided by both other numbers' },
       { value: sf(A.trunc * C.trunc, A.exp + C.exp).div(sf(B.trunc, B.exp)), trap: 'truncated instead of rounding' },
+      { value: sf((A.d + 1) * C.d, A.exp + C.exp).div(b), trap: `rounded the mantissa ${A.mant} up to ${A.d + 1}` },
+      { value: A.d > 1 ? sf((A.d - 1) * C.d, A.exp + C.exp).div(b) : null, trap: `rounded the mantissa ${A.mant} down to ${A.d - 1}` },
+      { value: sf(A.d * (C.d + 1), A.exp + C.exp).div(b), trap: `rounded the mantissa ${C.mant} up to ${C.d + 1}` },
+      { value: a.mul(c).div(sf(B.d + 1, B.exp)), trap: `rounded the mantissa ${B.mant} up to ${B.d + 1}` },
+      { value: B.d > 1 ? a.mul(c).div(sf(B.d - 1, B.exp)) : null, trap: `rounded the mantissa ${B.mant} down to ${B.d - 1}` },
     ]);
   } else if (form === 'root-mul') {
     // √(m × 10^k) with m ∈ {1, 4, 9} and k even, times B
@@ -485,11 +571,15 @@ function standardForm(rng: RNG): Generated | null {
       { value: sf(m / 2, k).mul(b), trap: 'halved instead of square-rooting' },
     ]);
     extra = keep([
-      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way (factor of 10)' },
-      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way (factor of 10)' },
+      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way: a factor of 10 too big' },
+      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way: a factor of 10 too small' },
       { value: round1(Math.sqrt(sfValue(R).toNumber()) * exactB.toNumber()), trap: 'calculated exactly and rounded at the end' },
       { value: r.div(b), trap: 'divided instead of multiplying' },
       { value: sf(m, k / 2).mul(b), trap: 'halved the power of ten but did not root the leading number' },
+      { value: r.mul(sf(B.d + 1, B.exp)), trap: `rounded the mantissa ${B.mant} up to ${B.d + 1}` },
+      { value: B.d > 1 ? r.mul(sf(B.d - 1, B.exp)) : null, trap: `rounded the mantissa ${B.mant} down to ${B.d - 1}` },
+      { value: sf(Math.sqrt(m) + 1, k / 2).mul(b), trap: `took the root of ${(Math.sqrt(m) + 1) ** 2} instead of ${m}` },
+      { value: Math.sqrt(m) > 1 ? sf(Math.sqrt(m) - 1, k / 2).mul(b) : null, trap: `took the root of ${(Math.sqrt(m) - 1) ** 2} instead of ${m}` },
     ]);
     if (!mental(ans)) return null;
     const answer = ans;
@@ -510,10 +600,14 @@ function standardForm(rng: RNG): Generated | null {
     ]);
     extra = keep([
       { value: a.mul(a).div(b), trap: 'subtracted the exponents when multiplying (sign of the exponent)' },
-      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way (factor of 10)' },
-      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way (factor of 10)' },
+      { value: ans.mulRat(10), trap: 'mantissa renormalised the wrong way: a factor of 10 too big' },
+      { value: ans.mulRat(E(0.1).toRat()), trap: 'mantissa renormalised the wrong way: a factor of 10 too small' },
       { value: round1(exactA.mul(exactA).mul(exactB).toNumber()), trap: 'calculated exactly and rounded at the end' },
       { value: sf(A.trunc * A.trunc, 2 * A.exp).mul(sf(B.trunc, B.exp)), trap: 'truncated instead of rounding' },
+      { value: sf((A.d + 1) ** 2, 2 * A.exp).mul(b), trap: `rounded the mantissa ${A.mant} up to ${A.d + 1}` },
+      { value: A.d > 1 ? sf((A.d - 1) ** 2, 2 * A.exp).mul(b) : null, trap: `rounded the mantissa ${A.mant} down to ${A.d - 1}` },
+      { value: a.mul(a).mul(sf(B.d + 1, B.exp)), trap: `rounded the mantissa ${B.mant} up to ${B.d + 1}` },
+      { value: B.d > 1 ? a.mul(a).mul(sf(B.d - 1, B.exp)) : null, trap: `rounded the mantissa ${B.mant} down to ${B.d - 1}` },
     ]);
   }
   if (!mental(ans)) return null;

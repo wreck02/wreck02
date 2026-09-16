@@ -155,6 +155,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(E(c - b), 'forgot to divide by a'),
         D(q(c, a)?.sub(E(b)) ?? null, 'divided only the first term by a'),
         D(q(b - c, a), 'sign error: gave −x'),
+        D(q(c, a), 'divided by a and ignored b altogether'),
         D(q(c, a + b), 'divided by a + b instead of subtracting b first'),
       ], `$${a}x = ${c} ${b < 0 ? '+' : '-'} ${Math.abs(b)} = ${c - b}$, so $x = ${x}$.`, 'Undo the +b first (subtract it from both sides), then divide the whole of both sides by a.', ['one-step'], [lin(a, b)], [cst(c)], variant);
     }
@@ -233,6 +234,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         D(E(-x), 'sign error: gave −x'),
         D(q(n * d - m * b, m * a - n * c), 'cross-multiplied the wrong way round'),
         D(q(d - b, a - c), 'cancelled the denominators instead of cross-multiplying'),
+        D(q(d - n * b, n * a - c), 'multiplied only the left-hand numerator by the other denominator'),
       ], `Cross-multiply: $${n}(${linear(a, b)}) = ${m}(${linear(c, d)})$, so $${linear(n * a, n * b)} = ${linear(m * c, m * d)}$ and $x = ${x}$.`, 'Cross-multiply the whole numerators: each numerator is multiplied by the other denominator.', ['fractions'], [fracLin(a, b, m)], [fracLin(c, d, n)], variant);
     }
     case 'recip': {
@@ -255,13 +257,14 @@ function build(rng: RNG, variant: Variant): Generated | null {
       return exact(rng, `Solve $${fr(`${a}`, 'x')} ${b < 0 ? '-' : '+'} ${Math.abs(b)} = ${c}$.`, E(x), [
         D(q(a, c + b), 'sign error: added b instead of subtracting it'),
         D(q(c - b, a), 'inverted: gave (c − b)/a'),
-        D(E(a * (c - b)), 'multiplied instead of dividing'),
+        D(q(a, c), 'divided a by c without subtracting b first'),
+        D(q(a + b, c), 'added b to a instead of subtracting b from c'),
         D(q(a, c)?.sub(E(b)) ?? null, 'divided only a by c'),
         D(E(-x), 'sign error: gave −x'),
       ], `$${fr(`${a}`, 'x')} = ${c} ${b < 0 ? '+' : '-'} ${Math.abs(b)} = ${c - b}$, so $x = ${fr(`${a}`, `${c - b}`)} = ${x}$.`, 'Isolate a/x first, then x = a divided by that value (not the other way round).', ['denominator'], [over([a], [1, 0]), cst(b)], [cst(c)], variant);
     }
     case 'x-over': {
-      const c = rng.pick([2, 3, 4, 5, -1, -2]), t = rng.nonZeroInt(-3, 3);
+      const c = rng.pick([2, 3, 4, 5, -2, -3]), t = rng.nonZeroInt(-3, 3);
       const x = c * t, b = t * (1 - c);
       if (b === 0 || Math.abs(b) > 12) return null;
       return exact(rng, `Solve $${fr('x', linear(1, b))} = ${c}$.`, E(x), [
@@ -303,7 +306,9 @@ function build(rng: RNG, variant: Variant): Generated | null {
     }
     case 'subject': {
       const a = rng.pick([1, 2, 2, 3, 4, 5]), b = rng.nonZeroInt(-5, 5), c = rng.nonZeroInt(-5, 5);
-      if (b === a * c) return null;
+      // |b| = |ac| would make the correct form degenerate (b = ac) or turn several of the
+      // sign-slip options into constants such as (y − 3)/(y − 3).
+      if (Math.abs(b) === Math.abs(a * c)) return null;
       // y(x + c) = ax + b  →  x(y − a) = b − cy  →  x = (b − cy)/(y − a)
       const correct: Quad = [-c, b, 1, -a];
       const wrongs: { s: Quad; trap: string }[] = [
@@ -312,9 +317,17 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { s: [c, -b, 1, -a], trap: 'divided by (a − y) but wrote the numerator for (y − a): the whole sign is wrong' },
         { s: [-c, -b, 1, -a], trap: 'sign error on the constant b' },
         { s: [c, b, 1, a], trap: 'both signs wrong when rearranging' },
+        { s: [-c, b, 1, 0], trap: 'divided by y instead of by the whole bracket (y − a)' },
         ...(Math.abs(c) !== 1 ? [{ s: [-Math.sign(c), b, 1, -a] as Quad, trap: 'forgot to multiply y by c when expanding y(x + c)' }] : []),
       ];
-      const shown = wrongs.filter((w) => !subjectFits(w.s, a, b, c) && renderSubject(w.s) !== renderSubject(correct));
+      // Drop any option that is really a constant, and de-duplicate by value rather than by the
+      // rendered string: (3 − y)/(y − 3) and −(y + 3)/(y + 3) are both ≡ −1.
+      const shown: { s: Quad; trap: string }[] = [];
+      for (const w of wrongs) {
+        if (subjectIsConstant(w.s) || subjectFits(w.s, a, b, c)) continue;
+        if (sameSubject(w.s, correct) || shown.some((k) => sameSubject(k.s, w.s))) continue;
+        shown.push(w);
+      }
       let options;
       try { options = buildChoiceOptions(rng, renderSubject(correct), shown.map((w) => ({ display: renderSubject(w.s), trap: w.trap }))); } catch { return null; }
       const kept = shown.filter((w) => options.some((o) => o.display === renderSubject(w.s)));

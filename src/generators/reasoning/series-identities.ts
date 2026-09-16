@@ -60,18 +60,28 @@ function cleanOnly(ds: { value: Exact | null; trap: string }[]): Distractor[] {
     d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
-/** Spec-named traps first, then the extras, so the headline mistakes are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
-  const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
-    seen.push(d.value);
-    out.push(d);
-  };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  return out;
+/**
+ * Same priority order as `ranked`, but how many options fall below the answer is drawn first,
+ * so sorting the five options and picking a fixed position never beats doing the sum.
+ */
+function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const av = answer.toNumber();
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (answer.equals(d.value) || pool.some((o) => o.value.equals(d.value))) continue;
+    pool.push(d);
+  }
+  const below = pool.filter((d) => d.value.toNumber() < av);
+  const above = pool.filter((d) => d.value.toNumber() > av);
+  let nBelow = rng.int(0, count);
+  nBelow = Math.max(Math.min(nBelow, below.length), count - above.length);
+  nBelow = Math.min(Math.max(nBelow, 0), below.length);
+  const out = [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
+  for (const d of pool) {
+    if (out.length >= count) break;
+    if (!out.includes(d)) out.push(d);
+  }
+  return out.slice(0, count);
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -94,7 +104,7 @@ function numericQuestion(
   return {
     stem: opts.stem,
     answer: { kind: 'exact' as const, value: answer },
-    options: buildOptions(rng, answer, ranked(rng, answer, whole(opts.must), whole(opts.extra))),
+    options: buildOptions(rng, answer, balanced(rng, answer, whole(opts.must), whole(opts.extra))),
     solution: opts.solution,
     trap: opts.trap,
     tags: ['series', 'sigma-notation', 'standard-results'],
@@ -125,6 +135,7 @@ function sumRQ(rng: RNG): Generated | null {
       { value: E(S1(n + 1)), trap: 'off by one: summed one term too many' },
       { value: E(Math.round((n * n) / 2)), trap: 'used n²/2' },
       { value: E(value + n), trap: 'added the last term twice' },
+      { value: E(value - n), trap: 'left the last term out of the sum' },
     ]),
   });
 }
@@ -149,6 +160,7 @@ function sumOddQ(rng: RNG): Generated | null {
       { value: E((n + 1) * (n + 1)), trap: 'off by one in the number of terms' },
       { value: E(n * n - n), trap: 'subtracted n from n² as well' },
       { value: E(2 * n - 1), trap: 'quoted the last term instead of the sum' },
+      { value: E(2 * n * n), trap: 'doubled: summed 2r without subtracting the ones' },
     ]),
   });
 }
@@ -156,14 +168,16 @@ function sumOddQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 2
 
 function sumSquareQ(rng: RNG): Generated | null {
-  const n = rng.int(4, 12);
+  const n = rng.int(4, 14);
   const value = S2(n);
-  const asList = rng.bool(0.4);
+  const form = rng.int(0, 2);
   return numericQuestion(rng, {
     id: 'sq', lo: 1, hi: n, value,
-    stem: asList
+    stem: form === 1
       ? `Find the value of $1^2 + 2^2 + 3^2 + \\dots + ${n}^2$.`
-      : `Find the value of $${sigma('sq', 1, n)}$.`,
+      : form === 2
+        ? `Find the sum of the squares of the first ${n} positive integers.`
+        : `Find the value of $${sigma('sq', 1, n)}$.`,
     solution: `$\\sum_{r=1}^{n} r^2 = \\frac{n(n+1)(2n+1)}{6} = \\frac{${n} \\times ${n + 1} \\times ${2 * n + 1}}{6} = ${value}$.`,
     trap: 'Σr² is not (Σr)²: squaring the sum is the classic slip.',
     must: cleanOnly([
@@ -176,19 +190,22 @@ function sumSquareQ(rng: RNG): Generated | null {
       { value: E((n * (n + 1) * (2 * n + 1)) / 3), trap: 'divided by 3 instead of 6' },
       { value: E(value + n * n), trap: 'added the last square twice' },
       { value: E(S2(n + 1)), trap: 'off by one: summed one term too many' },
+      { value: E(n * n), trap: 'quoted the last square instead of the sum' },
     ]),
   });
 }
 
 function sumCubeQ(rng: RNG): Generated | null {
-  const n = rng.int(4, 9);
+  const n = rng.int(4, 10);
   const value = S3(n);
-  const asList = rng.bool(0.4);
+  const form = rng.int(0, 2);
   return numericQuestion(rng, {
     id: 'cube', lo: 1, hi: n, value,
-    stem: asList
+    stem: form === 1
       ? `Find the value of $1^3 + 2^3 + 3^3 + \\dots + ${n}^3$.`
-      : `Find the value of $${sigma('cube', 1, n)}$.`,
+      : form === 2
+        ? `Find the sum of the cubes of the first ${n} positive integers.`
+        : `Find the value of $${sigma('cube', 1, n)}$.`,
     solution: `$\\sum_{r=1}^{n} r^3 = \\left(\\frac{n(n+1)}{2}\\right)^2 = ${S1(n)}^2 = ${value}$.`,
     trap: 'Σr³ is the square of Σr — using Σr² or forgetting to square gives the wrong order of magnitude.',
     must: cleanOnly([
@@ -200,6 +217,7 @@ function sumCubeQ(rng: RNG): Generated | null {
       { value: E(S3(n - 1)), trap: 'off by one: summed only to n − 1' },
       { value: E(n * n * n), trap: 'quoted the last cube' },
       { value: E(value + n * n * n), trap: 'added the last cube twice' },
+      { value: E(S3(n + 1)), trap: 'off by one: summed one term too many' },
     ]),
   });
 }
@@ -257,7 +275,7 @@ function sumRangeQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 4
 
 function sumProductQ(rng: RNG): Generated | null {
-  const n = rng.int(5, 11);
+  const n = rng.int(5, 12);
   const value = S2(n) + S1(n);
   return numericQuestion(rng, {
     id: 'r-r1', lo: 1, hi: n, value,
@@ -274,12 +292,13 @@ function sumProductQ(rng: RNG): Generated | null {
       { value: E(S2(n) + S1(n) - n * (n + 1)), trap: 'off by one: summed only to n − 1' },
       { value: E(S2(n) + 2 * S1(n)), trap: 'counted Σr twice' },
       { value: E(n * (n + 1)), trap: 'quoted the last term' },
+      { value: E(value + (n + 1) * (n + 2)), trap: 'off by one: summed one term too many' },
     ]),
   });
 }
 
 function sumOddSquareQ(rng: RNG): Generated | null {
-  const n = rng.int(4, 8);
+  const n = rng.int(4, 9);
   const value = 4 * S2(n) + 4 * S1(n) + n;
   return numericQuestion(rng, {
     id: 'odd-sq', lo: 1, hi: n, value,

@@ -49,6 +49,26 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   return out;
 }
 
+/** The `ranked` twin for 'choice' options: the named traps are kept, the extras only fill up. */
+function rankedChoices(
+  rng: RNG,
+  correct: string,
+  must: { display: string; trap: string }[],
+  extra: { display: string; trap: string }[],
+  count = 4,
+): { display: string; trap: string }[] {
+  const key = (x: string) => x.replace(/\s+/g, ' ').trim();
+  const seen = new Set([key(correct)]);
+  const out: { display: string; trap: string }[] = [];
+  for (const c of [...must, ...rng.shuffle(extra)]) {
+    if (out.length >= count) break;
+    if (seen.has(key(c.display))) continue;
+    seen.add(key(c.display));
+    out.push(c);
+  }
+  return out;
+}
+
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
   const f = rng.pick(fns);
   for (let i = 0; i < 40; i++) {
@@ -74,13 +94,16 @@ function abVectorQ(rng: RNG): Generated | null {
     display: `$${vecTex(ab.map((x, j) => (j === i ? -x : x)))}$`,
     trap: `subtracted the ${SYMS[i].slice(8, 9)}-components the wrong way round`,
   }));
-  const wrong = [
+  const must = [
     { display: `$${vecTex(sub(a, b))}$`, trap: 'used a − b: AB is the position vector of B minus that of A' },
     { display: `$${vecTex(add(a, b))}$`, trap: 'added the position vectors instead of subtracting them' },
+  ].filter((w) => w.display !== correct);
+  const extra = [
     ...flips,
     { display: `$${vecTex(b)}$`, trap: 'gave the position vector of B' },
     { display: `$${vecTex(a)}$`, trap: 'gave the position vector of A' },
   ].filter((w) => w.display !== correct);
+  const wrong = rankedChoices(rng, correct, must, extra);
   return {
     stem: `The points $A$ and $B$ have position vectors $\\mathbf{a} = ${vecTex(a)}$ and $\\mathbf{b} = ${vecTex(b)}$. Find the vector $\\mathbf{AB}$.`,
     answer: { kind: 'choice' as const, value: correct },
@@ -141,14 +164,17 @@ function ratioPointQ(rng: RNG): Generated | null {
   const justTheVector = step.map((x) => x * m);
   const beyond = add(b, step.map((x) => x * m));
   const correct = `$${ptTex(p)}$`;
-  const wrong = [
+  const must = [
     { display: `$${ptTex(swapped)}$`, trap: `used the weights the wrong way round (that is the point dividing AB in the ratio ${n}:${m})` },
     { display: `$${ptTex(mid)}$`, trap: 'took the midpoint, ignoring the ratio' },
     { display: `$${ptTex(justTheVector)}$`, trap: 'found the vector AP but forgot to add the position vector of A' },
+  ].filter((w) => w.display !== correct);
+  const extra = [
     { display: `$${ptTex(beyond)}$`, trap: 'stepped on past B instead of stopping inside AB' },
     { display: `$${ptTex(sub(a, step.map((x) => x * m)))}$`, trap: 'moved from A in the wrong direction' },
     { display: `$${ptTex(add(a, step))}$`, trap: 'moved one step from A instead of m of them' },
   ].filter((w) => w.display !== correct);
+  const wrong = rankedChoices(rng, correct, must, extra);
   return {
     stem: `$A$ is the point $${ptTex(a)}$ and $B$ is the point $${ptTex(b)}$. The point $P$ lies on $AB$ with $AP : PB = ${m} : ${n}$. Find the coordinates of $P$.`,
     answer: { kind: 'choice' as const, value: correct },
@@ -251,14 +277,17 @@ function parallelogramQ(rng: RNG): Generated | null {
   const pts = [a, b, c, d];
   if (pts.some((p) => p.some((x) => Math.abs(x) > 16))) return null;
   const correct = `$${ptTex(d)}$`;
-  const wrong = [
+  const must = [
     { display: `$${ptTex(sub(add(a, b), c))}$`, trap: 'used A + B − C: the vertices must be taken in the order ABCD' },
     { display: `$${ptTex(sub(add(b, c), a))}$`, trap: 'used B + C − A, which is the reflection of A in the centre' },
+  ].filter((w) => w.display !== correct);
+  const extra = [
     { display: `$${ptTex(add(add(a, b), c))}$`, trap: 'added all three position vectors' },
     { display: `$${ptTex(sub(add(a, v), u))}$`, trap: 'stepped backwards along AB as well as along BC' },
     { display: `$${ptTex(sub(c, a))}$`, trap: 'gave the vector AC rather than a point' },
     { display: `$${ptTex(sub(b, v))}$`, trap: 'stepped the wrong way along BC' },
   ].filter((w) => w.display !== correct);
+  const wrong = rankedChoices(rng, correct, must, extra);
   return {
     stem: `$ABCD$ is a parallelogram with $A${ptTex(a)}$, $B${ptTex(b)}$ and $C${ptTex(c)}$. Find the coordinates of $D$.`,
     answer: { kind: 'choice' as const, value: correct },

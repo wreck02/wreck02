@@ -60,6 +60,51 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   return out;
 }
 
+/**
+ * Same priority order as `ranked`, but the number of options below the answer is drawn first, so
+ * the answer does not sit in a predictable place once the five options are sorted by value
+ * ("order them and pick the middle one" must never beat working the magnitude out).
+ */
+function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const av = answer.toNumber();
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (answer.equals(d.value) || pool.some((o) => o.value.equals(d.value))) continue;
+    pool.push(d);
+  }
+  const below = pool.filter((d) => d.value.toNumber() < av);
+  const above = pool.filter((d) => d.value.toNumber() > av);
+  let nBelow = rng.int(0, count);
+  nBelow = Math.max(Math.min(nBelow, below.length), count - above.length);
+  nBelow = Math.min(Math.max(nBelow, 0), below.length);
+  const out = [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
+  for (const d of pool) {
+    if (out.length >= count) break;
+    if (!out.includes(d)) out.push(d);
+  }
+  return out.slice(0, count);
+}
+
+/** The `ranked` twin for 'choice' options: the named traps are kept, the extras only fill up. */
+function rankedChoices(
+  rng: RNG,
+  correct: string,
+  must: { display: string; trap: string }[],
+  extra: { display: string; trap: string }[],
+  count = 4,
+): { display: string; trap: string }[] {
+  const key = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const seen = new Set([key(correct)]);
+  const out: { display: string; trap: string }[] = [];
+  for (const c of [...must, ...rng.shuffle(extra)]) {
+    if (out.length >= count) break;
+    if (seen.has(key(c.display))) continue;
+    seen.add(key(c.display));
+    out.push(c);
+  }
+  return out;
+}
+
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
   const f = rng.pick(fns);
   for (let i = 0; i < 40; i++) {
@@ -91,22 +136,26 @@ function magnitudeQ(rng: RNG): Generated | null {
   if (!isCleanExact(answer).ok) return null;
   const absSum = a.reduce((s, x) => s + Math.abs(x), 0);
   const drop = rng.int(0, a.length - 1);
+  const twice = rng.int(0, a.length - 1);
+  // Half of these sit above |a| and half below it, so the size of an option gives nothing away.
   const must = cleanOnly([
     { value: E(n2), trap: 'forgot to square-root the sum of the squares' },
-    { value: E(absSum), trap: 'added the components instead of squaring them' },
     { value: n2 - a[drop] * a[drop] > 0 ? surd(n2 - a[drop] * a[drop]) : null, trap: 'left one component out of the sum of squares' },
+    { value: E(absSum), trap: 'added the components instead of squaring them' },
   ]);
   const extra = cleanOnly([
     { value: surd(absSum), trap: 'square-rooted the sum of the components, not the sum of the squares' },
+    { value: E(Math.max(...a.map(Math.abs))), trap: 'quoted the largest component' },
+    { value: surd(n2 + 3 * a[twice] * a[twice]), trap: 'doubled one component before squaring it' },
+    { value: surd(2 * n2), trap: 'doubled the sum of the squares before taking the root' },
     { value: answer.isInteger() ? answer.add(E(1)) : null, trap: 'arithmetic slip of one' },
     { value: answer.isInteger() ? answer.sub(E(1)) : null, trap: 'arithmetic slip of one' },
-    { value: E(Math.max(...a.map(Math.abs))), trap: 'quoted the largest component' },
     { value: answer.mulRat(frac(1, 2).toRat()), trap: 'halved instead of square-rooting' },
   ]);
   return {
     stem: `Given that $\\mathbf{a} = ${vecTex(a)}$, find $|\\mathbf{a}|$.`,
     answer: { kind: 'exact' as const, value: answer },
-    options: buildOptions(rng, answer, ranked(rng, answer, must, extra)),
+    options: buildOptions(rng, answer, balanced(rng, answer, must, extra)),
     solution: `$|\\mathbf{a}|^2 = ${a.map((x) => (x < 0 ? `(${x})^2` : `${x}^2`)).join(' + ')} = ${n2}$, so $|\\mathbf{a}| = \\sqrt{${n2}} = ${answer.toLatex()}$.`,
     trap: 'The magnitude is the square root of the sum of the squares — quoting a² + b² (or a + b) is the usual slip.',
     tags: ['vectors', 'magnitude', 'modulus'],
@@ -187,10 +236,16 @@ const ANGLE_BASES: AnglePair[] = [
   { a: [1, 2, 2], b: [-1, -2, -2], deg: 180 },
 ];
 
-const STANDARD_ANGLES = [0, 30, 45, 60, 90, 120, 135, 150, 180];
+/**
+ * The angles an integer-vector pair can actually produce. 30° and 150° are deliberately absent:
+ * cos θ = ±√3/2 needs a surd component, so offering them would give a candidate two options to
+ * strike out on sight.
+ */
+const STANDARD_ANGLES = [0, 45, 60, 90, 120, 135, 180];
 
 function angleQ(rng: RNG): Generated | null {
-  const base = rng.pick(ANGLE_BASES);
+  // 0° and 180° are spotted in two seconds (b is a visible multiple of a), so they stay rare.
+  const base = rng.weighted(ANGLE_BASES, ANGLE_BASES.map((x) => (x.deg === 0 || x.deg === 180 ? 2 : 6)));
   const [a, b] = orient(rng, [base.a, base.b]);
   const p = rng.int(1, 3), q = rng.int(1, 3);
   const av = a.map((x) => x * p), bv = b.map((x) => x * q);
@@ -312,13 +367,17 @@ function unitVectorQ(rng: RNG): Generated | null {
   const correct = wrap(m, a);
   const swapped = a.slice();
   [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
-  const wrong = [
+  const must = [
     { display: wrap(null, a), trap: 'forgot to divide by the magnitude' },
     { display: wrap(m * m, a), trap: 'divided by |a|² instead of |a|' },
     { display: wrap(absSum, a), trap: 'divided by the sum of the components instead of the magnitude' },
+  ].filter((w) => w.display !== correct);
+  const extra = [
     { display: wrap(m, a.map((x) => -x)), trap: 'gave the unit vector in the opposite direction' },
     { display: wrap(m, swapped), trap: 'components written in the wrong order' },
+    { display: wrap(m + 1, a), trap: 'slip of one in the magnitude' },
   ].filter((w) => w.display !== correct);
+  const wrong = rankedChoices(rng, correct, must, extra);
   return {
     stem: `Find the unit vector in the direction of $\\mathbf{a} = ${vecTex(a)}$.`,
     answer: { kind: 'choice' as const, value: correct },

@@ -10,21 +10,25 @@ import type { RNG } from '../../core/rng';
  * Level 2: p = ρgh at a stated depth, answer in kPa
  * Level 3: total pressure = atmospheric + ρgh (the stem always says which is wanted); force = pressure × area
  * Level 4: upthrust = ρ_fluid V g; floating: fraction submerged = ρ_object / ρ_fluid; apparent weight in water
- * Level 5: hydraulic press (force ratio = area ratio, distance ratio is the inverse); density of an alloy
+ * Level 5: hydraulic press — two steps every time (weight then area ratio, or the areas and then the
+ *          energy conservation that fixes how far the load moves); the density of an alloy
  *
  * Every distractor is a named mistake: a wrong power of ten in a conversion, the ratio upside down,
  * g left out, atmospheric pressure added or subtracted when the stem asked for the other one, the force
- * given instead of the pressure. When fewer than four of them survive, pack() returns null and the
- * parameters are redrawn — the option list is never padded with "half the answer".
+ * given instead of the pressure. Two rules keep the option list exam-like: a candidate must be printable
+ * to the precision of the answer itself (no 23.996 N next to 24 N), and the whole list must span at most
+ * `spread`, so no option can be struck out on size alone. When fewer than four survive, pack() returns
+ * null and the parameters are redrawn — the list is never padded with "half the answer".
  *
  * verify() never repeats the arithmetic of generate(): it re-derives the answer in SI base units by a
- * different route — weight of the displaced fluid, the weight of a column of liquid over a chosen area,
- * equality of the pressures under the two pistons, the volume swept by the pistons, or the total mass of
- * an alloy in grams per cm³.
+ * different route — the weight of a column of liquid built up slice by slice (and the pressure at a
+ * second depth), the weight of the displaced fluid, the pressure under each piston of the press with the
+ * areas in m², the work done on each piston, or the total mass of an alloy in grams per cm³ — and never
+ * compares the answer with a number generate() stored for it.
  */
 
 const U_PA = '\\text{Pa}', U_KPA = '\\text{kPa}', U_N = '\\text{N}', U_KG = '\\text{kg}';
-const U_RHO = '\\text{kg m}^{-3}', U_CM = '\\text{cm}';
+const U_RHO = '\\text{kg m}^{-3}', U_CM = '\\text{cm}', U_J = '\\text{J}';
 const G = 10;
 const P_ATM = 100; // kPa
 
@@ -35,13 +39,29 @@ const isMult = (v: number, step: number): boolean => Math.abs(v / step - Math.ro
 type Cand = { value: number | null; trap: string };
 type Fmt = 'decimal' | 'fraction' | 'sf';
 
-/** Positive, exam-plausible distractors that pass the clean-number rule. */
-function cleanOnly(ds: Cand[]): Distractor[] {
+/** The decimal step the answer is printed to: 20 → 1, 4.5 → 0.1, 0.25 → 0.01. */
+function stepOf(a: number): number {
+  for (let k = 0; k <= 5; k++) {
+    const s = Math.pow(10, -k);
+    if (isMult(a, s)) return s;
+  }
+  return 1e-5;
+}
+
+/**
+ * Positive, exam-plausible distractors that pass the clean-number rule.
+ *
+ * `step` is a tenth of the answer's own printing step: an option must round to (at worst) one more
+ * decimal place than the answer, so a "mistake" such as 23.996 N — which no exam would print, and which
+ * sits 0.02% from another option — is dropped instead of being offered.
+ */
+function cleanOnly(ds: Cand[], step: number): Distractor[] {
   const out: Distractor[] = [];
   for (const d of ds) {
     if (d.value === null || !Number.isFinite(d.value) || d.value <= 0) continue;
     const v = round(d.value);
     if (v > 1e9 || v < 1e-9) continue;
+    if (!isMult(v, step)) continue;
     let ex: Exact;
     try { ex = E(v); } catch { continue; }
     if (!isCleanExact(ex).ok) continue;
@@ -50,19 +70,34 @@ function cleanOnly(ds: Cand[]): Distractor[] {
   return out;
 }
 
-/** `must` traps get their slot first; options further than `spread` times from the answer are dropped. */
+/**
+ * `must` traps get their slot first, nearest the answer first; the extras follow in random order.
+ * Two rules decide what may join the list:
+ *  · the whole list — the answer and everything already chosen — may span at most `spread`, because an
+ *    option orders of magnitude from the answer is struck out on sight, which turns a five-option
+ *    question into a three-option one;
+ *  · no option may sit within 2% of another (or of the answer): a pair a candidate cannot tell apart
+ *    is a wasted slot, and it makes the question turn on arithmetic no one would do in 90 seconds.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spread: number, count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
-  const a = answer.toNumber();
+  let lo = a, hi = a;
   const take = (d: Distractor) => {
-    const r = d.value.toNumber() / a;
-    if (out.length >= count || r < 1 / spread - 1e-12 || r > spread + 1e-12) return;
+    if (out.length >= count) return;
+    const v = d.value.toNumber();
+    if (!(v > 0)) return;
+    if (Math.max(hi, v) / Math.min(lo, v) > spread * (1 + 1e-9)) return;
+    if ([a, ...out.map((o) => o.value.toNumber())].some((x) => Math.abs(v - x) < 0.02 * Math.max(v, x))) return;
     if (seen.some((s) => s.equals(d.value))) return;
     seen.push(d.value);
     out.push(d);
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
   };
-  must.forEach(take);
+  const closest = (x: Distractor) => Math.abs(Math.log(x.value.toNumber() / a));
+  must.slice().sort((x, y) => closest(x) - closest(y)).forEach(take);
   rng.shuffle(extra).forEach(take);
   return out;
 }
@@ -87,6 +122,7 @@ interface Pack {
   trap: string;
   tags: string[];
   params: Record<string, unknown>;
+  /** how many times the largest option may be bigger than the smallest (default 30) */
   spread?: number;
 }
 
@@ -97,7 +133,8 @@ function pack(rng: RNG, p: Pack): Generated | null {
   try { value = E(a); } catch { return null; }
   if (!isCleanExact(value).ok) return null;
   const format = p.format ?? 'decimal';
-  const ds = ranked(rng, value, cleanOnly(p.must), cleanOnly(p.extra), p.spread ?? 30);
+  const step = stepOf(a) / 10;
+  const ds = ranked(rng, value, cleanOnly(p.must, step), cleanOnly(p.extra, step), p.spread ?? 30);
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -128,19 +165,19 @@ function densityQ(rng: RNG): Generated | null {
     unit: U_RHO,
     must: [
       { value: rho / 1000, trap: 'divided by $10^{3}$ instead of $10^{6}$ (cm³ treated as litres)' },
-      { value: vCm3 / mKg, trap: 'volume divided by mass instead of mass by volume' },
-      { value: mKg * vCm3, trap: 'multiplied the mass by the volume instead of dividing' },
+      { value: rho / 100, trap: 'used the area factor $10^{4}$ instead of the volume factor $10^{6}$' },
     ],
     extra: [
-      { value: rho * 1000, trap: 'mass left in grams while the volume was converted to $\\text{m}^{3}$' },
       { value: rho / 10, trap: 'a power of ten lost in the conversion' },
       { value: rho * 10, trap: 'a power of ten gained in the conversion' },
+      { value: vCm3 / mKg, trap: 'volume divided by mass instead of mass by volume' },
+      { value: mKg * vCm3, trap: 'multiplied the mass by the volume instead of dividing' },
     ],
     solution: `$${n(vCm3)}\\ \\text{cm}^{3} = ${n(vCm3)} \\times 10^{-6}\\ \\text{m}^{3}$, so $\\rho = \\dfrac{${n(mKg)}}{${n(vCm3)} \\times 10^{-6}} = ${n(rho)}\\ \\text{kg m}^{-3}$.`,
     trap: '1 m³ is 10⁶ cm³, not 10³: dividing by the wrong power of ten is the whole question.',
     tags: ['density', 'units'],
     params: { variant: 'density', rho, vCm3, mKg },
-    spread: 1200,
+    spread: 1000,
   });
 }
 
@@ -161,7 +198,6 @@ function pressureQ(rng: RNG): Generated | null {
       ? [
           { value: F / aCm2, trap: 'used the area in cm² without converting to m²' },
           { value: (F * 100) / aCm2, trap: 'converted the area with $10^{2}$ instead of $10^{4}$' },
-          { value: aM2 / F, trap: 'divided the area by the force' },
         ]
       : [
           { value: F, trap: 'gave the force: the area was never used' },
@@ -186,8 +222,9 @@ function pressureQ(rng: RNG): Generated | null {
       ? '1 m² is 10⁴ cm², so an area in cm² must be divided by 10⁴ before it goes under the force.'
       : 'Pressure is the force spread over the area: divide by the area, and dividing by a number less than 1 makes the answer bigger.',
     tags: ['pressure', 'units'],
-    params: { variant: 'pressure', F, aM2 },
-    spread: cm2 ? 15000 : 30,
+    // verify() converts the area from the units the stem prints, so the conversion is really tested
+    params: { variant: 'pressure', F, aShown: cm2 ? aCm2 : aM2, areaUnit: cm2 ? 'cm^2' : 'm^2' },
+    spread: cm2 ? 1e4 : 30,
   });
 }
 
@@ -203,19 +240,18 @@ function massFromDensityQ(rng: RNG): Generated | null {
     unit: U_KG,
     must: [
       { value: mKg * 1000, trap: 'converted cm³ with $10^{3}$ instead of $10^{6}$' },
-      { value: rho / vCm3, trap: 'divided the density by the volume' },
-      { value: vCm3 / rho, trap: 'divided the volume by the density' },
+      { value: mKg * 100, trap: 'used the area factor $10^{4}$ instead of the volume factor $10^{6}$' },
     ],
     extra: [
-      { value: mKg / 1000, trap: 'converted cm³ with $10^{9}$ instead of $10^{6}$' },
+      { value: rho / vCm3, trap: 'divided the density by the volume' },
       { value: mKg / 10, trap: 'a power of ten lost in the conversion' },
       { value: mKg * 10, trap: 'a power of ten gained in the conversion' },
     ],
     solution: `$m = \\rho V = ${n(rho)} \\times ${n(vCm3)} \\times 10^{-6} = ${n(mKg)}\\ \\text{kg}$.`,
     trap: 'The volume must be in m³ (÷10⁶) before it is multiplied by a density in kg m⁻³.',
     tags: ['density', 'mass', 'units'],
-    params: { variant: 'mass-from-density', rho, vCm3, mKg },
-    spread: 1200,
+    params: { variant: 'mass-from-density', rho, vCm3 },
+    spread: 1e4,
   });
 }
 
@@ -250,19 +286,18 @@ function depthPressureQ(rng: RNG): Generated | null {
     must: [
       { value: pk + P_ATM, trap: 'added atmospheric pressure, although only the liquid was asked for' },
       { value: (rho * h) / 1000, trap: 'left $g$ out of $\\rho g h$' },
-      { value: (rho * G) / 1000 / h, trap: 'divided by the depth instead of multiplying' },
     ],
     extra: [
-      { value: pPa, trap: 'gave the answer in Pa, not kPa' },
       { value: pk * 10, trap: 'divided by $100$ instead of $1000$ turning Pa into kPa' },
       { value: pk / 2, trap: 'used $\\tfrac12 \\rho g h$' },
+      { value: pk * 2, trap: 'took the pressure at twice the depth' },
       { value: (G * h) / 1000, trap: 'left the density out' },
     ],
     solution: `$p = \\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(pPa)}\\ \\text{Pa} = ${n(pk)}\\ \\text{kPa}$.`,
     trap: 'ρgh needs all three factors and the depth in metres; the question asks for the liquid’s pressure only, so atmospheric pressure is not added.',
     tags: ['pressure', 'depth', 'fluids'],
-    params: { variant: 'rho-g-h', rho, h, pk },
-    spread: 1500,
+    params: { variant: 'rho-g-h', rho, h },
+    spread: 200,
   });
 }
 
@@ -283,10 +318,10 @@ function depthFromPressureQ(rng: RNG): Generated | null {
       { value: round(((pk - P_ATM) * 1000) / (rho * G)), trap: 'subtracted atmospheric pressure, although the stem gives the liquid’s pressure' },
     ],
     extra: [
-      { value: round((rho * G) / (pk * 1000)), trap: 'the formula upside down: $\\rho g / p$' },
       { value: round(h * 100), trap: 'gave the depth in centimetres' },
       { value: round(h / 10), trap: 'a power of ten lost turning kPa into Pa' },
       { value: round(pk / (rho * G)), trap: 'used the pressure in kPa instead of Pa' },
+      { value: round(h / 2), trap: 'used $\\tfrac12 \\rho g h$' },
     ],
     solution: `$h = \\dfrac{p}{\\rho g} = \\dfrac{${n(pk * 1000)}}{${n(rho)} \\times 10} = ${n(h)}\\ \\text{m}$ (the pressure must be in Pa first).`,
     trap: 'Divide by ρg, not by ρ alone, and turn kPa into Pa before dividing.',
@@ -318,14 +353,13 @@ function totalPressureQ(rng: RNG): Generated | null {
     extra: [
       { value: round(pk / 2 + P_ATM), trap: 'used $\\tfrac12 \\rho g h$' },
       { value: round(2 * pk + P_ATM), trap: 'took the pressure at twice the depth' },
-      { value: round(pk + 1), trap: 'added 1 kPa instead of 100 kPa' },
       { value: round(P_ATM - pk), trap: 'took the liquid’s pressure away from atmospheric pressure' },
       { value: round(10 * pk + P_ATM), trap: 'a power of ten lost turning the liquid’s pressure into kPa' },
     ],
     solution: `Liquid: $\\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(pk * 1000)}\\ \\text{Pa} = ${n(pk)}\\ \\text{kPa}$. Total $= 100 + ${n(pk)} = ${n(total)}\\ \\text{kPa}$.`,
     trap: 'Total pressure includes the atmosphere pressing on the surface: p = p₀ + ρgh.',
     tags: ['pressure', 'depth', 'atmospheric'],
-    params: { variant: 'total-pressure', rho, h, total },
+    params: { variant: 'total-pressure', rho, h },
     spread: 40,
   });
 }
@@ -346,20 +380,20 @@ function forceOnSurfaceQ(rng: RNG): Generated | null {
     unit: U_N,
     must: [
       { value: p, trap: 'gave the pressure in Pa instead of the force' },
-      { value: round(p / A), trap: 'divided by the area instead of multiplying' },
       { value: round(rho * h * A), trap: 'left $g$ out of $\\rho g h$' },
+      { value: round(p / A), trap: 'divided by the area instead of multiplying' },
     ],
     extra: [
       { value: round((p + 100000) * A), trap: 'included atmospheric pressure, although only the liquid was asked for' },
-      { value: round(F / 1000), trap: 'left the pressure in kPa when multiplying by the area' },
       { value: round(rho * G * (h / 2) * A), trap: 'used half the depth, although the average depth was given' },
       { value: round(p * A * 2), trap: 'counted both faces of the panel' },
+      { value: round(F / 10), trap: 'a power of ten lost in the pressure' },
     ],
     solution: `$p = \\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(p)}\\ \\text{Pa}$, so $F = pA = ${n(p)} \\times ${n(A)} = ${n(F)}\\ \\text{N}$.`,
     trap: 'Pressure is a force per unit area: multiply by the area (and only the liquid’s pressure is asked for here).',
     tags: ['pressure', 'force', 'fluids'],
-    params: { variant: 'force-on-surface', rho, h, A, F },
-    spread: 1500,
+    params: { variant: 'force-on-surface', rho, h, A },
+    spread: 200,
   });
 }
 
@@ -381,19 +415,18 @@ function upthrustQ(rng: RNG): Generated | null {
     must: [
       { value: round(rhoBody * V * G), trap: 'used the block’s own density instead of the liquid’s' },
       { value: round(rho * V), trap: 'left $g$ out of $\\rho V g$' },
-      { value: round(rho * vCm3 * G), trap: 'left the volume in cm³' },
     ],
     extra: [
-      { value: round(rho * V * G * 1000), trap: 'converted cm³ with $10^{3}$ instead of $10^{6}$' },
       { value: round(rhoBody * V * G - U), trap: 'gave the apparent weight instead of the upthrust' },
       { value: round((rhoBody - rho) * V * G * 2), trap: 'counted the difference in densities twice' },
-      { value: round(U * 10), trap: 'a power of ten gained in the conversion' },
+      { value: round(U * 10), trap: 'a power of ten gained in the volume conversion' },
+      { value: round(U / 2), trap: 'halved the weight of the displaced liquid' },
     ],
     solution: `Upthrust $=$ weight of liquid displaced $= \\rho_{\\text{liquid}} V g = ${n(rho)} \\times ${n(vCm3)} \\times 10^{-6} \\times 10 = ${n(U)}\\ \\text{N}$.`,
     trap: 'The upthrust uses the density of the fluid displaced, never the density of the object.',
     tags: ['upthrust', 'archimedes', 'fluids'],
-    params: { variant: 'upthrust', rho, vCm3, rhoBody },
-    spread: 2000,
+    params: { variant: 'upthrust', rho, vCm3 },
+    spread: 200,
   });
 }
 
@@ -449,7 +482,7 @@ function densityFromFloatQ(rng: RNG): Generated | null {
     solution: `Weight $=$ upthrust, so $\\rho_{\\text{block}} = ${fr} \\times ${n(rhoF)} = ${n(rhoB)}\\ \\text{kg m}^{-3}$.`,
     trap: 'A floating body’s density is the fraction submerged times the liquid’s density; dividing gives a body denser than the liquid, which would sink.',
     tags: ['floating', 'density', 'upthrust'],
-    params: { variant: 'density-from-float', rhoB, rhoF, f },
+    params: { variant: 'density-from-float', rhoF, f },
     spread: 12,
   });
 }
@@ -476,75 +509,113 @@ function apparentWeightQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: round(mKg - U), trap: 'mixed a mass in kg with a force in N' },
-      { value: round(W - U / 10), trap: 'a power of ten lost in the volume conversion' },
-      { value: round(W - U / 1000), trap: 'used a density of $1\\ \\text{kg m}^{-3}$ for the water' },
+      { value: round(app / G), trap: 'gave the apparent mass in kg, not the reading in N' },
       { value: round(W - 2 * U), trap: 'subtracted the upthrust twice' },
+      { value: round(W / 2), trap: 'assumed water halves the reading' },
     ],
     solution: `Weight $= ${n(mKg)} \\times 10 = ${n(W)}\\ \\text{N}$; upthrust $= 1000 \\times ${n(vCm3)} \\times 10^{-6} \\times 10 = ${n(U)}\\ \\text{N}$. Reading $= ${n(W)} - ${n(U)} = ${n(app)}\\ \\text{N}$.`,
     trap: 'Apparent weight = true weight − upthrust, and the upthrust uses the water’s density, not the block’s.',
     tags: ['upthrust', 'apparent weight', 'archimedes'],
-    params: { variant: 'apparent-weight', vCm3, rhoB, mKg },
+    params: { variant: 'apparent-weight', vCm3, mKg },
     spread: 40,
   });
 }
 
 // ----------------------------------------------------------------------------- level 5
 
-/** Hydraulic press: the force on the large piston, or how far it moves. */
-function hydraulicQ(rng: RNG, ask: 'force' | 'distance'): Generated | null {
+/**
+ * Hydraulic press. Every version takes two steps: a weight and then the ratio of the areas, or the
+ * ratio of the areas and then the energy conservation that fixes how far the load moves.
+ */
+function hydraulicQ(rng: RNG, ask: 'load' | 'rise' | 'work'): Generated | null {
   const a1 = rng.pick([2, 4, 5, 8, 10, 20, 25]);
-  const k = rng.pick([4, 5, 8, 10, 20, 25, 40, 50]);
+  const k = rng.pick(ask === 'work' ? [4, 5, 8, 10, 20] : [4, 5, 8, 10, 20, 25, 40, 50]);
   const a2 = a1 * k;
   if (a2 > 2000) return null;
-  const F1 = rng.pick([10, 12, 15, 20, 24, 25, 30, 40, 50, 60, 80, 100]);
-  const F2 = round(F1 * k);
-  const d1 = rng.pick([2, 4, 5, 8, 10, 12, 15, 20, 25, 40, 50]);
-  const d2 = round(d1 / k);
-  if (F2 > 20000) return null;
-  if (ask === 'distance' && (!isMult(d2, 0.01) || d2 < 0.05)) return null;
   const setup = `In a hydraulic press the small piston has cross-sectional area $${n(a1)}\\ \\text{cm}^{2}$ and the large piston has cross-sectional area $${n(a2)}\\ \\text{cm}^{2}$. The liquid in the press is incompressible.`;
-  if (ask === 'force') {
+
+  if (ask === 'load') {
+    const mKg = rng.pick([20, 24, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 240, 300, 400, 500]);
+    const W2 = mKg * G;
+    const F1 = round(W2 / k);
+    if (!isMult(F1, 0.5) || F1 < 2 || F1 > 400) return null;
     return pack(rng, {
-      stem: `${setup} A force of $${n(F1)}\\ \\text{N}$ is applied to the small piston.\n\nFind the force on the large piston.`,
-      answer: F2,
+      stem: `${setup} A load of mass $${n(mKg)}\\ \\text{kg}$ rests on the large piston. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the force that must be applied to the small piston to hold the load in place.`,
+      answer: F1,
       unit: U_N,
       must: [
-        { value: round(F1 / k), trap: 'the area ratio used upside down' },
-        { value: F1, trap: 'assumed the two forces are equal because the pressure is' },
-        { value: round(F1 / a1), trap: 'gave the pressure (in N cm⁻²) rather than the force' },
+        { value: W2, trap: 'gave the weight of the load: the ratio of the areas was never used' },
+        { value: round(mKg / k), trap: 'used the mass in kg instead of its weight in N' },
+        { value: round(W2 * k), trap: 'the area ratio upside down: the small piston needs the smaller force' },
       ],
       extra: [
-        { value: round(F1 * a2), trap: 'multiplied by the large area instead of the ratio of areas' },
-        { value: round(F1 * (k - 1)), trap: 'off by one in the ratio of areas' },
-        { value: round(F1 * (k + 1)), trap: 'off by one in the ratio of areas the other way' },
-        { value: round(F1 * a2 - F1 * a1), trap: 'used the difference of the areas instead of their ratio' },
+        { value: round(W2 / (k - 1)), trap: 'off by one in the ratio of the areas' },
+        { value: round(W2 / (k + 1)), trap: 'off by one in the ratio of the areas the other way' },
+        { value: round(W2 / a2), trap: 'divided by the large area instead of the ratio of the areas' },
+        { value: mKg, trap: 'gave the mass of the load, not a force' },
       ],
-      solution: `The pressure is the same on both pistons, so $F_2 = F_1 \\times \\dfrac{A_2}{A_1} = ${n(F1)} \\times ${n(k)} = ${n(F2)}\\ \\text{N}$ (the ratio of areas needs no unit conversion).`,
-      trap: 'The force is multiplied by the ratio of the areas — the larger piston always gives the larger force.',
+      solution: `The load weighs $${n(mKg)} \\times 10 = ${n(W2)}\\ \\text{N}$. The pressure is the same under both pistons, so $F_1 = W \\times \\dfrac{A_1}{A_2} = \\dfrac{${n(W2)}}{${n(k)}} = ${n(F1)}\\ \\text{N}$.`,
+      trap: 'Turn the mass into a weight first, then divide by the ratio of the areas — the small piston carries the smaller force.',
       tags: ['pressure', 'hydraulics'],
-      params: { variant: 'hydraulic-force', a1, a2, F1 },
+      params: { variant: 'hydraulic-load', a1, a2, mKg },
       spread: 200,
     });
   }
+
+  if (ask === 'work') {
+    const F1 = rng.pick([10, 12, 15, 20, 24, 25, 30, 40, 50, 60, 80, 100]);
+    const d1 = rng.pick([2, 4, 5, 8, 10, 12, 15, 20, 25, 40, 50]);
+    const d2 = round(d1 / k);
+    const F2 = round(F1 * k);
+    const work = round((F1 * d1) / 100);
+    if (!isMult(d2, 0.1) || d2 < 0.2 || !isMult(work, 0.1) || work < 0.5 || work > 100) return null;
+    return pack(rng, {
+      stem: `${setup} A force of $${n(F1)}\\ \\text{N}$ pushes the small piston down $${n(d1)}\\ \\text{cm}$, and no energy is lost in the liquid.\n\nFind the work done on the load resting on the large piston.`,
+      answer: work,
+      unit: U_J,
+      must: [
+        { value: round(F1 * d1), trap: 'left the distance in centimetres' },
+        { value: round((F2 * d1) / 100), trap: 'used the force on the large piston with the small piston’s distance' },
+        { value: round((F1 * d2) / 100), trap: 'used the force on the small piston with the large piston’s distance' },
+      ],
+      extra: [
+        { value: round(work / 10), trap: 'a power of ten lost turning centimetres into metres' },
+        { value: round((F1 * d1) / 1000), trap: 'divided by $1000$ instead of $100$' },
+        { value: round(work * k), trap: 'multiplied the work by the ratio of the areas' },
+        { value: round(work / 2), trap: 'used $\\tfrac12 Fd$, as for a spring' },
+      ],
+      solution: `The press multiplies force but not energy: the work done on the load is the work done on the small piston, $W = Fd = ${n(F1)} \\times ${n(d1 / 100)} = ${n(work)}\\ \\text{J}$. (Check: $F_2 = ${n(F2)}\\ \\text{N}$ and $d_2 = ${n(d2)}\\ \\text{cm}$, and $${n(F2)} \\times ${n(d2 / 100)} = ${n(work)}\\ \\text{J}$.)`,
+      trap: 'A hydraulic press conserves energy: the large force moves through a proportionally smaller distance, so the work is the same on both sides — and centimetres must become metres.',
+      tags: ['pressure', 'hydraulics', 'energy'],
+      params: { variant: 'hydraulic-work', a1, a2, F1, d1 },
+      spread: 500,
+    });
+  }
+
+  const F1 = rng.pick([10, 12, 15, 20, 24, 25, 30, 40, 50, 60, 80, 100]);
+  const W2 = round(F1 * k);
+  const d1 = rng.pick([2, 4, 5, 8, 10, 12, 15, 20, 25, 40, 50]);
+  const d2 = round(d1 / k);
+  if (W2 > 5000 || !isMult(d2, 0.1) || d2 < 0.2) return null;
   return pack(rng, {
-    stem: `${setup} The small piston is pushed down $${n(d1)}\\ \\text{cm}$.\n\nHow far does the large piston rise?`,
+    stem: `A force of $${n(F1)}\\ \\text{N}$ applied to the small piston of a hydraulic press just supports a load of $${n(W2)}\\ \\text{N}$ on the large piston. The liquid is incompressible and no energy is lost.\n\nThe small piston is pushed down $${n(d1)}\\ \\text{cm}$. How far does the load rise?`,
     answer: d2,
     unit: U_CM,
     must: [
-      { value: round(d1 * k), trap: 'the area ratio used upside down: the large piston moves less, not more' },
+      { value: round(d1 * k), trap: 'the ratio of the forces upside down: the load rises less, not more' },
       { value: d1, trap: 'assumed both pistons move the same distance' },
-      { value: round(d1 / a2), trap: 'divided by the large area instead of the ratio of areas' },
+      { value: round(d1 / (k - 1)), trap: 'off by one in the ratio of the forces' },
     ],
     extra: [
-      { value: round(d1 / (k - 1)), trap: 'off by one in the ratio of areas' },
-      { value: round(d1 / (k + 1)), trap: 'off by one in the ratio of areas the other way' },
+      { value: round(d1 / (k + 1)), trap: 'off by one in the ratio of the forces the other way' },
       { value: round(d2 * 10), trap: 'gave the answer in mm, not cm' },
       { value: round(d2 / 10), trap: 'a power of ten lost' },
+      { value: round(d1 / 2), trap: 'halved the distance instead of dividing by the ratio of the forces' },
     ],
-    solution: `The liquid is incompressible, so the volumes swept are equal: $A_1 d_1 = A_2 d_2$, giving $d_2 = \\dfrac{${n(d1)}}{${n(k)}} = ${n(d2)}\\ \\text{cm}$.`,
-    trap: 'The press multiplies force but not energy: the large piston moves as many times less as the force is times bigger.',
+    solution: `The press cannot create energy, so $F_1 d_1 = W d_2$: the ratio of the forces is $${n(W2)} / ${n(F1)} = ${n(k)}$, so $d_2 = \\dfrac{${n(d1)}}{${n(k)}} = ${n(d2)}\\ \\text{cm}$.`,
+    trap: 'Work in = work out: the load rises as many times less as its weight is times bigger than the applied force.',
     tags: ['pressure', 'hydraulics', 'energy'],
-    params: { variant: 'hydraulic-distance', a1, a2, d1 },
+    params: { variant: 'hydraulic-rise', F1, W2, d1 },
     spread: 200,
   });
 }
@@ -588,10 +659,22 @@ const VARIANTS: Record<Level, ((rng: RNG) => Generated | null)[]> = {
   2: [depthPressureQ, depthPressureQ, depthFromPressureQ],
   3: [totalPressureQ, forceOnSurfaceQ],
   4: [upthrustQ, fractionSubmergedQ, densityFromFloatQ, apparentWeightQ],
-  5: [(r) => hydraulicQ(r, 'force'), (r) => hydraulicQ(r, 'distance'), alloyQ],
+  5: [(r) => hydraulicQ(r, 'load'), (r) => hydraulicQ(r, 'rise'), (r) => hydraulicQ(r, 'work'), alloyQ],
 };
 
 const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1e-7 * (1 + Math.abs(b));
+
+/**
+ * The pressure (Pa) a depth h of liquid exerts, built the long way round: the column standing on an
+ * area A is added up slice by slice as a mass, turned into a weight and then spread back over A.
+ * Nothing here is generate()'s ρgh product, and the area cancels only after the weight is accumulated.
+ */
+function columnPressure(rho: number, h: number): number {
+  const A = 0.25, slices = 5;
+  let mass = 0;
+  for (let i = 0; i < slices; i++) mass += rho * A * (h / slices);
+  return (mass * G) / A;
+}
 
 export default defineTemplate({
   id: 'phy.statics.pressure-density',
@@ -603,7 +686,7 @@ export default defineTemplate({
     2: 'p = ρgh at a stated depth (water 1000 kg m⁻³, g = 10), answer in kPa',
     3: 'total pressure = 100 kPa + ρgh; the force on a submerged panel from pressure × area',
     4: 'upthrust ρVg, fraction submerged = ρ_object/ρ_liquid, apparent weight in water',
-    5: 'hydraulic press (force and distance ratios); the density of an alloy of two metals',
+    5: 'hydraulic press in two steps (a weight and the area ratio, or the areas and work in = work out); the density of an alloy',
   },
   generate(rng, level: Level) {
     return retry(rng, () => pickVariant(rng, VARIANTS[level]));
@@ -612,41 +695,38 @@ export default defineTemplate({
     if (q.answer.kind !== 'exact') return false;
     const a = q.answer.value.toNumber();
     if (!(a > 0) || !Number.isFinite(a)) return false;
-    const p = q.params as Record<string, number> & { variant: string };
+    const p = q.params as Record<string, number> & { variant: string; areaUnit?: string };
     switch (p.variant) {
       case 'density': {
         // mass back out of the claimed density, and the same figure in g cm^-3
         const V = p.vCm3 * 1e-6;
         return near(a * V, p.mKg) && near(a / 1000, (p.mKg * 1000) / p.vCm3);
       }
-      case 'pressure':
-        // the claimed pressure spread over the area must give the stated force back
-        return near(a * p.aM2, p.F);
+      case 'pressure': {
+        // the area is converted here, from the units the stem prints: the claimed pressure spread
+        // over that area must give the stated force back
+        if (p.areaUnit !== 'cm^2' && p.areaUnit !== 'm^2') return false;
+        const A = p.areaUnit === 'cm^2' ? p.aShown / 1e4 : p.aShown;
+        return A > 0 && near(a * A, p.F);
+      }
       case 'mass-from-density':
-        // density back out of the claimed mass
-        return near(a / (p.vCm3 * 1e-6), p.rho) && near(a, p.mKg);
-      case 'rho-g-h': {
-        // weight of a column of liquid of area A0 standing on 1 point, divided by that area
-        const A0 = 3;
-        const weight = p.rho * A0 * p.h * G;
-        return near(a * 1000, weight / A0) && near(a, p.pk);
-      }
-      case 'depth-from-pressure': {
-        // the weight of a column of liquid of area A0 and the claimed height must give the stated pressure
-        const A0 = 5;
-        return near((p.rho * A0 * a * G) / A0, p.pk * 1000);
-      }
-      case 'total-pressure': {
-        const A0 = 4;
-        const weight = p.rho * A0 * p.h * G;
-        return near((a - P_ATM) * 1000, weight / A0) && near(a, p.total);
-      }
-      case 'force-on-surface': {
-        // pressure implied by the claimed force must be the weight of the liquid column above unit area
-        const pressure = a / p.A;
-        const A0 = 2;
-        return near(pressure, (p.rho * A0 * p.h * G) / A0) && near(a, p.F);
-      }
+        // density back out of the claimed mass, with the cm³ → m³ conversion done here
+        return near(a / (p.vCm3 * 1e-6), p.rho);
+      case 'rho-g-h':
+        // the weight of the column of liquid, and the same pressure again as the extra pressure
+        // between depth h and depth 2h
+        return near(a * 1000, columnPressure(p.rho, p.h))
+          && near(columnPressure(p.rho, 2 * p.h) - columnPressure(p.rho, p.h), a * 1000);
+      case 'depth-from-pressure':
+        // a column of the claimed height must weigh down with the pressure the stem states
+        return near(columnPressure(p.rho, a), p.pk * 1000);
+      case 'total-pressure':
+        // strip the atmosphere off the claimed total, then check the liquid's share twice over
+        return near((a - P_ATM) * 1000, columnPressure(p.rho, p.h))
+          && near(columnPressure(p.rho, 2 * p.h) / 1000 + P_ATM, 2 * a - P_ATM);
+      case 'force-on-surface':
+        // the pressure implied by the claimed force must be the weight of the column above unit area
+        return p.A > 0 && near(a / p.A, columnPressure(p.rho, p.h));
       case 'upthrust': {
         // the upthrust is the weight of the displaced liquid: recover its mass, then its density
         const massDisplaced = a / G;
@@ -655,22 +735,33 @@ export default defineTemplate({
       case 'fraction-submerged':
         // floating equilibrium: rho_block = f * rho_liquid
         return a > 0 && a <= 1 && near(a * p.rhoF, p.rhoB);
-      case 'density-from-float':
-        return near(a / p.rhoF, p.f) && near(a, p.rhoB);
+      case 'density-from-float': {
+        // float a block of some arbitrary volume: its weight must equal the weight of the liquid
+        // displaced by the submerged fraction
+        const V0 = 0.02;
+        return near(a * V0 * G, p.rhoF * (p.f * V0) * G);
+      }
       case 'apparent-weight': {
         // (weight − reading) is the weight of the displaced water: it must give water's density back
         const W = p.mKg * G;
         const U = W - a;
         return U > 0 && near(U / G / (p.vCm3 * 1e-6), 1000);
       }
-      case 'hydraulic-force':
-        // the pressure under each piston must be the same (areas in cm², so use them directly)
-        return near(p.F1 / p.a1, a / p.a2);
-      case 'hydraulic-distance': {
-        // equal volumes swept, and equal work done by the two pistons
-        const F1 = 100;
-        const F2 = (F1 * p.a2) / p.a1;
-        return near(p.a1 * p.d1, p.a2 * a) && near(F1 * p.d1, F2 * a);
+      case 'hydraulic-load': {
+        // the pressure under the small piston (areas in m²) must hold the load's weight up
+        const pressure = a / (p.a1 * 1e-4);
+        return near(pressure * p.a2 * 1e-4, p.mKg * G);
+      }
+      case 'hydraulic-rise':
+        // energy conservation, in joules: the work done on the small piston is the work done on the load
+        return a < p.d1 && near((p.F1 * p.d1) / 100, (p.W2 * a) / 100);
+      case 'hydraulic-work': {
+        // the long way: pressure under the small piston → force on the large one → the volume swept
+        // fixes how far it rises → work = F2 d2
+        const pressure = p.F1 / (p.a1 * 1e-4);
+        const F2 = pressure * p.a2 * 1e-4;
+        const d2 = (p.a1 * p.d1) / p.a2; // cm
+        return near(F2 * (d2 / 100), a);
       }
       case 'alloy': {
         // total mass in grams over total volume in cm³, then back to kg m^-3

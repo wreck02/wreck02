@@ -20,7 +20,14 @@ function cleanOnly(ds: Candidate[]): Distractor[] {
   return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
+/**
+ * Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never
+ * shuffled out. The remaining slots are filled towards a randomly chosen number of options *below* the
+ * answer, so where the correct option lands in the sorted list is a property of the draw and not of the
+ * sub-variant.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -29,12 +36,26 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && below.length + above.length > 0) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
 function options(rng: RNG, answer: Exact, must: Candidate[], extra: Candidate[]) {
   return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must), cleanOnly(extra)));
+}
+
+/** Options, or null when fewer than four named distractors survive: redraw rather than pad with unlabelled numbers. */
+function optionsOrNull(rng: RNG, answer: Exact, must: Candidate[], extra: Candidate[]) {
+  const ds = ranked(rng, answer, cleanOnly(must), cleanOnly(extra));
+  if (ds.length < 4) return null;
+  return buildOptions(rng, answer, ds);
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -111,14 +132,17 @@ function quadraticQ(level: Level) {
     const [, b, c] = dividend;
     if (b === 0 || c === 0) return null;
     const correct = poly(quotient);
+    // The divisor is (x - a): poly(divisor) IS the divisor, poly([1, a]) is it with the constant's sign flipped.
     const wrong: (Wrong | null)[] = [
       { display: poly([p, -d]), trap: 'sign of the constant in the quotient wrong: check by multiplying back' },
       { display: poly([p, b]), trap: 'copied the x-coefficient of the dividend without subtracting' },
       { display: poly([p, b - p * a]), trap: 'sign error in the subtraction step' },
-      level === 1 ? { display: poly([1, a]), trap: 'gave the divisor' } : { display: poly([1, d]), trap: 'dropped the leading coefficient' },
-      { display: poly([p, d + 1]), trap: 'arithmetic slip' },
-      { display: poly([p, d - 1]), trap: 'arithmetic slip' },
-      level === 2 ? { display: poly([p, d * p]), trap: `multiplied the constant by ${p} as well` } : { display: poly([1, -a]), trap: 'gave the divisor with the sign changed' },
+      { display: poly(divisor), trap: 'gave the divisor instead of the quotient' },
+      { display: poly([1, a]), trap: 'gave the divisor with the sign of its constant flipped' },
+      Math.abs(c) <= 12 ? { display: poly([p, c]), trap: 'read off the constant term of the dividend instead of dividing it by the constant of the divisor' } : null,
+      level === 2 ? { display: poly([1, d]), trap: 'dropped the leading coefficient' } : null,
+      level === 2 ? { display: poly([p, d * p]), trap: `multiplied the constant of the quotient by ${p} as well` } : null,
+      level === 2 ? { display: poly([p, -a]), trap: 'copied the constant of the divisor into the quotient' } : null,
     ];
     const opts = choiceOrNull(rng, correct, wrong);
     if (!opts) return null;
@@ -179,13 +203,16 @@ function cubicQ(level: Level) {
         { value: E(-R), trap: 'sign of the remainder flipped' },
         { value: E(dividend[3]), trap: 'read off the constant term of the dividend' },
         { value: E(R - qc[2] * s * 2), trap: 'sign error in the last subtraction step' },
-        { value: E(R + 1), trap: 'arithmetic slip' },
-        { value: E(R - 1), trap: 'arithmetic slip' },
+        { value: root !== 1 ? E(synthetic(dividend, 1).r) : null, trap: 'evaluated f(1) instead of f at the root of the divisor' },
+        { value: root !== -1 ? E(synthetic(dividend, -1).r) : null, trap: 'evaluated f(-1) instead of f at the root of the divisor' },
+        { value: E(R - dividend[3]), trap: 'forgot to add the constant term of the dividend' },
       ];
+      const opts = optionsOrNull(rng, answer, must, extra);
+      if (!opts) return null;
       return {
         stem: `Find the remainder when ${P(dividend)} is divided by $${dvTex}$.`,
         answer: { kind: 'exact', value: answer },
-        options: options(rng, answer, must, extra),
+        options: opts,
         solution: `Quickest is the remainder theorem: the remainder is $f(${root}) = ${R}$. (Dividing gives quotient $${poly(qc)}$ and remainder $${R}$.)`,
         trap: 'The remainder is the value of the dividend at the root of the divisor; do not confuse it with the last coefficient of the quotient.',
         tags: ['polynomial-division', 'remainder'],
@@ -285,22 +312,52 @@ function exactDivisionQ(rng: RNG): Generated | null {
     return ` ${c < 0 ? '-' : '+'} ${Math.abs(c) === 1 && power ? '' : Math.abs(c)}${power}`;
   }).join('')}`;
   const wrongM = mul(divisor, [1, -m])[slot];
-  const must: Candidate[] = [
-    { value: E(wrongM), trap: 'sign of the quotient constant wrong (used x − m instead of x + m)' },
-    { value: E(-k), trap: 'sign slip' },
-  ];
-  const extra: Candidate[] = [
-    { value: E(m), trap: 'gave the constant of the quotient' },
-    { value: slot === 2 ? E(qd) : slot === 3 ? E(qd + m) : E(m), trap: slot === 2 ? 'forgot the cross term pm' : slot === 3 ? 'added instead of multiplying the constants' : 'forgot to add p' },
-    { value: E(k + 1), trap: 'arithmetic slip' },
-    { value: E(k - 1), trap: 'arithmetic slip' },
-    { value: E(2 * k), trap: 'doubled' },
-  ];
+  // Named mistakes of this sub-variant only: k − 1 and k + 1 together would make the answer the middle
+  // of a consecutive triple, which is a layout cue rather than a test of the coefficient matching.
+  const must: Candidate[] = [];
+  const extra: Candidate[] = [];
+  if (slot === 1) { // k = p + m, the x² coefficient
+    must.push(
+      { value: E(wrongM), trap: 'sign of the quotient constant wrong (used x − c instead of x + c)' },
+      { value: E(p * m), trap: 'multiplied the two constants instead of adding them' },
+    );
+    extra.push(
+      { value: E(-k), trap: 'sign slip' },
+      { value: E(m), trap: 'gave the constant of the quotient' },
+      { value: E(qd + m), trap: 'used the constant term of the divisor instead of its x-coefficient' },
+      { value: E(qd * m), trap: 'matched the constant term instead of the x² term' },
+    );
+  } else if (slot === 2) { // k = q + pm, the x coefficient
+    must.push(
+      { value: E(wrongM), trap: 'sign of the quotient constant wrong (used x − c instead of x + c)' },
+      { value: E(qd), trap: 'forgot the cross term pm' },
+    );
+    extra.push(
+      { value: E(-k), trap: 'sign slip' },
+      { value: E(qd + p + m), trap: 'added p and m instead of multiplying them' },
+      { value: E(p * m), trap: 'forgot the constant term of the divisor' },
+      { value: E(qd * m), trap: 'matched the constant term instead of the x coefficient' },
+      { value: E(m), trap: 'gave the constant of the quotient' },
+    );
+  } else { // k = qm, the constant term
+    must.push(
+      { value: E(qd + m), trap: 'added the two constants instead of multiplying them' },
+      { value: E(-k), trap: 'sign slip (used x − c instead of x + c)' },
+    );
+    extra.push(
+      { value: E(qd), trap: 'gave the constant of the divisor' },
+      { value: E(m), trap: 'gave the constant of the quotient' },
+      { value: E(qd - m), trap: 'subtracted the two constants instead of multiplying them' },
+      { value: E(p + m), trap: 'matched the x² coefficient instead of the constant term' },
+    );
+  }
   const how = slot === 3 ? `the constant term is $${qd} \\times ${m} = ${k}$` : slot === 1 ? `the $x^{2}$ coefficient is $${p} + ${m} = ${k}$` : `the $x$ coefficient is $${qd} ${p * m >= 0 ? '+' : '-'} ${Math.abs(p * m)} = ${k}$`;
+  const opts = optionsOrNull(rng, answer, must, extra);
+  if (!opts) return null;
   return {
     stem: `$${tex}$ is exactly divisible by ${P(divisor)}. Find the value of $k$.`,
     answer: { kind: 'exact', value: answer },
-    options: options(rng, answer, must, extra),
+    options: opts,
     solution: `Exact division means $${tex} = (${poly(divisor)})(x + c)$ for some constant $c$. Matching the ${slot === 3 ? '$x^{2}$ coefficient' : slot === 1 ? 'constant term' : '$x^{2}$ coefficient'} gives $c = ${m}$, so ${how}.`,
     trap: 'If the division is exact the dividend is (divisor) × (x + c); find c from a known coefficient and then read off k.',
     tags: ['polynomial-division', 'exact', 'unknown-coefficient'],

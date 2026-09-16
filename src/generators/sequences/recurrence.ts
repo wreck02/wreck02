@@ -133,6 +133,13 @@ function affineQ(rng: RNG): Generated | null {
 
 const START_VALUES: [number, number][] = [[2, 1], [3, 1], [4, 1], [5, 1], [-1, 1], [-2, 1], [1, 2], [1, 3], [3, 2], [2, 3], [-1, 2]];
 
+/**
+ * Starts whose three-term cycle sums to 3/2 (u₁ = 2, −1, ½) or −1/6 (u₁ = −2, ⅓, 3/2).
+ * The other starts are fine for a single term (u₁ = 5 gives the cycle 5, −¼, ⅘) but their
+ * cycle sums are 19/6, 53/12 and 111/20, and 33 × 111/20 is neither mental nor an exam number.
+ */
+const SUM_START_VALUES: [number, number][] = [[2, 1], [-1, 1], [1, 2], [-2, 1], [1, 3], [3, 2]];
+
 function period3Q(rng: RNG): Generated | null {
   const [pn, pd] = rng.pick(START_VALUES);
   const u1 = frac(pn, pd);
@@ -300,7 +307,7 @@ function secondOrderQ(rng: RNG): Generated | null {
 function periodicSumQ(rng: RNG): Generated | null {
   const usePeriod3 = rng.bool(0.5);
   if (usePeriod3) {
-    const [pn, pd] = rng.pick(START_VALUES);
+    const [pn, pd] = rng.pick(SUM_START_VALUES);
     const u1 = frac(pn, pd);
     const cycle = [u1];
     for (let i = 0; i < 2; i++) {
@@ -314,6 +321,10 @@ function periodicSumQ(rng: RNG): Generated | null {
     const N = rng.pick([30, 60, 99]);
     const answer = cycleSum.mul(E(N / 3));
     if (!isCleanExact(answer).ok || Math.abs(answer.toNumber()) > 500) return null;
+    // A multiple of a cycle sum is only an exam answer if it stays small: at most two
+    // significant figures over a denominator of 6 or less (15, 30, 99/2, −5/3, −11/2).
+    const ans = answer.toRat();
+    if (ans.d > 6n || String(ans.n < 0n ? -ans.n : ans.n).replace(/0+$/, '').length > 2) return null;
     const distractors = ranked(rng, answer, cleanOnly([
       { value: cycleSum, trap: 'gave the sum of one cycle only' },
       { value: cycleSum.mul(E(N)), trap: 'multiplied by n instead of n/3' },

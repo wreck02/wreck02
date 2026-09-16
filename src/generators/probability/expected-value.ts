@@ -1,5 +1,5 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
-import { E, frac, Exact } from '../../core/exact';
+import { E, frac, Exact, ratToDecimalString } from '../../core/exact';
 import { buildOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import { gcd, lcm, nCr } from '../../core/gen-utils';
@@ -20,6 +20,8 @@ import type { RNG } from '../../core/rng';
 const FRACTION = { format: 'fraction' as const };
 const tx = (x: Exact): string => x.toLatex(FRACTION);
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+/** "twice", "three times" — exam register, never "two times". */
+const timesWord = (n: number): string => (n === 1 ? 'once' : n === 2 ? 'twice' : `${WORDS[n]} times`);
 
 function attempt(f: () => Exact): Exact | null {
   try {
@@ -28,6 +30,15 @@ function attempt(f: () => Exact): Exact | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Options for an answer printed as a decimal: every value must itself print as one.
+ * `format: 'decimal'` falls back to \frac for a recurring value, and a lone vulgar
+ * fraction among decimals is never the answer — a tell a candidate can use.
+ */
+function decimalOnly(ds: Distractor[]): Distractor[] {
+  return ds.filter((d) => d.value.isRational() && ratToDecimalString(d.value.toRat()) !== null);
 }
 
 /** `range` keeps probability options strictly between 0 and 1. */
@@ -125,7 +136,7 @@ function diceSumQ(rng: RNG): Generated | null {
 
 interface Trial { name: string; faces: number; events: { text: string; good: number }[]; unit: string }
 const TRIALS: Trial[] = [
-  { name: 'A fair six-sided dice is rolled', faces: 6, unit: 'rolls', events: [{ text: 'a six', good: 1 }, { text: 'a one', good: 1 }, { text: 'a number greater than $4$', good: 2 }, { text: 'a multiple of $3$', good: 2 }] },
+  { name: 'A fair six-sided dice is rolled', faces: 6, unit: 'rolls', events: [{ text: 'a six', good: 1 }, { text: 'a score of $1$', good: 1 }, { text: 'a number greater than $4$', good: 2 }, { text: 'a multiple of $3$', good: 2 }] },
   { name: 'A fair coin is tossed', faces: 2, unit: 'tosses', events: [{ text: 'a head', good: 1 }, { text: 'a tail', good: 1 }] },
 ];
 
@@ -156,7 +167,7 @@ function atLeastOneQ(rng: RNG): Generated | null {
   ], [0, 1]));
   if (distractors.length < 4) return null; // never pad a level-1 question with untrapped fractions
   return {
-    stem: `${trial.name} ${WORDS[n]} times. Find the probability of obtaining at least one ${ev.text.replace(/^an? /, '')}.`,
+    stem: `${trial.name} ${timesWord(n)}. Find the probability of obtaining at least one ${ev.text.replace(/^an? /, '')}.`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
     options: probOptions(rng, answer, distractors),
     solution: `Use the complement: $P(\\text{none}) = \\left(${tx(E(1).sub(single))}\\right)^{${n}} = ${tx(frac(bad, total))}$, so $P(\\text{at least one}) = 1 - ${tx(frac(bad, total))} = ${tx(answer)}$.`,
@@ -297,19 +308,24 @@ function distributionQ(rng: RNG): Generated | null {
   if (tenths[2] < 1) return null;
   const answer = xs.reduce((acc, x, i) => acc.add(frac(tenths[i] * x, 10)), Exact.ZERO);
   if (!isCleanExact(answer).ok || answer.isZero()) return null;
+  // The answer is a multiple of 0.1 and every option is printed as a decimal, so the naive
+  // mean is only offered when it is itself a terminating decimal (decimalOnly drops it
+  // otherwise); the median takes its place.
   const mean = frac(xs[0] + xs[1] + xs[2], 3);
   const maxT = Math.max(...tenths);
   const uniqueMode = tenths.filter((t) => t === maxT).length === 1;
-  const distractors = ranked(rng, answer, cleanOnly([
+  const distractors = ranked(rng, answer, decimalOnly(cleanOnly([
     { value: mean, trap: 'averaged the values, ignoring the probabilities' },
     { value: E(xs[0] + xs[1] + xs[2]), trap: 'added the values' },
     { value: answer.mul(E(3)), trap: 'multiplied by the number of values' },
     { value: uniqueMode ? E(xs[tenths.indexOf(maxT)]) : null, trap: 'gave the most likely value' },
-  ]), cleanOnly([
+  ])), decimalOnly(cleanOnly([
+    { value: E(xs[1]), trap: 'gave the middle value instead of the mean' },
     { value: answer.add(E(1)), trap: 'slip of one' },
     { value: answer.mul(frac(1, 2)), trap: 'halved the total' },
     { value: xs.reduce((acc, x, i) => acc.add(frac(tenths[2 - i] * x, 10)), Exact.ZERO), trap: 'paired the values with the wrong probabilities' },
-  ]));
+  ])));
+  if (distractors.length < 4) return null;
   const probs = tenths.map((t) => (t / 10).toString());
   return {
     stem: `A random variable $X$ takes the value $${xs[0]}$ with probability $${probs[0]}$, the value $${xs[1]}$ with probability $${probs[1]}$ and the value $${xs[2]}$ with probability $${probs[2]}$. Find $E(X)$.`,
@@ -334,20 +350,23 @@ function fairGameQ(rng: RNG): Generated | null {
     const cost = rng.int(1, 6);
     const answer = attempt(() => E(cost).div(p));
     if (!answer || !answer.isInteger() || answer.toNumber() > 60 || !isCleanExact(answer).ok) return null;
-    const distractors = ranked(rng, answer, cleanOnly([
+    // Money: every option has to be an amount that can actually be paid, printed as the
+    // exam prints it (£7.50, not 15/2).
+    const distractors = ranked(rng, answer, decimalOnly(cleanOnly([
       { value: p.mul(E(cost)), trap: 'multiplied the stake by the probability instead of dividing' },
       { value: answer.sub(E(cost)), trap: 'forgot that the prize includes the stake back' },
       { value: E(cost).mul(E(pd)), trap: 'ignored the numerator of the probability' },
       { value: attempt(() => E(cost).div(E(1).sub(p))), trap: 'used the probability of losing' },
-    ]), cleanOnly([
+    ])), decimalOnly(cleanOnly([
       { value: answer.add(E(1)), trap: 'slip of one' },
       { value: answer.mul(E(2)), trap: 'doubled the prize' },
       { value: E(cost + pd), trap: 'added the stake to the denominator' },
-    ]));
+    ])));
+    if (distractors.length < 4) return null;
     return {
       stem: `A game costs £${cost} to play. The player wins a prize of £$x$ with probability $${tx(p)}$ and nothing otherwise. Find the value of $x$ that makes the game fair.`,
-      answer: { kind: 'exact', value: answer, format: 'fraction' },
-      options: valueOptions(rng, answer, distractors),
+      answer: { kind: 'exact', value: answer, format: 'decimal' },
+      options: valueOptions(rng, answer, distractors, 'decimal'),
       solution: `Fair means expected winnings equal the stake: $${tx(p)}x = ${cost}$, so $x = ${tx(answer)}$.`,
       trap: 'A fair game has E(winnings) = stake, so divide by the probability rather than multiplying.',
       tags: ['probability', 'expected-value', 'fair-game'],
@@ -362,21 +381,26 @@ function fairGameQ(rng: RNG): Generated | null {
   const m1 = rng.int(2, 20);
   const m2 = rng.int(1, 10);
   const answer = p.mul(E(m1)).add(q.mul(E(m2)));
-  if (!isCleanExact(answer).ok || answer.isZero() || Number(answer.toRat().d) > 10) return null;
-  const distractors = ranked(rng, answer, cleanOnly([
+  if (!isCleanExact(answer).ok || answer.isZero()) return null;
+  // A stake is a price: it has to be a whole number of pence (denominator dividing 20),
+  // and it is printed as £6.30 rather than 63/10.
+  if (20 % Number(answer.toRat().d) !== 0) return null;
+  const distractors = ranked(rng, answer, decimalOnly(cleanOnly([
     { value: E(m1 + m2), trap: 'added the prizes, ignoring the probabilities' },
     { value: p.mul(E(m1)), trap: 'used only the larger prize' },
     { value: p.add(q).mul(E(m1 + m2)), trap: 'multiplied the total probability by the total prize' },
     { value: q.mul(E(m1)).add(p.mul(E(m2))), trap: 'paired the prizes with the wrong probabilities' },
-  ]), cleanOnly([
+  ])), decimalOnly(cleanOnly([
     { value: answer.mul(E(2)), trap: 'doubled the expected winnings' },
     { value: answer.add(E(1)), trap: 'slip of one' },
     { value: frac(m1 + m2, 2), trap: 'averaged the two prizes' },
-  ]));
+    { value: E(1).sub(p).sub(q).mul(E(m1 + m2)), trap: 'used the probability of winning nothing' },
+  ])));
+  if (distractors.length < 4) return null;
   return {
     stem: `In a game the player wins £${m1} with probability $${tx(p)}$ and £${m2} with probability $${tx(q)}$; otherwise nothing is won. Find the stake, in pounds, that makes the game fair.`,
-    answer: { kind: 'exact', value: answer, format: 'fraction' },
-    options: valueOptions(rng, answer, distractors),
+    answer: { kind: 'exact', value: answer, format: 'decimal' },
+    options: valueOptions(rng, answer, distractors, 'decimal'),
     solution: `Expected winnings $= ${tx(p)} \\times ${m1} + ${tx(q)} \\times ${m2} = ${tx(answer)}$, and a fair stake equals the expected winnings.`,
     trap: 'A fair stake is the expected winnings Σ x p, not the average prize.',
     tags: ['probability', 'expected-value', 'fair-game'],

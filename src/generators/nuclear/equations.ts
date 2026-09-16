@@ -27,12 +27,21 @@ const SYMBOLS = [
 ];
 
 const sym = (Z: number): string | null => (Z >= 1 && Z < SYMBOLS.length ? SYMBOLS[Z] : null);
-/** LaTeX for a nuclide: ^{238}_{92}U */
-const nuc = (A: number, Z: number, star = false): string => `^{${A}}_{${Z}}\\text{${sym(Z)}}${star ? '^{*}' : ''}`;
-const ALPHA = '^{4}_{2}\\alpha';
-const BETA = '^{0}_{-1}\\beta';
-const POSITRON = '^{0}_{+1}\\beta';
-const NEUTRON = '^{1}_{0}\\text{n}';
+/** "+ 4" / "- 1": a balance never reads "+ -1". */
+const signedTerm = (x: number): string => (x < 0 ? `- ${-x}` : `+ ${x}`);
+/** "3 beta-minus decays", "1 beta-minus decay". */
+const decays = (b: number): string => `${b} beta-minus decay${b === 1 ? '' : 's'}`;
+/**
+ * LaTeX for a nuclide: ^{238}_{92}U. The leading empty group matters: after an arrow or a plus sign,
+ * `\rightarrow ^{234}_{90}\text{Th}` attaches the mass and proton numbers to the arrow itself (KaTeX puts
+ * them inside its mrel), which hangs the numbers off the arrow and loses the relation spacing. With `{}`
+ * in front they belong to the nuclide, as an mord of their own.
+ */
+const nuc = (A: number, Z: number, star = false): string => `{}^{${A}}_{${Z}}\\text{${sym(Z)}}${star ? '^{*}' : ''}`;
+const ALPHA = '{}^{4}_{2}\\alpha';
+const BETA = '{}^{0}_{-1}\\beta';
+const POSITRON = '{}^{0}_{+1}\\beta';
+const NEUTRON = '{}^{1}_{0}\\text{n}';
 
 type Cand = { value: number | null; trap: string };
 
@@ -47,7 +56,13 @@ function cleanOnly(ds: Cand[]): Distractor[] {
   return out;
 }
 
+/**
+ * Headline traps first, then the rest chosen towards a randomly drawn number of options *below* the
+ * answer. Counts in a decay series are small numbers surrounded by multiples of the alpha count, so
+ * without this the beta count is the smallest option in every single instance.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -56,7 +71,14 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
@@ -99,10 +121,21 @@ function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generat
 
 // ------------------------------------------------------------------------------------------ nuclide pools
 
-const ALPHA_PARENTS: [number, number][] = [[238, 92], [235, 92], [234, 92], [232, 90], [230, 90], [226, 88], [224, 88], [222, 86], [220, 86], [218, 84], [214, 84], [210, 84], [241, 95], [239, 94], [237, 93], [212, 83]];
-const BETA_PARENTS: [number, number][] = [[14, 6], [24, 11], [32, 15], [40, 19], [45, 20], [60, 27], [90, 38], [99, 42], [131, 53], [137, 55], [210, 82], [214, 82], [234, 90], [228, 88]];
-const POSITRON_PARENTS: [number, number][] = [[11, 6], [13, 7], [15, 8], [18, 9], [22, 11], [30, 15], [64, 29]];
-const NUCLIDES: [number, number][] = [...ALPHA_PARENTS, ...BETA_PARENTS, [12, 6], [23, 11], [27, 13], [35, 17], [56, 26], [63, 29], [75, 33], [88, 38], [127, 53], [197, 79], [208, 82]];
+const ALPHA_PARENTS: [number, number][] = [
+  [238, 92], [236, 92], [235, 92], [234, 92], [233, 92], [232, 92], [232, 90], [230, 90], [229, 90], [228, 90],
+  [231, 91], [226, 88], [224, 88], [223, 88], [225, 89], [222, 86], [220, 86], [219, 86], [221, 87], [219, 87],
+  [218, 84], [216, 84], [215, 84], [214, 84], [212, 84], [210, 84], [215, 85], [211, 83], [212, 83], [213, 83],
+  [237, 93], [241, 95], [243, 95], [238, 94], [239, 94], [240, 94], [242, 94], [242, 96], [244, 96],
+];
+const BETA_PARENTS: [number, number][] = [
+  [14, 6], [16, 7], [24, 11], [28, 13], [32, 15], [35, 16], [38, 17], [40, 19], [42, 19], [45, 20], [47, 20],
+  [46, 21], [56, 25], [59, 26], [60, 27], [66, 29], [72, 31], [76, 33], [82, 35], [85, 36], [89, 38], [90, 38],
+  [90, 39], [99, 42], [106, 44], [115, 48], [131, 53], [133, 54], [137, 55], [140, 56], [141, 58], [144, 58],
+  [147, 60], [170, 69], [204, 81], [210, 82], [212, 82], [214, 82], [210, 83], [214, 83], [228, 88], [233, 90],
+  [234, 90], [239, 93],
+];
+const POSITRON_PARENTS: [number, number][] = [[10, 6], [11, 6], [12, 7], [13, 7], [15, 8], [17, 9], [18, 9], [19, 10], [22, 11], [23, 12], [26, 13], [30, 15], [34, 17], [38, 19], [64, 29], [68, 31]];
+const NUCLIDES: [number, number][] = [...ALPHA_PARENTS, ...BETA_PARENTS, [12, 6], [23, 11], [27, 13], [35, 17], [39, 19], [52, 24], [56, 26], [63, 29], [65, 30], [75, 33], [88, 38], [107, 47], [119, 50], [127, 53], [184, 74], [197, 79], [208, 82]];
 
 // ------------------------------------------------------------------------------------------ level 1
 
@@ -123,7 +156,9 @@ function alphaNumbers(rng: RNG): Generated | null {
       extra: [
         { value: A + 4, trap: 'added the alpha particle instead of removing it' },
         { value: A - 8, trap: 'removed two alpha particles' },
-        { value: A - Z, trap: 'gave the number of neutrons' },
+        { value: A - Z, trap: 'gave the number of neutrons in the parent' },
+        { value: A - Z - 2, trap: 'gave the number of neutrons in the daughter' },
+        { value: A - 6, trap: "subtracted the alpha particle's proton number as well as its mass number" },
         { value: A - 1, trap: 'took away one nucleon' },
       ],
       solution: `An alpha particle is $${ALPHA}$, so the mass number falls by 4: ${eq}, and the daughter has mass number $${dA}$.`,
@@ -142,14 +177,42 @@ function alphaNumbers(rng: RNG): Generated | null {
     extra: [
       { value: Z + 2, trap: 'added the alpha particle instead of removing it' },
       { value: Z, trap: 'thought the proton number is unchanged' },
-      { value: A - 2, trap: 'worked on the mass number instead' },
-      { value: Z - 3, trap: 'arithmetic slip' },
+      // A − 2 used to sit here as "worked on the mass number instead": a three-digit number among
+      // two-digit proton numbers, eliminated on sight, and that mistake would give A − 4 anyway.
+      { value: A - Z - 2, trap: 'gave the number of neutrons in the daughter nucleus' },
+      { value: Z - 1, trap: 'added a beta-minus decay to the alpha decay' },
+      { value: Z - 6, trap: "subtracted the alpha particle's mass number as well as its proton number" },
+      { value: Z - 3, trap: 'followed the alpha decay with a positron emission' },
     ],
     solution: `An alpha particle is $${ALPHA}$, so the proton number falls by 2: ${eq}, and the daughter has $Z = ${dZ}$.`,
     trap: 'An alpha particle carries away 2 protons, not 4: Z falls by 2 while A falls by 4.',
     tags: ['nuclear', 'alpha', 'equations'],
     params: { variant: 'alpha-Z', A, Z },
   });
+}
+
+function alphaDaughterChoice(rng: RNG): Generated | null {
+  const [A, Z] = rng.pick(ALPHA_PARENTS);
+  if (!sym(Z - 2) || !sym(Z - 1) || !sym(Z - 4) || !sym(Z + 1)) return null;
+  const correct = `$${nuc(A - 4, Z - 2)}$`;
+  const wrong = [
+    { display: `$${nuc(A - 4, Z - 4)}$`, trap: "took 4 off the proton number: an alpha particle's proton number is 2" },
+    { display: `$${nuc(A - 2, Z - 2)}$`, trap: "took 2 off the mass number: an alpha particle's mass number is 4" },
+    { display: `$${nuc(A, Z - 2)}$`, trap: 'left the mass number unchanged' },
+    { display: `$${nuc(A - 4, Z - 1)}$`, trap: 'lowered the proton number by 1 instead of 2' },
+    { display: `$${nuc(A, Z + 1)}$`, trap: 'used beta-minus decay' },
+    { display: `$${nuc(A - 4, Z)}$`, trap: 'left the proton number unchanged' },
+  ];
+  return {
+    stem: `The nuclide $${nuc(A, Z)}$ decays by emitting an alpha particle. Which of the following is the nucleus produced?`,
+    answer: { kind: 'choice', value: correct },
+    options: buildChoiceOptions(rng, correct, wrong),
+    solution: `An alpha particle is $${ALPHA}$: the mass number falls by 4 and the proton number by 2, giving $${nuc(A - 4, Z - 2)}$.`,
+    trap: 'Alpha decay: A falls by 4 and Z by 2 — both change, and by different amounts.',
+    tags: ['nuclear', 'alpha', 'equations'],
+    params: { variant: 'alpha-daughter', A, Z },
+    typedAllowed: false,
+  };
 }
 
 // ------------------------------------------------------------------------------------------ level 2
@@ -159,20 +222,26 @@ function betaNumbers(rng: RNG): Generated | null {
   const dZ = Z + 1;
   if (!sym(dZ)) return null;
   const askMass = rng.bool(0.4);
+  const highSide = rng.bool(0.5);
   const eq = `$${nuc(A, Z)} \\rightarrow ${nuc(A, dZ)} + ${BETA}$`;
   if (askMass) {
     return pack(rng, {
       stem: `The nuclide $${nuc(A, Z)}$ decays by beta-minus emission. Find the mass number of the nucleus produced.`,
       answer: A,
+      // the second headline trap is drawn from one that overshoots and one that undershoots, so the
+      // unchanged mass number is not always among the largest options
       must: [
         { value: A - 1, trap: 'took a nucleon away: a beta particle has mass number 0' },
-        { value: A - 4, trap: 'used alpha decay' },
+        highSide
+          ? { value: A + 1, trap: 'added one to the mass number instead of to the proton number' }
+          : { value: A - 4, trap: 'used alpha decay' },
       ],
       extra: [
         { value: A + 1, trap: 'added one to the mass number instead of to the proton number' },
+        { value: A + 4, trap: 'added an alpha particle to the daughter' },
         { value: A - Z, trap: 'gave the number of neutrons' },
         { value: Z + 1, trap: 'gave the new proton number' },
-        { value: A - 2, trap: 'arithmetic slip' },
+        { value: A - Z - 1, trap: 'gave the number of neutrons in the daughter nucleus' },
       ],
       solution: `A beta-minus particle is $${BETA}$, with mass number 0, so $A$ is unchanged: ${eq}.`,
       trap: 'Beta-minus decay turns a neutron into a proton: Z rises by 1 and A does not change.',
@@ -185,12 +254,15 @@ function betaNumbers(rng: RNG): Generated | null {
     answer: dZ,
     must: [
       { value: Z - 1, trap: 'lowered Z: it is the electron that is negative, and the nucleus gains a proton' },
-      { value: Z - 2, trap: 'used alpha decay' },
+      highSide
+        ? { value: A - Z, trap: 'gave the number of neutrons in the parent' }
+        : { value: Z - 2, trap: 'used alpha decay' },
     ],
     extra: [
       { value: Z, trap: 'thought the proton number is unchanged' },
       { value: A - Z - 1, trap: 'gave the number of neutrons left' },
-      { value: Z + 2, trap: 'raised Z by 2' },
+      { value: A - Z, trap: 'gave the number of neutrons in the parent' },
+      { value: Z + 2, trap: 'raised Z by 2, as if two beta particles were emitted' },
       { value: A, trap: 'gave the mass number' },
     ],
     solution: `A beta-minus particle is $${BETA}$, so conserving charge gives $Z \\rightarrow Z + 1$: ${eq}, and the daughter has $Z = ${dZ}$.`,
@@ -240,7 +312,8 @@ function neutronCount(rng: RNG): Generated | null {
       { value: A + Z, trap: 'added the two numbers instead of subtracting' },
       { value: A - 2 * Z, trap: 'subtracted the protons twice' },
       { value: ans + 1, trap: 'off by one' },
-      { value: ans - 1, trap: 'off by one' },
+      { value: A % 2 === 0 ? A / 2 : null, trap: 'assumed half the nucleons are neutrons' },
+      { value: 2 * (A - Z), trap: 'doubled the neutron count' },
     ],
     solution: `Neutrons $= A - Z = ${A} - ${Z} = ${ans}$.`,
     trap: 'The mass number counts nucleons: neutrons are A − Z.',
@@ -304,22 +377,24 @@ function positronChoice(rng: RNG): Generated | null {
 
 interface Series { A: number; Z: number; A2: number; Z2: number; a: number; b: number }
 
-function drawSeries(rng: RNG): Series | null {
-  const [A, Z] = rng.pick([[238, 92], [235, 92], [232, 90], [237, 93], [241, 95], [239, 94]] as [number, number][]);
-  const a = rng.int(2, 7);
-  const b = rng.int(0, Math.min(5, 2 * a - 1));
+/** `minBeta` keeps enough beta decays in the chain for b − 1 and b − 2 to exist as honest distractors. */
+function drawSeries(rng: RNG, minBeta = 0): Series | null {
+  const [A, Z] = rng.pick([[238, 92], [235, 92], [234, 92], [232, 90], [230, 90], [237, 93], [241, 95], [243, 95], [239, 94], [242, 94]] as [number, number][]);
+  const a = rng.int(2, 8);
+  const b = rng.int(minBeta, Math.min(8, 2 * a - 1));
   const A2 = A - 4 * a;
   const Z2 = Z - 2 * a + b;
-  if (!sym(Z2) || Z2 < 78 || A2 < 200) return null;
+  if (!sym(Z2) || Z2 < 78 || A2 < 190) return null;
   const N = A2 - Z2;
   if (N / Z2 < 1.25 || N / Z2 > 1.6) return null;
   return { A, Z, A2, Z2, a, b };
 }
 
 function seriesCount(rng: RNG): Generated | null {
-  const s = drawSeries(rng);
-  if (!s) return null;
   const askBeta = rng.bool(0.6);
+  // the beta ask needs b >= 3 so that "one alpha too few / too many in the balance" are positive counts
+  const s = drawSeries(rng, askBeta ? 3 : 0);
+  if (!s) return null;
   const chain = `$${nuc(s.A, s.Z)} \\rightarrow ${nuc(s.A2, s.Z2)}$`;
   if (askBeta) {
     return pack(rng, {
@@ -327,15 +402,19 @@ function seriesCount(rng: RNG): Generated | null {
       answer: s.b,
       must: [
         { value: s.Z - s.Z2, trap: 'used the drop in proton number directly, forgetting the alphas take 2 each' },
-        { value: s.b + 1, trap: 'off by one in the proton-number balance' },
+        { value: s.b - 2, trap: 'used one alpha too few when taking the alphas out of the proton number' },
       ],
       extra: [
         { value: s.a, trap: 'gave the number of alpha particles' },
-        { value: Math.abs(s.b - 1), trap: 'off by one in the proton-number balance' },
+        { value: s.b + 2, trap: 'used one alpha too many when taking the alphas out of the proton number' },
+        { value: s.b - 1, trap: 'off by one in the proton-number balance' },
         { value: 2 * s.a, trap: 'gave the total charge carried off by the alphas' },
-        { value: (s.A - s.A2) / 4, trap: 'gave the number of alphas again' },
+        { value: s.a - s.b, trap: 'subtracted the beta count from the alpha count' },
+        { value: (s.A - s.A2) / 4 + s.b, trap: 'added the alpha and beta counts together' },
+        // a second option below the answer, so the beta count is not stuck in the middle of the list
+        { value: s.b - 4, trap: 'used two alphas too few when taking the alphas out of the proton number' },
       ],
-      solution: `Mass number: $${s.A} - ${s.A2} = ${s.A - s.A2} = 4 \\times ${s.a}$, so ${s.a} alphas. Proton number: $${s.Z} - 2 \\times ${s.a} = ${s.Z - 2 * s.a}$, and the daughter has $Z = ${s.Z2}$, so ${s.b} beta-minus decays raise it by $${s.b}$.`,
+      solution: `Mass number: $${s.A} - ${s.A2} = ${s.A - s.A2} = 4 \\times ${s.a}$, so ${s.a} alphas. Proton number: $${s.Z} - 2 \\times ${s.a} = ${s.Z - 2 * s.a}$, and the daughter has $Z = ${s.Z2}$, so ${decays(s.b)} raise it by $${s.b}$.`,
       trap: 'Each alpha lowers Z by 2 and each beta-minus raises it by 1: balance Z after taking the alphas out.',
       tags: ['nuclear', 'decay-series', 'equations'],
       params: { variant: 'series-beta', A: s.A, Z: s.Z, A2: s.A2, Z2: s.Z2, a: s.a },
@@ -349,10 +428,12 @@ function seriesCount(rng: RNG): Generated | null {
       { value: (s.A - s.A2) / 2, trap: 'divided the drop in mass number by 2 instead of 4' },
     ],
     extra: [
-      { value: s.a + 1, trap: 'off by one' },
-      { value: s.a - 1, trap: 'off by one' },
+      { value: s.a + 1, trap: 'off by one in the mass-number balance' },
+      { value: (s.A - s.A2 - 4) / 4, trap: 'forgot the last decay in the chain' },
+      { value: (s.A - s.A2) / 8, trap: 'divided the drop in mass number by 8' },
+      { value: s.b, trap: 'gave the number of beta-minus particles' },
       { value: s.Z - s.Z2, trap: 'used the drop in proton number, which the betas also change' },
-      { value: 2 * s.a, trap: 'gave the total charge carried off by the alphas' },
+      { value: Math.round((s.Z - s.Z2) / 2), trap: 'halved the drop in proton number, forgetting the betas' },
     ],
     solution: `Only alpha decays change the mass number, by 4 each: $\\dfrac{${s.A} - ${s.A2}}{4} = \\dfrac{${s.A - s.A2}}{4} = ${s.a}$.`,
     trap: 'Count the alphas from the mass number (betas do not change A), then use Z for the betas.',
@@ -372,8 +453,8 @@ function seriesChoice(rng: RNG): Generated | null {
     { a: s.a + 1, b: s.b, trap: 'off by one in the mass-number balance' },
     { a: (s.A - s.A2) / 2, b: s.b, trap: 'divided the drop in mass number by 2 instead of 4' },
     { a: s.b, b: s.a, trap: 'swapped the two counts' },
-    { a: s.a, b: s.b - 1, trap: 'off by one in the proton-number balance' },
-    { a: s.a - 1, b: s.b, trap: 'off by one in the mass-number balance' },
+    { a: s.a, b: s.b - 1, trap: 'lost one beta decay when balancing the proton number' },
+    { a: s.a - 1, b: s.b, trap: 'counted one alpha decay too few in the mass-number balance' },
     { a: s.a, b: 2 * s.a, trap: 'balanced the proton number as if the alphas added charge' },
   ];
   const seen = new Set([correct]);
@@ -390,7 +471,7 @@ function seriesChoice(rng: RNG): Generated | null {
     stem: `Through a series of alpha and beta-minus decays, $${nuc(s.A, s.Z)} \\rightarrow ${nuc(s.A2, s.Z2)}$. How many of each type of decay occur?`,
     answer: { kind: 'choice', value: correct },
     options: buildChoiceOptions(rng, correct, wrong),
-    solution: `Mass number: $(${s.A} - ${s.A2}) \\div 4 = ${s.a}$ alphas. Proton number: the alphas take it to $${s.Z - 2 * s.a}$, and it must reach $${s.Z2}$, so there are ${s.b} beta-minus decays.`,
+    solution: `Mass number: $(${s.A} - ${s.A2}) \\div 4 = ${s.a}$ alphas. Proton number: the alphas take it to $${s.Z - 2 * s.a}$, and it must reach $${s.Z2}$, so there ${s.b === 1 ? 'is' : 'are'} ${decays(s.b)}.`,
     trap: 'Alphas are fixed by the mass number; the betas then make up the proton number.',
     tags: ['nuclear', 'decay-series', 'equations'],
     params: { variant: 'series-choice', A: s.A, Z: s.Z, A2: s.A2, Z2: s.Z2, a: s.a, b: s.b },
@@ -410,23 +491,34 @@ const FISSION: [number, number, number, number, number][] = [
   [143, 54, 90, 38, 3],
   [95, 39, 138, 53, 3],
   [148, 57, 85, 35, 3],
+  [140, 55, 93, 37, 3],
+  [142, 56, 91, 36, 3],
+  [138, 55, 96, 37, 2],
+  [134, 52, 100, 40, 2],
+  [133, 51, 101, 41, 2],
+  [136, 53, 98, 39, 2],
+  [146, 57, 87, 35, 3],
+  [145, 58, 88, 34, 3],
 ];
 
 function fissionNeutrons(rng: RNG): Generated | null {
   const [A1, Z1, A2, Z2, k] = rng.pick(FISSION);
-  const eq = `$^{235}_{92}\\text{U} + ${NEUTRON} \\rightarrow ${nuc(A1, Z1)} + ${nuc(A2, Z2)} + k\\,${NEUTRON}$`;
+  const eq = `${'$'}{}^{235}_{92}\\text{U} + ${NEUTRON} \\rightarrow ${nuc(A1, Z1)} + ${nuc(A2, Z2)} + k\\,${NEUTRON}$`;
   return pack(rng, {
     stem: `A uranium-235 nucleus absorbs a neutron and undergoes fission:\n\n${eq}\n\nFind the value of $k$.`,
     answer: k,
+    // every candidate is a mass-number balance a student really writes; "92 - Z1 - Z2" is not offered
+    // because the proton numbers already balance, so it is identically zero — a fission releasing no
+    // neutrons at all, which the "+ k n" in the equation contradicts
     must: [
       { value: 235 - A1 - A2, trap: 'forgot the neutron absorbed at the start, so the mass numbers were one short' },
-      { value: k + 2, trap: 'slipped in the mass-number balance' },
+      { value: k + 1, trap: 'counted the absorbed neutron among those released' },
     ],
     extra: [
-      { value: k + 1, trap: 'counted the absorbed neutron among those released' },
-      { value: 92 - Z1 - Z2, trap: 'balanced the proton numbers, which the neutrons do not change' },
-      { value: 2 * k, trap: 'doubled the count' },
-      { value: k - 1, trap: 'off by one' },
+      { value: 239 - A1 - A2, trap: 'used uranium-238 instead of uranium-235' },
+      { value: 238 - A1 - A2, trap: 'used uranium-238 and forgot the absorbed neutron' },
+      { value: 2 * k, trap: 'counted every released neutron twice' },
+      { value: k >= 3 ? k - 2 : null, trap: 'took the absorbed neutron off the right-hand side as well' },
     ],
     solution: `Mass numbers must balance: $235 + 1 = ${A1} + ${A2} + k$, so $k = 236 - ${A1 + A2} = ${k}$.`,
     trap: 'The absorbed neutron counts on the left: balance 236, not 235.',
@@ -438,7 +530,7 @@ function fissionNeutrons(rng: RNG): Generated | null {
 function fissionFragment(rng: RNG): Generated | null {
   const [A1, Z1, A2, Z2, k] = rng.pick(FISSION);
   const askA = rng.bool(0.5);
-  const eq = `$^{235}_{92}\\text{U} + ${NEUTRON} \\rightarrow ^{A}_{Z}\\text{X} + ${nuc(A2, Z2)} + ${k}\\,${NEUTRON}$`;
+  const eq = `${'$'}{}^{235}_{92}\\text{U} + ${NEUTRON} \\rightarrow {}^{A}_{Z}\\text{X} + ${nuc(A2, Z2)} + ${k}\\,${NEUTRON}$`;
   if (askA) {
     return pack(rng, {
       stem: `A uranium-235 nucleus absorbs a neutron and undergoes fission:\n\n${eq}\n\nFind the mass number $A$ of the nuclide X.`,
@@ -448,10 +540,11 @@ function fissionFragment(rng: RNG): Generated | null {
         { value: 236 - A2, trap: 'forgot the neutrons released' },
       ],
       extra: [
-        { value: A1 + 1, trap: 'off by one in the mass-number balance' },
-        { value: A1 - 1, trap: 'off by one in the mass-number balance' },
+        { value: A1 + 1, trap: 'counted the absorbed neutron twice on the left' },
         { value: 236 - A2 - 2 * k, trap: 'counted the released neutrons twice' },
+        { value: 236 - A2 - k + Z2, trap: 'balanced the proton numbers into the mass-number equation' },
         { value: A1 - Z1, trap: 'gave the number of neutrons in X' },
+        { value: A1 + k, trap: 'left the released neutrons out of the right-hand side' },
       ],
       solution: `Mass numbers balance: $235 + 1 = A + ${A2} + ${k}$, so $A = 236 - ${A2 + k} = ${A1}$.`,
       trap: 'Balance 236 on the left (the absorbed neutron counts) and remember the k released neutrons on the right.',
@@ -467,10 +560,11 @@ function fissionFragment(rng: RNG): Generated | null {
       { value: 93 - Z2, trap: 'gave the absorbed neutron a charge of 1' },
     ],
     extra: [
-      { value: Z1 + 1, trap: 'off by one in the proton-number balance' },
       { value: Z1 - 1, trap: 'off by one in the proton-number balance' },
+      { value: Z1 + k, trap: 'gave each released neutron a charge of 1' },
       { value: A1 - Z1, trap: 'gave the number of neutrons in X' },
       { value: Z2, trap: 'gave the proton number of the other fragment' },
+      { value: 236 - A2 - k, trap: 'balanced the mass numbers instead of the proton numbers' },
     ],
     solution: `Proton numbers balance and neutrons carry no charge: $92 + 0 = Z + ${Z2}$, so $Z = ${Z1}$.`,
     trap: 'Neutrons change the mass-number balance but never the proton-number balance.',
@@ -529,7 +623,7 @@ function unknownParticle(rng: RNG): Generated | null {
     stem: `In the nuclear equation $${lhs} \\rightarrow ${nuc(A2, Z2)} + \\text{X}$, the particle X is emitted. Which of the following is X?`,
     answer: { kind: 'choice', value: label },
     options: buildChoiceOptions(rng, label, wrong),
-    solution: `Balance the mass numbers ($${A} = ${A2} + ${A - A2}$) and the proton numbers ($${Z} = ${Z2} + ${Z - Z2}$): X has mass number $${A - A2}$ and proton number $${Z - Z2}$, so it is ${label}.`,
+    solution: `Balance the mass numbers ($${A} = ${A2} ${signedTerm(A - A2)}$) and the proton numbers ($${Z} = ${Z2} ${signedTerm(Z - Z2)}$): X has mass number $${A - A2}$ and proton number $${Z - Z2}$, so it is ${label}.`,
     trap: 'Read off both changes: A tells you the nucleons carried away, Z the charge.',
     tags: ['nuclear', 'equations', 'particles'],
     params: { variant: 'unknown-particle', A, Z, A2, Z2 },
@@ -538,11 +632,11 @@ function unknownParticle(rng: RNG): Generated | null {
 }
 
 const BY_LEVEL: Record<Level, ((rng: RNG) => Generated | null)[]> = {
-  1: [alphaNumbers],
+  1: [alphaNumbers, alphaNumbers, alphaDaughterChoice],
   2: [betaNumbers, betaDaughterChoice],
   3: [neutronCount, neutronsAfterDecay, positronChoice],
   4: [seriesCount, seriesCount, seriesChoice],
-  5: [fissionNeutrons, fissionFragment, unknownParticle],
+  5: [fissionNeutrons, fissionFragment, fissionFragment, unknownParticle],
 };
 
 /** A and Z read back out of an option written in ^{A}_{Z}X notation. */
@@ -557,7 +651,7 @@ export default defineTemplate({
   topic: 'nuclear',
   title: 'Nuclear equations and decay chains',
   levels: {
-    1: 'alpha decay: the daughter\'s mass number (A − 4) or proton number (Z − 2)',
+    1: 'alpha decay: the daughter\'s mass number (A − 4), proton number (Z − 2), or the daughter nuclide itself',
     2: 'beta-minus decay: Z + 1 with A unchanged, as a number or as a nuclide',
     3: 'neutron counts A − Z before and after a decay; positron emission',
     4: 'a decay series: how many alphas, how many betas',
@@ -580,6 +674,11 @@ export default defineTemplate({
       case 'neutrons-after': {
         const dA = p.alpha ? 4 : 0, dZ = p.alpha ? 2 : -1;
         return a + (p.Z - dZ) === p.A - dA;
+      }
+      case 'alpha-daughter': {
+        if (q.answer.kind !== 'choice') return false;
+        const d = readNuclide(q.answer.value);
+        return d !== null && d[0] + 4 === p.A && d[1] + 2 === p.Z;
       }
       case 'beta-daughter':
       case 'positron': {

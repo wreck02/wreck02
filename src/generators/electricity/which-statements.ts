@@ -10,7 +10,8 @@ import type { RNG } from '../../core/rng';
  * pair share the p.d., adding a resistor in parallel lowers the total resistance) or numeric, where the quoted
  * value is either the true one or the value a named mistake produces (divider ratio inverted, current split in
  * proportion to resistance, 1/R left un-inverted, the rated power used at the wrong p.d.).
- * Level 1: the three easiest statements — mostly qualitative plus a one-step number
+ * Level 1: the three easiest statements — mostly qualitative plus exactly one one-step number, which
+ *          every scenario must be able to supply (choose() rejects a level-1 set with no number at all)
  * Level 2: a two-step number (the ammeter reading, the total resistance of a parallel pair)
  * Level 3: two numbers, e.g. the p.d. across one resistor and the total power
  * Level 4: branch currents, power in one resistor, what happens when a resistor is removed
@@ -90,6 +91,12 @@ const keep = (xs: (Stmt | null)[]): Stmt[] => xs.filter((s): s is Stmt => s !== 
 
 const R_POOL = [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 24, 25, 30, 40, 50, 60];
 
+/**
+ * Supply p.d.s a candidate recognises. The series and mixed scenarios derive the supply from I × R_total,
+ * so the numbers are only used when they land on one of these: "a 23 V supply" reads as a misprint.
+ */
+const STANDARD_SUPPLIES = new Set([6, 9, 12, 15, 18, 20, 24, 30, 36, 40, 48, 50, 60, 80, 90, 100, 120, 150, 180, 200, 240]);
+
 // ----------------------------------------------------------------------------- scenarios
 
 function series(rng: RNG): Built | null {
@@ -98,7 +105,7 @@ function series(rng: RNG): Built | null {
   if (R1 === R2) return null;
   const I = rng.pick([0.5, 1, 1.5, 2, 2.5, 3, 4, 5]);
   const V = r(I * (R1 + R2));
-  if (!Number.isInteger(V) || V < 6 || V > 240) return null;
+  if (!Number.isInteger(V) || !STANDARD_SUPPLIES.has(V)) return null;
   const V1 = r(I * R1), V2 = r(I * R2);
   const Pt = r(V * I), P1 = r(I * I * R1);
   if (![V1, V2, Pt, P1].every(tidy1)) return null;
@@ -146,7 +153,8 @@ function parallel(rng: RNG): Built | null {
         'the two resistors are connected between the same two points, so each has the full supply p.d. across it'),
       compare(rng, 'current-cmp', 1, (w) => `The current in the ${R1} ${OHM} resistor is ${w} than the current in the ${R2} ${OHM} resistor.`, I1, I2, R1, R2,
         `both have ${V} V across them, so the smaller resistance carries the larger current: $${n(I1)}$ A and $${n(I2)}$ A`),
-      numeric(rng, 'branch1', 2, I1, [V / (R1 + R2), I / 2], (x) => `The current in the ${R1} ${OHM} resistor is ${val(x, 'A')}.`, `$I_1 = \\dfrac{${V}}{${R1}} = ${n(I1)}$ A`, 'branch'),
+      // one step from the stem (V ÷ R₁), so this is the parallel scenario's level-1 number
+      numeric(rng, 'branch1', 1, I1, [V / (R1 + R2), I / 2], (x) => `The current in the ${R1} ${OHM} resistor is ${val(x, 'A')}.`, `$I_1 = \\dfrac{${V}}{${R1}} = ${n(I1)}$ A`, 'branch'),
       numeric(rng, 'total-r', 2, Rt, [R1 + R2, r(1 / R1 + 1 / R2)], (x) => `The resistance of the combination is ${val(x, OHM)}.`, `$R = \\dfrac{${R1} \\times ${R2}}{${R1} + ${R2}} = ${n(Rt)}\\ \\Omega$ (remember to invert $1/R$)`, 'total'),
       qual(rng, 'less-than-least', 1,
         'The resistance of the combination is less than the resistance of either resistor on its own.',
@@ -191,10 +199,12 @@ function lamp(rng: RNG): Built | null {
         'If the lamp were connected to a supply of half this potential difference, and its resistance did not change, it would dissipate a quarter of its rated power.',
         'If the lamp were connected to a supply of half this potential difference, and its resistance did not change, it would dissipate half of its rated power.',
         'at constant resistance $P = V^2/R \\propto V^2$, so halving the p.d. quarters the power'),
+      // two filament lamps in series run much cooler than one at its rated p.d., so their resistance is
+      // not the rated-condition value: the claim is only true under the assumption, and it says so
       qual(rng, 'two-series', 5,
-        `Two of these lamps connected in series across the same ${V} V supply would together dissipate half the rated power of a single lamp.`,
-        `Two of these lamps connected in series across the same ${V} V supply would together dissipate twice the rated power of a single lamp.`,
-        'the series resistance doubles, so $P = V^2/(2R)$ is half the power of one lamp (and each lamp gets a quarter)'),
+        `Two of these lamps connected in series across the same ${V} V supply, with their resistances unchanged, would together dissipate half the rated power of a single lamp.`,
+        `Two of these lamps connected in series across the same ${V} V supply, with their resistances unchanged, would together dissipate twice the rated power of a single lamp.`,
+        'with the resistances unchanged the series resistance doubles, so $P = V^2/(2R)$ is half the power of one lamp (and each lamp gets a quarter)'),
       numeric(rng, 'half-power', 5, r(P / 4), [r(P / 2), r(2 * P)], (x) => `Connected to a ${n(V / 2)} V supply, and with its resistance unchanged, the lamp would dissipate ${val(x, 'W')}.`, `$P = \\dfrac{V^2}{R}$, so quartering: $\\dfrac{${P}}{4} = ${n(P / 4)}$ W`),
     ]),
   };
@@ -205,19 +215,22 @@ function mixed(rng: RNG): Built | null {
   const R2 = rng.pick([3, 4, 5, 6, 10, 12, 15, 20, 30, 60]);
   if (R1 >= R2) return null;
   const Rp = par2(R1, R2);
-  const R0 = rng.pick([2, 3, 4, 5, 6, 8, 10, 12]);
+  const R0 = rng.pick([2, 3, 4, 5, 6, 8, 10, 12, 15, 20]);
   const Rt = r(R0 + Rp);
-  const I = rng.pick([0.5, 1, 1.5, 2, 3, 4]);
+  const I = rng.pick([0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6]);
   const V = r(I * Rt);
   const Vp = r(I * Rp), V0 = r(I * R0);
   const I1 = r(Vp / R1), I2 = r(Vp / R2);
-  if (!tidy1(Rp) || !Number.isInteger(V) || V < 6 || V > 240) return null;
+  if (!tidy1(Rp) || !Number.isInteger(V) || !STANDARD_SUPPLIES.has(V)) return null;
   if (![Vp, V0, I1, I2].every(tidy1) || I1 < 0.2 || I2 < 0.2) return null;
   return {
     intro: `${Res(R0)} is connected in series with a parallel combination of ${res(R1)} and ${res(R2)}. The circuit is connected to ${supply(V)}.`,
     params: { R0, R1, R2, V },
     pool: keep([
-      numeric(rng, 'total-r', 1, Rt, [R0 + R1 + R2, Rp], (x) => `The total resistance of the circuit is ${val(x, OHM)}.`, `parallel pair $= ${n(Rp)}\\ \\Omega$, so $R = ${R0} + ${n(Rp)} = ${n(Rt)}\\ \\Omega$`, 'total'),
+      // one step: the product-over-sum of the branch pair. The total resistance below needs that and
+      // then the series addition, so it is a tier-2 statement, as it is in the parallel scenario.
+      numeric(rng, 'parallel-r', 1, Rp, [R1 + R2, r(1 / R1 + 1 / R2)], (x) => `The resistance of the parallel combination is ${val(x, OHM)}.`, `$\\dfrac{${R1} \\times ${R2}}{${R1} + ${R2}} = ${n(Rp)}\\ \\Omega$`, 'total'),
+      numeric(rng, 'total-r', 2, Rt, [R0 + R1 + R2, Rp], (x) => `The total resistance of the circuit is ${val(x, OHM)}.`, `parallel pair $= ${n(Rp)}\\ \\Omega$, so $R = ${R0} + ${n(Rp)} = ${n(Rt)}\\ \\Omega$`, 'total'),
       numeric(rng, 'supply-current', 2, I, [V / (R0 + R1 + R2), V / R0], (x) => `The current drawn from the supply is ${val(x, 'A')}.`, `$I = \\dfrac{${n(V)}}{${n(Rt)}} = ${n(I)}$ A`, 'total'),
       qual(rng, 'branch-sum', 1,
         `The current in the ${R0} ${OHM} resistor is equal to the sum of the currents in the other two resistors.`,
@@ -256,8 +269,10 @@ function choose(rng: RNG, pool: Stmt[], level: Level): Stmt[] | null {
   for (const s of rng.shuffle(hard)) { if (chosen.length >= wantHard) break; take(s); }
   for (const s of rng.shuffle(eligible)) { if (chosen.length >= 3) break; take(s); }
   if (chosen.length < 3) return null;
+  // every level carries at least one computed number — level 1's "one one-step number" included —
+  // and from level 3 the question is carried by two of them
   const numbers = chosen.filter((s) => s.claim !== null).length;
-  if ((level >= 2 && numbers < 1) || (level >= 3 && numbers < 2)) return null;
+  if (numbers < 1 || (level >= 3 && numbers < 2)) return null;
   return rng.shuffle(chosen);
 }
 
@@ -280,10 +295,12 @@ export default defineTemplate({
   generate(rng, level: Level) {
     return retry(rng, () => {
       const scenario = rng.pick(Object.keys(SCENARIOS));
-      // draw this scenario's numbers a few times before giving it up, so the four scenarios appear equally often
+      // draw this scenario's numbers many times before giving it up, so the four scenarios appear about
+      // equally often even though the mixed circuit rejects the most parameter sets (its supply p.d. has
+      // to land on a value a candidate recognises, and four derived quantities have to stay tidy)
       let built: Built | null = null;
       let stmts: Stmt[] | null = null;
-      for (let i = 0; i < 40 && !stmts; i++) {
+      for (let i = 0; i < 150 && !stmts; i++) {
         built = SCENARIOS[scenario](rng);
         if (built) stmts = choose(rng, built.pool, level);
       }
@@ -314,8 +331,10 @@ export default defineTemplate({
     const trueValue = (key: string): number | null => {
       switch (p.scenario) {
         case 'series': {
-          // work from the conductances: one path, so the current is the supply p.d. over the summed resistance
-          const Rt = 1 / (1 / (p.R1 + p.R2));
+          // the conductances of a series chain combine by product over sum — the mirror of the parallel
+          // rule, and a different arithmetic route from the generator's R1 + R2
+          const g1 = 1 / p.R1, g2 = 1 / p.R2;
+          const Rt = 1 / ((g1 * g2) / (g1 + g2));
           const I = p.V / Rt;
           const V1 = p.V - I * p.R2; // the rest of the supply p.d. after the second resistor
           return { 'total-r': Rt, ammeter: I, pd1: V1, 'total-power': I * I * Rt, power1: V1 * I, charge: I * 60 }[key] ?? null;
@@ -337,7 +356,7 @@ export default defineTemplate({
           const Rt = p.R0 + Rp;
           const I = p.V / Rt;
           const Vp = p.V - I * p.R0;
-          return { 'total-r': Rt, 'supply-current': I, 'pd-series': I * p.R0, 'pd-parallel': Vp, branch1: Vp / p.R1, power0: I * I * p.R0 }[key] ?? null;
+          return { 'parallel-r': Rp, 'total-r': Rt, 'supply-current': I, 'pd-series': I * p.R0, 'pd-parallel': Vp, branch1: Vp / p.R1, power0: I * I * p.R0 }[key] ?? null;
         }
         default:
           return null;

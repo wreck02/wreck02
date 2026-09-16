@@ -38,32 +38,40 @@ function cleanOnly(ds: Cand[], maxAbs = Infinity): Distractor[] {
 }
 
 /**
- * No option may be identifiable by its shape alone. Two shapes give the answer away for free:
- * being the only value on the page with its sign, and being the only non-integer (the mirror
- * case — a lone fractional distractor — is a free elimination). Either is repaired by swapping
- * a spare candidate in for a distractor that is not carrying a headline trap.
+ * No option may be identifiable by its shape alone: being the only value on the page with its sign,
+ * or the only fraction among integers, marks an option out whether it is the answer or not. Try
+ * replacing one non-headline distractor with a spare candidate and keep the arrangement in which
+ * the fewest options stand alone in their (sign, integer or fraction) group.
  */
 function balance(answer: Exact, out: Distractor[], pool: Distractor[]): Distractor[] {
-  let cur = out;
-  const values = () => [answer, ...cur.map((d) => d.value)];
-  const swapIn = (want: (v: Exact) => boolean): boolean => {
-    const cand = pool.find((d) => want(d.value) && !values().some((x) => x.equals(d.value)));
-    if (!cand) return false;
-    for (let i = cur.length - 1; i >= 0; i--) {
-      if (!cur[i].must && !want(cur[i].value)) {
-        const c = cur.slice();
-        c[i] = cand;
-        cur = c;
-        return true;
-      }
+  // Group the options by (sign, integer or not). A group with a single member is a tell: that
+  // option is either the answer, pointed at by its shape, or a distractor struck out for free.
+  const tells = (ds: Distractor[]): number => {
+    const vals = [answer, ...ds.map((d) => d.value)];
+    const counts = new Map<string, number>();
+    for (const v of vals) {
+      const k = `${v.sign() < 0 ? '-' : '+'}${v.isInteger() ? 'i' : 'f'}`;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
     }
-    return false;
+    let n = 0;
+    for (const c of counts.values()) if (c === 1) n++;
+    return n;
   };
-  const sign = answer.sign();
-  if (sign !== 0 && !cur.some((d) => d.value.sign() === sign)) swapIn((v) => v.sign() === sign);
-  const nonInt = (v: Exact) => !v.isInteger();
-  if (values().filter(nonInt).length === 1 && !swapIn(nonInt) && answer.isInteger()) swapIn((v) => v.isInteger());
-  return cur;
+  let best = out;
+  let bestScore = tells(out);
+  if (bestScore === 0) return out;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i].must) continue;
+    for (const c of pool) {
+      if (answer.equals(c.value) || out.some((d) => d.value.equals(c.value))) continue;
+      const trial = out.slice();
+      trial[i] = c;
+      const score = tells(trial);
+      if (score < bestScore) { best = trial; bestScore = score; }
+      if (bestScore === 0) return best;
+    }
+  }
+  return best;
 }
 
 /**
@@ -81,11 +89,20 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   };
   must.forEach((d) => take({ ...d, must: true }));
   const pool = rng.shuffle(extra);
-  const grab = (s: -1 | 1) => pool.find((d) => d.value.cmp(answer) === s && !seen.some((x) => x.equals(d.value)));
+  const cls = (v: Exact) => `${v.sign() < 0 ? '-' : '+'}${v.isInteger() ? 'i' : 'f'}`;
+  // Prefer a distractor shaped like the answer (same sign, same integer-or-fraction form) until at
+  // least one is on the page, so the answer never stands alone in its group.
+  const grab = (s: -1 | 1) => {
+    const cands = pool.filter((d) => d.value.cmp(answer) === s && !seen.some((x) => x.equals(d.value)));
+    const alone = seen.filter((v) => cls(v) === cls(answer)).length < 2;
+    return (alone ? cands.find((d) => cls(d.value) === cls(answer)) : undefined) ?? cands[0];
+  };
+  // Aim for a randomly chosen number of options above the answer, so over many questions the
+  // answer lands at every position in the sorted list rather than always low or always in the middle.
+  const targetAbove = rng.int(0, count);
   while (out.length < count) {
     const above = out.filter((d) => d.value.cmp(answer) > 0).length;
-    const last = out.length === count - 1;
-    const wanted: -1 | 1 = last && above === 0 ? 1 : last && above === out.length ? -1 : (rng.bool(0.5) ? 1 : -1);
+    const wanted: -1 | 1 = above < targetAbove ? 1 : -1;
     const d = grab(wanted) ?? grab(wanted === 1 ? -1 : 1);
     if (!d) break;
     take(d);
@@ -238,11 +255,14 @@ function derivativeQ(rng: RNG, terms: Term[], k: number, o: DerivOpts): Generate
   if (Math.abs(answer.toNumber()) > (o.maxAbs ?? 150)) return null;
   // Keep every distractor within a believable factor of the answer.
   const cap = Math.max(25, 12 * Math.abs(answer.toNumber()));
-  const must = cleanOnly([
+  // At most two headline traps, so two of the four slots stay free to balance the option list.
+  const headline = cleanOnly([
+    ...(o.must ?? []),
     { value: dSum(terms, k, 'value'), trap: 'evaluated f(k) instead of f′(k)' },
     { value: dSum(terms, k, 'nolower'), trap: 'applied the power rule without lowering the power' },
-    ...(o.must ?? []),
   ], cap);
+  const must = headline.slice(0, 2);
+  const demoted = headline.slice(2);
   /**
    * Several of the generic mistake modes are no-ops on a given set of terms (`negsign` on a
    * positive power, `nodouble` on a fractional one) and collapse onto the answer. These
@@ -267,7 +287,7 @@ function derivativeQ(rng: RNG, terms: Term[], k: number, o: DerivOpts): Generate
     { value: answer.neg(), trap: 'sign slip in the final evaluation' },
     ...(o.extra ?? []),
     ...perTerm,
-  ], cap);
+  ], cap).concat(demoted);
   // Four named mistakes or nothing: buildOptions must never have to pad this template.
   const ds = ranked(rng, answer, must, extra);
   if (ds.length < 4) return null;

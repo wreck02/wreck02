@@ -120,27 +120,32 @@ function properties(rng: RNG): Stmt[] {
       'Gamma rays are undeflected by an electric field.',
       'Gamma rays are deflected towards the negative plate of an electric field.',
       'gamma rays are uncharged, so no electric force acts on them', 'field'),
+    // "the material", not "the source": the nuclide scenario never introduces a source
     qual(rng, 'temperature', 3,
-      'Heating the source would not change its half-life.',
-      'Heating the source would shorten its half-life.',
+      'Heating the material would not change its half-life.',
+      'Heating the material would shorten its half-life.',
       'half-life is unaffected by temperature, pressure or chemical state'),
   ];
 }
 
-/** The shape of exponential decay. */
+/**
+ * The shape of exponential decay. Every statement here talks about the activity and the nuclei only,
+ * never about "the source" or "the count rate": a scenario that describes a sample of one nuclide
+ * introduces neither.
+ */
 function decayShape(rng: RNG): Stmt[] {
   return [
     qual(rng, 'halves', 1,
-      'The activity of the source halves during every half-life.',
-      'The activity of the source falls by the same number of becquerels during each successive half-life.',
+      'The activity halves during every half-life.',
+      'The activity falls by the same number of becquerels during each successive half-life.',
       'decay is exponential: each half-life halves whatever is left', 'shape'),
     qual(rng, 'quarter', 1,
       'After two half-lives, a quarter of the original nuclei remain.',
       'After two half-lives, none of the original nuclei remain.',
       'two halvings leave $(1/2)^2 = 1/4$ of the nuclei', 'shape'),
     qual(rng, 'zero', 3,
-      'Even after ten half-lives the count rate has not fallen to zero.',
-      'The count rate falls to zero after ten half-lives.',
+      'Even after ten half-lives the activity has not fallen to zero.',
+      'The activity falls to zero after ten half-lives.',
       'halving never reaches zero: after ten half-lives about 1/1024 is left', 'shape'),
   ];
 }
@@ -154,9 +159,11 @@ function sourceScenario(rng: RNG): Built | null {
   const T = rng.pick([2, 3, 4, 5, 6, 8, 10, 12, 20]);
   const u = rng.pick(UNITS);
   const A0 = rng.pick([320, 640, 800, 960, 1280, 1600]);
+  // k, j and m must differ: two statements about the same elapsed time either say the same thing twice
+  // or determine each other, and then the question needs no work at all.
   const k = rng.int(2, 4);
-  const j = rng.pick([3, 4, 5]);
-  const m = rng.pick([4, 5]);
+  const j = rng.pick([3, 4, 5].filter((x) => x !== k));
+  const m = rng.pick([3, 4, 5, 6].filter((x) => x !== k && x !== j));
   if (!Number.isInteger(A0 / 2 ** k) || !Number.isInteger(A0 / 2 ** m)) return null;
   return {
     intro: `A radioactive source has a half-life of ${T} ${u.word} and an initial activity of ${val(A0, BQ)}.`,
@@ -207,7 +214,8 @@ function detectorScenario(rng: RNG): Built | null {
 }
 
 const SYMBOLS: Record<number, string> = { 82: 'Pb', 83: 'Bi', 84: 'Po', 85: 'At', 86: 'Rn', 87: 'Fr', 88: 'Ra', 89: 'Ac', 90: 'Th', 91: 'Pa', 92: 'U', 6: 'C', 7: 'N', 11: 'Na', 12: 'Mg', 27: 'Co', 28: 'Ni', 38: 'Sr', 39: 'Y', 53: 'I', 54: 'Xe', 55: 'Cs', 56: 'Ba' };
-const nuc = (A: number, Z: number): string => `^{${A}}_{${Z}}\\text{${SYMBOLS[Z]}}`;
+/** The leading `{}` keeps the mass and proton numbers on the nuclide when one follows an operator. */
+const nuc = (A: number, Z: number): string => `{}^{${A}}_{${Z}}\\text{${SYMBOLS[Z]}}`;
 const ALPHA_NUCLIDES: [number, number][] = [[238, 92], [226, 88], [222, 86], [218, 84], [210, 84], [232, 90]];
 const BETA_NUCLIDES: [number, number][] = [[14, 6], [60, 27], [90, 38], [131, 53], [137, 55], [234, 90]];
 
@@ -218,18 +226,20 @@ function nuclideScenario(rng: RNG): Built | null {
   const dZ = alpha ? Z - 2 : Z + 1;
   if (!SYMBOLS[dZ]) return null;
   return {
-    intro: `A nucleus of $${nuc(A, Z)}$ decays by ${alpha ? 'emitting an alpha particle' : 'beta-minus emission'}.`,
+    // a sample, not a single nucleus: the shared pool talks about the activity, the half-life and the
+    // original nuclei, none of which a lone nucleus has
+    intro: `A sample of $${nuc(A, Z)}$ decays by ${alpha ? 'alpha emission' : 'beta-minus emission'}.`,
     params: { A, Z, alpha: alpha ? 1 : 0 },
     pool: keep([
       ...properties(rng),
-      ...decayShape(rng).filter((s) => s.key !== 'halves'),
-      numeric(rng, 'parent-N', 2, A - Z, [A, Z], (x) => `The original nucleus contains ${n(x)} neutrons.`,
+      ...decayShape(rng),
+      numeric(rng, 'parent-N', 2, A - Z, [A, Z], (x) => `Each $${nuc(A, Z)}$ nucleus contains ${n(x)} neutrons.`,
         `neutrons $= A - Z = ${A} - ${Z} = ${A - Z}$`, 'count'),
-      numeric(rng, 'daughter-A', 2, dA, [alpha ? A - 2 : A - 1, A], (x) => `The nucleus produced has mass number ${n(x)}.`,
+      numeric(rng, 'daughter-A', 2, dA, [alpha ? A - 2 : A - 1, A], (x) => `The nuclide produced has mass number ${n(x)}.`,
         alpha ? `an alpha particle takes away 4 nucleons: $${A} - 4 = ${dA}$` : `a beta particle has mass number 0, so $A$ stays at $${A}$`, 'daughter'),
-      numeric(rng, 'daughter-Z', 3, dZ, [alpha ? Z - 4 : Z - 1, Z], (x) => `The nucleus produced contains ${n(x)} protons.`,
+      numeric(rng, 'daughter-Z', 3, dZ, [alpha ? Z - 4 : Z - 1, Z], (x) => `The nuclide produced contains ${n(x)} protons.`,
         alpha ? `an alpha particle takes away 2 protons: $${Z} - 2 = ${dZ}$` : `beta-minus turns a neutron into a proton: $${Z} + 1 = ${dZ}$`, 'daughter'),
-      numeric(rng, 'daughter-N', 4, dA - dZ, [A - Z, alpha ? A - Z - 4 : A - Z + 1], (x) => `The nucleus produced contains ${n(x)} neutrons.`,
+      numeric(rng, 'daughter-N', 4, dA - dZ, [A - Z, alpha ? A - Z - 4 : A - Z + 1], (x) => `The nuclide produced contains ${n(x)} neutrons.`,
         `the daughter is $${nuc(dA, dZ)}$, so it has $${dA} - ${dZ} = ${dA - dZ}$ neutrons`, 'count'),
     ]),
   };

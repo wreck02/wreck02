@@ -17,10 +17,21 @@ import type { RNG } from '../../core/rng';
 
 const pt = (x: number, y: number): string => `(${x}, ${y})`;
 
+/** "(x - 3)^{2}", and just "x^{2}" when the constant is zero. */
+function squareTerm(v: string, c: number): string {
+  return c === 0 ? `${v}^{2}` : `(${v} ${c > 0 ? '-' : '+'} ${Math.abs(c)})^{2}`;
+}
+
 /** "$(x - 3)^2 + (y + 2)^2 = 25$" */
 function circleTex(a: number, b: number, rsq: number): string {
-  const part = (v: string, c: number) => (c === 0 ? `${v}^{2}` : `(${v} ${c > 0 ? '-' : '+'} ${Math.abs(c)})^{2}`);
-  return `$${part('x', a)} + ${part('y', b)} = ${rsq}$`;
+  return `$${squareTerm('x', a)} + ${squareTerm('y', b)} = ${rsq}$`;
+}
+
+/** "3 - 5 + 16", with zero terms left out entirely. */
+function sumTex(parts: number[]): string {
+  const nz = parts.filter((x) => x !== 0);
+  if (nz.length === 0) return '0';
+  return nz.map((x, i) => (i === 0 ? `${x}` : x < 0 ? ` - ${-x}` : ` + ${x}`)).join('');
 }
 
 /** "$x^2 + y^2 - 4x + 6y - 3 = 0$" */
@@ -70,6 +81,9 @@ function radiusVector(rng: RNG, maxHyp = 20): { dx: number; dy: number; r: numbe
 function readOffQ(rng: RNG): Generated | null {
   const a = rng.int(-6, 6), b = rng.int(-6, 6);
   const r = rng.int(2, 10);
+  // the coefficients of the *printed* equation once the brackets are expanded; verify() works
+  // from these, so it completes the square rather than re-reading a and b off the parameters
+  const D = -2 * a, Ey = -2 * b, F = a * a + b * b - r * r;
   const wantRadius = rng.bool(0.6);
   if (wantRadius) {
     const answer = E(r);
@@ -88,7 +102,7 @@ function readOffQ(rng: RNG): Generated | null {
       solution: `The right-hand side is $r^{2} = ${r * r}$, so $r = ${r}$.`,
       trap: 'The number on the right of the equation is r², not r.',
       tags: ['circles', 'radius'],
-      params: { variant: 'read-off-radius', a, b, r },
+      params: { variant: 'read-off-radius', a, b, r, D, Ey, F },
       typedAllowed: true,
     };
   }
@@ -105,10 +119,10 @@ function readOffQ(rng: RNG): Generated | null {
     stem: `The circle ${circleTex(a, b, r * r)} has centre $C$. Find the sum of the coordinates of $C$.`,
     answer: { kind: 'exact', value: answer },
     options: buildOptions(rng, answer, distractors),
-    solution: `$(x ${a > 0 ? '-' : '+'} ${Math.abs(a)})^{2}$ gives $x = ${a}$, so $C$ is $${pt(a, b)}$ and the sum is $${a + b}$.`,
+    solution: `$${squareTerm('x', a)}$ gives $x = ${a}$, so $C$ is $${pt(a, b)}$ and the sum is $${a + b}$.`,
     trap: 'The centre of (x − a)² + (y − b)² = r² is (a, b) — the signs in the brackets are reversed.',
     tags: ['circles', 'centre'],
-    params: { variant: 'read-off-centre', a, b, r },
+    params: { variant: 'read-off-centre', a, b, r, D, Ey, F },
     typedAllowed: true,
   };
 }
@@ -122,6 +136,9 @@ function completeSquareQ(rng: RNG): Generated | null {
   const D = -2 * p, Ey = -2 * q;
   if (D === 0 && Ey === 0) return null;
   const eq = generalTex(D, Ey, F);
+  // the right-hand side after completing the square, with any zero contributions left out
+  const rhsParts = [-F, p * p, q * q].filter((x) => x !== 0);
+  const rhs = rhsParts.length > 1 ? `${sumTex(rhsParts)} = ${r * r}` : `${r * r}`;
   const wantRadius = rng.bool(0.7);
   if (wantRadius) {
     const answer = E(r);
@@ -138,7 +155,7 @@ function completeSquareQ(rng: RNG): Generated | null {
       stem: `A circle has equation ${eq}. Find its radius.`,
       answer: { kind: 'exact', value: answer },
       options: buildOptions(rng, answer, distractors),
-      solution: `Complete the square: $(x ${p > 0 ? '-' : '+'} ${Math.abs(p)})^{2} + (y ${q > 0 ? '-' : '+'} ${Math.abs(q)})^{2} = ${-F} + ${p * p} + ${q * q} = ${r * r}$, so $r = ${r}$.`,
+      solution: `Complete the square: $${squareTerm('x', p)} + ${squareTerm('y', q)} = ${rhs}$, so $r = ${r}$.`,
       trap: 'Completing the square adds (D/2)² and (E/2)² to both sides — forgetting them leaves the wrong r².',
       tags: ['circles', 'completing-the-square', 'radius'],
       params: { variant: 'general-radius', p, q, r, D, Ey, F },
@@ -174,40 +191,54 @@ function verdictOf(d: number, r: number): string {
   return d < r ? VERDICT.in : d > r ? VERDICT.out : VERDICT.on;
 }
 
-/** Inside / on / outside, with the distance quoted in every option. */
+/**
+ * Inside / on / outside.
+ *
+ * Every option quotes a distance of its own, and each verdict is the one that *its* distance
+ * implies. No value is repeated, so the correct distance cannot be spotted as the one the list
+ * mentions twice: the candidate has to run Pythagoras and compare the result with the radius.
+ */
 function positionQ(rng: RNG): Generated | null {
   const [a, b, c] = rng.pick(TRIPLES.filter((t) => t[2] <= 17));
   const swap = rng.bool();
   const dx = (swap ? b : a) * rng.sign(), dy = (swap ? a : b) * rng.sign();
   const d = c;
-  const where = rng.pick(['in', 'on', 'out'] as const);
+  // "on" must be the rarest verdict: it is the one case whose correct option necessarily quotes
+  // the radius printed in the stem, so at one question in five it is worth no more than a guess
+  const where = rng.weighted(['in', 'on', 'out'] as const, [2, 1, 2]);
   const r = where === 'on' ? d : where === 'in' ? d + rng.int(1, 4) : Math.max(2, d - rng.int(1, 4));
   if (r === d && where !== 'on') return null;
   const p = rng.int(-5, 5), q = rng.int(-5, 5);
   const x0 = p + dx, y0 = q + dy;
   if (Math.abs(x0) > 20 || Math.abs(y0) > 20) return null;
-  const say = (dist: string, verdict: string) => `$CP = ${dist}$, so $P$ lies ${verdict}.`;
-  const correct = say(`${d}`, verdictOf(d, r));
-  const cands: { display: string; d: number; verdict: string; trap?: string }[] = [
+  const say = (dist: number, verdict: string) => `$CP = ${dist}$, so $P$ lies ${verdict}.`;
+  const correct = say(d, verdictOf(d, r));
+  const wrongDistances: { value: number; trap: string; must?: boolean }[] = [
+    // the "CP = r" option is always offered, so that an option quoting the printed radius is not
+    // by itself a sign that P lies on the circle
+    { value: r, trap: 'quoted the radius instead of the distance CP', must: true },
+    { value: d * d, trap: 'compared the radius with CP², forgetting to take the square root' },
+    { value: Math.abs(dx) + Math.abs(dy), trap: 'added the two coordinate differences instead of using Pythagoras' },
+    { value: Math.abs(d - r), trap: 'subtracted the radius from the distance' },
+    { value: Math.max(Math.abs(dx), Math.abs(dy)), trap: 'used only the larger coordinate difference' },
+    { value: d + r, trap: 'added the radius to the distance' },
+  ];
+  const cands: { display: string; d: number; verdict: string; trap?: string; must?: boolean }[] = [
     { display: correct, d, verdict: verdictOf(d, r) },
   ];
-  const others = [VERDICT.in, VERDICT.on, VERDICT.out].filter((v) => v !== verdictOf(d, r));
-  for (const v of others) cands.push({ display: say(`${d}`, v), d, verdict: v, trap: 'compared the distance with the radius the wrong way round' });
-  const wrongDistances: { value: number; trap: string }[] = [
-    { value: d * d, trap: 'compared r² with the square of the distance but then quoted the square as the distance' },
-    { value: Math.abs(dx) + Math.abs(dy), trap: 'added the two differences instead of using Pythagoras' },
-    { value: Math.abs(d - r), trap: 'subtracted the radius from the distance' },
-  ];
+  const used = new Set<number>([d]);
   for (const w of wrongDistances) {
-    if (w.value === d || w.value <= 0) continue;
-    cands.push({ display: say(`${w.value}`, verdictOf(w.value, r)), d: w.value, verdict: verdictOf(w.value, r), trap: w.trap });
+    if (w.value <= 0 || used.has(w.value)) continue;
+    used.add(w.value);
+    const verdict = verdictOf(w.value, r);
+    cands.push({ display: say(w.value, verdict), d: w.value, verdict, trap: w.trap, must: w.must });
   }
-  const wrong = cands.slice(1).filter((c) => c.display !== correct);
+  const wrong = cands.slice(1);
   if (wrong.length < 4) return null;
   return {
     stem: `The circle with centre $C${pt(p, q)}$ has radius $${r}$. $P$ is the point $${pt(x0, y0)}$.\n\nWhich of the following is true?`,
     answer: { kind: 'choice', value: correct },
-    options: buildChoiceOptions(rng, correct, wrong.map((w) => ({ display: w.display, trap: w.trap }))),
+    options: buildChoiceOptions(rng, correct, wrong.map((w) => ({ display: w.display, trap: w.trap, must: w.must }))),
     solution: `$CP = \\sqrt{${dx * dx} + ${dy * dy}} = \\sqrt{${d * d}} = ${d}$, and the radius is $${r}$, so $P$ lies ${verdictOf(d, r)}.`,
     trap: 'Compare the distance from the centre with the radius — not with r², and not after adding the coordinate differences.',
     tags: ['circles', 'distance', 'position'],
@@ -426,7 +457,10 @@ export default defineTemplate({
       const d = Math.hypot(p.x0! - p.p!, p.y0! - p.q!);
       const truth = verdictOf(d, p.r!);
       const match = p.cands.filter((c) => close(c.d!, d) && c.verdict === truth);
-      return match.length === 1 && match[0].display === q.answer.value && q.options.filter((o) => o.correct).length === 1;
+      // exactly one option may quote the true distance, and it must carry the true verdict
+      const quotingTrueDistance = p.cands.filter((c) => close(c.d!, d)).length;
+      return quotingTrueDistance === 1 && match.length === 1 && match[0].display === q.answer.value
+        && q.options.filter((o) => o.correct).length === 1;
     }
 
     if (p.variant === 'tangent-equation') {
@@ -447,17 +481,16 @@ export default defineTemplate({
 
     if (q.answer.kind !== 'exact') return false;
     const got = q.answer.value.toNumber();
+    // r² = (D/2)² + (E/2)² − F for the general form x² + y² + Dx + Ey + F = 0
+    const rsqFromCoefficients = () => (p.D! / 2) ** 2 + (p.Ey! / 2) ** 2 - p.F!;
     switch (p.variant) {
       case 'read-off-radius':
-        // the equation printed has r² on the right: the answer squared must reproduce it
-        return close(got * got, p.r! * p.r!) && got > 0;
-      case 'read-off-centre':
-        return close(got, p.a! + p.b!);
       case 'general-radius': {
-        // radius straight from the coefficients: r² = (D/2)² + (E/2)² − F
-        const rsq = (p.D! / 2) ** 2 + (p.Ey! / 2) ** 2 - p.F!;
+        // expand the printed brackets and complete the square again from the coefficients
+        const rsq = rsqFromCoefficients();
         return rsq > 0 && close(got, Math.sqrt(rsq));
       }
+      case 'read-off-centre':
       case 'general-centre':
         return close(got, -p.D! / 2 + -p.Ey! / 2);
       case 'centre-distance':

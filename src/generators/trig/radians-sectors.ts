@@ -1,6 +1,6 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
 import { E, frac, piFrac, Exact } from '../../core/exact';
-import { buildOptions, type Distractor } from '../../core/options';
+import { buildOptions, type Distractor, type Option } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import { exactCos, exactSin } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
@@ -16,6 +16,11 @@ import type { RNG } from '../../core/rng';
  * All answers are exact and left in terms of π; the stem always says which unit is wanted, because
  * a unit attached to an answer containing π breaks the typed-answer parser.
  * params record exactly what the stem states, so verify() can redo the geometry in floating point.
+ *
+ * Display notes:
+ *  - a segment area is printed with its π term first (6π − 9√3, the exam's order) by `segTex`,
+ *    because Exact sorts rationals and surds before π terms;
+ *  - an angle in degrees is printed with format 'decimal', so a half-turn slip reads 22.5, not 45/2.
  */
 
 type Angle = [number, number]; // p/q of π
@@ -30,6 +35,9 @@ const theta = ([p, q]: Angle): Exact => piFrac(p, q);
 const thetaTex = (a: Angle): string => theta(a).toLatex();
 const degOf = ([p, q]: Angle): number => (180 * p) / q;
 
+/** Angles worth converting to degrees: a whole number of degrees, and not a straight or full turn. */
+const DEG_ANGLES: Angle[] = ALL_ANGLES.filter((a) => Number.isInteger(degOf(a)) && degOf(a) !== 180 && degOf(a) !== 360);
+
 /** Exam-plausible: at most halves/quarters in front of π or a surd, and no huge numerators. */
 function tidy(x: Exact, maxDen = 4): boolean {
   if (!Number.isFinite(x.toNumber()) || !isCleanExact(x).ok) return false;
@@ -38,6 +46,27 @@ function tidy(x: Exact, maxDen = 4): boolean {
 
 function clean(ds: Distractor[]): Distractor[] {
   return ds.filter((d) => tidy(d.value, 12) && Math.abs(d.value.toNumber()) > 1e-9);
+}
+
+/**
+ * Exam order for a two-term answer: the π term leads when the other term is negative,
+ * so a segment prints as $6\pi - 9\sqrt{3}$ rather than $-9\sqrt{3} + 6\pi$.
+ */
+function segTex(x: Exact): string {
+  if (x.terms.length === 2) {
+    const [first, second] = x.terms;
+    if (first.k === 0 && second.k !== 0) {
+      const lead = Exact.fromTerms([second]);
+      const tail = Exact.fromTerms([first]);
+      if (tail.sign() < 0) return `${lead.toLatex()} - ${tail.abs().toLatex()}`;
+    }
+  }
+  return x.toLatex();
+}
+
+/** Re-render the option list with segTex, keeping buildOptions' de-duplication and shuffle. */
+function segOptions(opts: Option[]): Option[] {
+  return opts.map((o) => (o.value ? { ...o, display: `$${segTex(o.value)}$` } : o));
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -58,7 +87,7 @@ function convertQ(rng: RNG): Generated | null {
     const answer = piFrac(deg, 180);
     if (!tidy(answer, 24)) return null;
     const ds: Distractor[] = [
-      { value: piFrac(180, deg), trap: 'multiplied by 180/θ: the conversion factor is π/180' },
+      { value: piFrac(180, deg), trap: 'multiplied by 180/θ: the conversion factor is π/180', must: true },
       { value: piFrac(deg, 360), trap: 'divided by 360 instead of 180' },
       { value: frac(deg, 180), trap: 'forgot the factor of π' },
       { value: piFrac(deg, 90), trap: 'divided by 90' },
@@ -78,23 +107,32 @@ function convertQ(rng: RNG): Generated | null {
       typedAllowed: true,
     };
   }
-  const a = rng.pick(ALL_ANGLES);
+  const a = rng.pick(DEG_ANGLES);
   const deg = degOf(a);
-  if (!Number.isInteger(deg)) return null;
   const answer = E(deg);
+  // A degree measure is positive, at most a couple of turns, and printed as the exam prints it
+  // (112.5, never 225/2): anything else is eliminated without doing the conversion.
+  const degreeLike = (v: Exact) => {
+    const x = v.toNumber();
+    return x > 0 && x <= 720 && Number.isInteger(2 * x);
+  };
   const ds: Distractor[] = [
-    { value: frac(180 * a[1], a[0]), trap: 'turned the fraction upside down before multiplying by 180' },
-    { value: frac(360 * a[0], a[1]), trap: 'multiplied by 360 instead of 180' },
-    { value: frac(90 * a[0], a[1]), trap: 'multiplied by 90' },
+    { value: frac(180 * a[1], a[0]), trap: 'turned the fraction upside down before multiplying by 180', must: true },
+    { value: E(2 * deg), trap: 'multiplied by 360 instead of 180' },
+    { value: frac(deg, 2), trap: 'multiplied by 90 instead of 180' },
     { value: E(360 - deg), trap: 'gave the angle measured the other way round the circle' },
-    { value: E(180 - deg), trap: 'gave the supplementary angle' },
-    { value: E(2 * deg), trap: 'doubled the angle' },
-    { value: frac(deg, 2), trap: 'halved the angle' },
+    { value: frac(180, a[1]), trap: 'divided 180 by the denominator but never multiplied by the numerator' },
+    { value: E(180 * a[0]), trap: 'multiplied by 180 but never divided by the denominator' },
   ];
+  if (deg < 180) ds.push({ value: E(180 - deg), trap: 'gave the supplementary angle' });
+  else ds.push({ value: E(deg - 180), trap: 'measured on from the half turn instead of from zero' });
   return {
     stem: `Express $${thetaTex(a)}$ radians in degrees.`,
-    answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, clean(ds), { fallback: [30, 45, 60, 90, 120, 135, 150, 180, 210, 240, 270, 300].filter((d) => d !== deg).map(E) }),
+    answer: { kind: 'exact', value: answer, format: 'decimal' },
+    options: buildOptions(rng, answer, ds.filter((d) => degreeLike(d.value) && isCleanExact(d.value).ok), {
+      format: 'decimal',
+      fallback: [30, 45, 60, 90, 120, 135, 150, 180, 210, 240, 270, 300].filter((d) => d !== deg).map(E),
+    }),
     solution: `$${thetaTex(a)} \\times \\frac{180}{\\pi} = ${deg}^{\\circ}$.`,
     trap: 'Degrees → radians multiplies by π/180; radians → degrees multiplies by 180/π.',
     tags: ['trigonometry', 'radians', 'conversion'],
@@ -123,9 +161,9 @@ function arcQ(rng: RNG): Generated | null {
   if (!s) return null;
   const { r, a } = s;
   const ds: Distractor[] = [
-    { value: s.area, trap: 'used the sector-area formula ½r²θ instead of rθ' },
-    { value: E(r).mul(theta(a)).mulRat(frac(1, 2).toRat()), trap: 'halved: ½rθ is not the arc length' },
+    { value: s.area, trap: 'used the sector-area formula ½r²θ instead of rθ', must: true },
     { value: E(r * r).mul(theta(a)), trap: 'squared the radius' },
+    { value: E(r).mul(theta(a)).mulRat(frac(1, 2).toRat()), trap: 'halved: ½rθ is not the arc length' },
     { value: s.perimeter, trap: 'gave the whole perimeter of the sector' },
     { value: E(2 * r).mul(theta(a)), trap: 'used the diameter instead of the radius' },
     { value: E(2 * r).mul(Exact.pi()), trap: 'gave the circumference of the whole circle' },
@@ -149,7 +187,7 @@ function sectorAreaQ(rng: RNG): Generated | null {
   if (!s) return null;
   const { r, a } = s;
   const ds: Distractor[] = [
-    { value: E(r * r).mul(theta(a)), trap: 'forgot the ½ in ½r²θ' },
+    { value: E(r * r).mul(theta(a)), trap: 'forgot the ½ in ½r²θ', must: true },
     { value: s.arc, trap: 'found the arc length rθ instead of the area' },
     { value: E(r).mul(theta(a)).mulRat(frac(1, 2).toRat()), trap: 'forgot to square the radius' },
     { value: E(r * r).mul(Exact.pi()), trap: 'gave the area of the whole circle' },
@@ -174,9 +212,10 @@ function perimeterQ(rng: RNG): Generated | null {
   const { r, a } = s;
   const inDegrees = rng.bool(0.4) && Number.isInteger(degOf(a));
   if (!tidy(s.perimeter, 2)) return null;
-  const angleTex = inDegrees ? `${degOf(a)}^{\\circ}` : `${thetaTex(a)}$ radians$`;
+  // The whole phrase, maths and unit together: "$60^{\circ}$" or "$\frac{\pi}{3}$ radians".
+  const angleTex = inDegrees ? `$${degOf(a)}^{\\circ}$` : `$${thetaTex(a)}$ radians`;
   const ds: Distractor[] = [
-    { value: s.arc, trap: 'gave the arc only: the two straight edges were left out' },
+    { value: s.arc, trap: 'gave the arc only: the two straight edges were left out', must: true },
     { value: E(r).add(s.arc), trap: 'added only one radius' },
     { value: E(2 * r).add(s.area), trap: 'used the sector area in place of the arc length' },
     { value: E(2 * r).add(s.arc.mulRat(2)), trap: 'doubled the arc as well as the radii' },
@@ -184,7 +223,7 @@ function perimeterQ(rng: RNG): Generated | null {
     { value: E(2 * r).add(E(r).mul(theta(a)).mulRat(frac(1, 2).toRat())), trap: 'halved the arc length' },
   ];
   return {
-    stem: `A sector of a circle of radius ${r} cm subtends an angle of $${angleTex}$ at the centre.\n\nFind the perimeter of the sector, in cm, leaving your answer in terms of $\\pi$.`,
+    stem: `A sector of a circle of radius ${r} cm subtends an angle of ${angleTex} at the centre.\n\nFind the perimeter of the sector, in cm, leaving your answer in terms of $\\pi$.`,
     answer: { kind: 'exact', value: s.perimeter },
     options: buildOptions(rng, s.perimeter, clean(ds)),
     solution: `${inDegrees ? `$${degOf(a)}^{\\circ} = ${thetaTex(a)}$ radians. ` : ''}Arc $= r\\theta = ${s.arc.toLatex()}$ cm, and the two radii add $${2 * r}$ cm, so the perimeter is $${s.perimeter.toLatex()}$ cm.`,
@@ -210,7 +249,7 @@ function segmentQ(rng: RNG): Generated | null {
   if (!tidy(answer, 4) || !tidy(sector, 2) || !tidy(triangle, 4)) return null;
   if (answer.terms.length !== 2) return null;
   const ds: Distractor[] = [
-    { value: sector, trap: 'gave the sector area: the triangle was never subtracted' },
+    { value: sector, trap: 'gave the sector area: the triangle was never subtracted', must: true },
     { value: sector.add(triangle), trap: 'added the triangle instead of subtracting it' },
     { value: triangle, trap: 'gave the area of the triangle only' },
     { value: sector.sub(triangle.mulRat(2)), trap: 'forgot the ½ in the triangle area ½r² sin θ' },
@@ -220,8 +259,8 @@ function segmentQ(rng: RNG): Generated | null {
   return {
     stem: `A chord of a circle of radius ${r} cm subtends an angle of $${thetaTex(a)}$ radians at the centre.\n\nFind the exact area, in cm$^2$, of the minor segment cut off by the chord.`,
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, clean(ds)),
-    solution: `Sector $= \\tfrac{1}{2}r^2\\theta = ${sector.toLatex()}$ and triangle $= \\tfrac{1}{2}r^2\\sin\\theta = \\tfrac{1}{2} \\times ${r * r} \\times ${sin.toLatex()} = ${triangle.toLatex()}$, so the segment is $${answer.toLatex()}$ cm$^2$.`,
+    options: segOptions(buildOptions(rng, answer, clean(ds))),
+    solution: `Sector $= \\tfrac{1}{2}r^2\\theta = ${sector.toLatex()}$ and triangle $= \\tfrac{1}{2}r^2\\sin\\theta = \\tfrac{1}{2} \\times ${r * r} \\times ${sin.toLatex()} = ${triangle.toLatex()}$, so the segment is $${segTex(answer)}$ cm$^2$.`,
     trap: 'Segment = sector − triangle, and the triangle is ½r² sin θ (not ½ base × height with the radius).',
     tags: ['trigonometry', 'radians', 'segment'],
     params: { variant: 'segment', r, p: a[0], q: a[1] },
@@ -242,13 +281,32 @@ function findAngleQ(rng: RNG): Generated | null {
   if (inDegrees && !Number.isInteger(deg)) return null;
   const answer = inDegrees ? E(deg) : theta(a);
   if (!tidy(answer, 12)) return null;
+  // An angle at the centre of a sector is positive and below a full turn; in degrees it is
+  // printed the way the exam prints it, so a half-turn slip shows as 22.5 and not as 45/2.
+  const fullTurn = inDegrees ? 360 : 2 * Math.PI;
+  const possible = (v: Exact) => {
+    const x = v.toNumber();
+    return x > 1e-9 && x < fullTurn - 1e-9 && (!inDegrees || Number.isInteger(2 * x));
+  };
+  // the unit slip is exempt: π/6 offered as a number of degrees is exactly the mistake on trial
   const ds: Distractor[] = [
-    { value: inDegrees ? theta(a) : E(deg), trap: inDegrees ? 'left the answer in radians' : 'gave the angle in degrees rather than radians' },
-    { value: answer.mulRat(2), trap: fromArc ? 'brought in the factor of 2 that only the area formula has' : 'forgot the ½ in ½r²θ' },
-    { value: answer.mulRat(frac(1, 2).toRat()), trap: 'divided by 2r instead of by r' },
-    { value: answer.mulRat(r), trap: 'multiplied by the radius instead of dividing by it' },
-    { value: inDegrees ? E(360 - deg) : Exact.pi().mulRat(2).sub(theta(a)), trap: 'gave the reflex angle' },
+    { value: inDegrees ? theta(a) : E(deg), trap: inDegrees ? 'left the answer in radians' : 'gave the angle in degrees rather than radians', must: true },
   ];
+  const push = (value: Exact, trap: string, must = false) => { if (possible(value)) ds.push({ value, trap, must }); };
+  const half = answer.mulRat(frac(1, 2).toRat());
+  const twice = answer.mulRat(2);
+  if (fromArc) {
+    push(half, 'divided by the diameter 2r instead of by the radius r', true);
+    push(twice, 'brought in the factor of 2 that only the area formula has');
+    push(answer.mulRat(frac(2, r).toRat()), 'used θ = 2A/r², the area formula, with the arc length');
+  } else {
+    push(half, 'forgot the ½: used θ = A/r² instead of θ = 2A/r²', true);
+    push(twice, 'doubled again after already using θ = 2A/r²');
+    push(answer.mulRat(frac(1, 4).toRat()), 'used the diameter in place of the radius: θ = 2A/d²');
+    push(answer.mulRat(frac(r, 2).toRat()), 'used θ = s/r, the arc formula, with the area');
+  }
+  push(answer.mulRat(r), 'multiplied by the radius instead of dividing by it');
+  push(inDegrees ? E(360 - deg) : Exact.pi().mulRat(2).sub(theta(a)), 'gave the reflex angle');
   const question = inDegrees
     ? 'Find the angle of the sector, in degrees.'
     : 'Find the angle of the sector, in radians, in terms of $\\pi$.';
@@ -256,12 +314,14 @@ function findAngleQ(rng: RNG): Generated | null {
     stem: fromArc
       ? `The arc of a sector of a circle of radius ${r} cm has length $${arc.toLatex()}$ cm.\n\n${question}`
       : `A sector of a circle of radius ${r} cm has area $${area.toLatex()}$ cm$^2$.\n\n${question}`,
-    answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, clean(ds)),
+    answer: { kind: 'exact', value: answer, format: inDegrees ? 'decimal' : 'auto' },
+    options: buildOptions(rng, answer, clean(ds), inDegrees ? { format: 'decimal' } : {}),
     solution: fromArc
       ? `$\\theta = \\frac{s}{r} = \\frac{${arc.toLatex()}}{${r}} = ${theta(a).toLatex()}$ radians${inDegrees ? `, which is $${deg}^{\\circ}$` : ''}.`
       : `$\\theta = \\frac{2A}{r^2} = \\frac{2 \\times ${area.toLatex()}}{${r * r}} = ${theta(a).toLatex()}$ radians${inDegrees ? `, which is $${deg}^{\\circ}$` : ''}.`,
-    trap: 'Rearranging s = rθ divides by r once; rearranging A = ½r²θ brings in a factor of 2.',
+    trap: fromArc
+      ? 'Rearranging s = rθ divides by the radius once — not by the diameter — and the answer is in radians.'
+      : 'Rearranging A = ½r²θ brings in a factor of 2: θ = 2A/r², and the answer is in radians.',
     tags: ['trigonometry', 'radians', 'sector'],
     params: { variant: 'find-angle', r, p: a[0], q: a[1], fromArc, inDegrees },
     typedAllowed: true,

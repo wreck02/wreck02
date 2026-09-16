@@ -34,7 +34,9 @@ const round = (x: number): number => Number(x.toPrecision(12));
  *  xs/fs   every force: position along the beam (m from A) and signed magnitude (N, up positive)
  *  askKind 'f' the unknown is the magnitude of forces[askIndex] (direction askSign, answer × aScale newtons)
  *          'x' the unknown is the position of forces[askIndex]
- *          'm' the answer is the magnitude of the moment of forces[askIndex] about `pivot`
+ *          'm' the answer is the magnitude of the moment of forces[askIndex] about `pivot` (the pivot
+ *              the stem names; verify() checks that moment from the distances the stem prints, not
+ *              from these metres, so the unit conversion is tested rather than repeated)
  *  freeIndex a reaction whose magnitude is not given and is not asked for (−1 if there is none)
  */
 interface Sys {
@@ -240,7 +242,14 @@ function momentOfForce(rng: RNG): Generated | null {
     spread: 150,
     tags: ['moments', 'equilibrium'],
     sys: { xs: [-d1, d2, 0], fs: [-F1, -F2, F1 + F2], askIndex: 0, askKind: 'm', askSign: -1, aScale: 1, freeIndex: 2, pivot: 0 },
-    params: { variant: 'moment', cm, d1, d2, F1, F2 },
+    // `shown`/`distUnit` are the distances exactly as the stem prints them (cm when cm is true), so
+    // verify() can redo the conversion this variant is really about instead of trusting metres.
+    params: {
+      variant: 'moment', cm, d1, d2, F1, F2,
+      shown: [round(cm ? d1 * 100 : d1), round(cm ? d2 * 100 : d2)],
+      distUnit: cm ? 'cm' : 'm',
+      forces: [F1, F2],
+    },
   });
 }
 
@@ -436,7 +445,10 @@ function tipping(rng: RNG): Generated | null {
   const past = (Wb * (dSup - L / 2)) / Wm;
   const x = round(dSup + past);
   if (!isMult(past, 0.1) || past < 0.2 || x > L - 0.2) return null;
-  const stem = `A uniform plank $AB$ of length $${n(L)}\\ \\text{m}$ and weight $${n(Wb)}\\ \\text{N}$ rests horizontally on two supports: one at $C$, $${n(c)}\\ \\text{m}$ from $A$, and one at $D$, $${n(dSup)}\\ \\text{m}$ from $A$. A man of weight $${n(Wm)}\\ \\text{N}$ walks from $A$ towards $B$.\n\nFind the greatest distance from $A$ he can reach before the plank tips.`;
+  // The man starts *on* the near support: standing on the overhang beyond C, a heavy man would
+  // already have tipped the plank about C (W_m·c > W_b(L/2 − c)), so the stem would describe a
+  // position the plank cannot be in and the true answer would be 0.
+  const stem = `A uniform plank $AB$ of length $${n(L)}\\ \\text{m}$ and weight $${n(Wb)}\\ \\text{N}$ rests horizontally on two supports: one at $C$, $${n(c)}\\ \\text{m}$ from $A$, and one at $D$, $${n(dSup)}\\ \\text{m}$ from $A$. A man of weight $${n(Wm)}\\ \\text{N}$ stands on the plank at $C$ and walks towards $B$.\n\nFind the greatest distance from $A$ he can reach before the plank tips.`;
   /** a distance off the end of the plank is no distractor at all */
   const onPlank = (v: number): number | null => (v > 0 && v <= L ? round(v) : null);
   return pack(rng, {
@@ -620,15 +632,19 @@ export default defineTemplate({
     if (Math.abs(fs.reduce((s, f) => s + f, 0)) > tol) return false;
     // (2) Σ moments about a second point
     if (Math.abs(fs.reduce((s, f, i) => s + f * (xs[i] - q1), 0)) > tol) return false;
-    // (3) a moment question: the named force's moment must match, and the rest must balance it
+    // (3) a moment question: the whole point of the variant is the unit of the distance, so verify
+    //     converts the distances *as the stem prints them* itself and checks that both forces give
+    //     the claimed moment. (Recomputing F1·d1 from the metres stored in `sys` would only repeat
+    //     generate's own arithmetic, and F2 was defined as M/d2, so that identity holds anyway.)
     if (p.askKind === 'm') {
-      let own = 0, rest = 0;
-      for (let i = 0; i < fs.length; i++) {
-        const mi = fs[i] * (xs[i] - p.pivot);
-        if (i === p.askIndex) own += mi; else rest += mi;
+      const pm = q.params as { shown?: number[]; distUnit?: string; forces?: number[] };
+      if (!Array.isArray(pm.shown) || !Array.isArray(pm.forces) || pm.shown.length !== 2 || pm.forces.length !== 2) return false;
+      if (pm.distUnit !== 'cm' && pm.distUnit !== 'm') return false;
+      const metres = (v: number) => (pm.distUnit === 'cm' ? v / 100 : v);
+      for (let i = 0; i < 2; i++) {
+        const mi = pm.forces[i] * metres(pm.shown[i]);
+        if (!Number.isFinite(mi) || Math.abs(mi - a) > 1e-9 * (1 + a)) return false;
       }
-      if (Math.abs(Math.abs(own) - a) > tol) return false;
-      if (Math.abs(Math.abs(rest) - a) > tol) return false;
     }
     // every reaction must actually push the beam up
     if (p.freeIndex >= 0 && fs[p.freeIndex] < -tol) return false;

@@ -8,13 +8,20 @@ import type { RNG } from '../../core/rng';
 /**
  * Order-of-magnitude estimates. Every stem states the assumptions, so the answer is determinate:
  * either "which of these is the best estimate" (five options a factor of ten apart, kind 'choice')
- * or "estimate …, giving your answer to 1 significant figure" (kind 'exact', with named mistakes
+ * or "find …, giving your answer to 1 significant figure" (kind 'exact', with named mistakes
  * as distractors).
- * Level 1: the mass of the air in a room (ρ = 1.2 kg m⁻³)
+ * Level 1: the mass of the air in a room (ρ = 1.2 kg m⁻³); the mass of the water in a bath
  * Level 2: heartbeats in a year; the volume of air breathed in a day
  * Level 3: the energy to boil a kettle of water; the time a kettle takes
- * Level 4: the force of the atmosphere on a wall; the time light takes to reach us from the Sun
+ * Level 4: the force of the atmosphere on a wall; the sunlight falling on a roof; the time light
+ *          takes to reach us from the Sun and the planets
  * Level 5: the power of a person climbing stairs; the mass of water in a swimming pool; a car's fuel energy
+ *
+ * Both forms name the mistake behind every wrong option: in 'choice' mode each rung of the ladder
+ * carries either the named mistake that lands on it or the size of the slip that would produce it.
+ * In 'exact' mode a candidate whose value is within a factor of 1.5 of the answer is thrown away —
+ * the rounding an estimate invites must never land on a distractor — and the remaining distractors
+ * are chosen so that the answer sits above and below them equally often.
  *
  * verify() recomputes the quantity from the assumptions kept in params by a different route and
  * checks that the answer is its value to 1 significant figure — and, for the multiple-choice form,
@@ -66,6 +73,44 @@ function cleanNum(v: number): Exact | null {
   }
 }
 
+/** How big a slip a rung of the ladder (or a power-of-ten pad) represents. */
+function slipTrap(k: number): string {
+  const size = Math.abs(k) === 1 ? 'a factor of 10' : `a factor of $10^{${Math.abs(k)}}$`;
+  return `${size} ${k > 0 ? 'too large' : 'too small'}: a conversion in the chain missed or applied the wrong way round`;
+}
+
+/**
+ * The mistake a wrong option represents. A named mistake that lands on this rung (to the nearest
+ * power of ten) names it; otherwise the size of the slip does. No wrong option is ever unlabelled:
+ * the review screen has to be able to say what went wrong.
+ */
+function rungTrap(e: Est, k: number): string {
+  for (const m of e.mistakes) {
+    if (m.value === null || !(m.value > 0)) continue;
+    if (Math.abs(Math.log10(m.value / e.value) - k) <= 0.5) return m.trap;
+  }
+  return slipTrap(k);
+}
+
+/**
+ * Pick `count` distractors with a random number of them below the answer.
+ *
+ * The named mistakes in an estimate nearly all pull the same way (a forgotten factor makes the
+ * answer too small), so taking them in order pins the answer to the same rank in every question —
+ * "pick the second largest" then scores without any physics. Candidates keep their order inside
+ * each side, so the named mistakes still come before the power-of-ten pads.
+ */
+function balance(rng: RNG, answer: Exact, cands: Distractor[], count: number): Distractor[] {
+  const a = answer.toNumber();
+  const below = cands.filter((d) => d.value.toNumber() < a);
+  const above = cands.filter((d) => d.value.toNumber() > a);
+  const lo = Math.max(0, count - above.length);
+  const hi = Math.min(count, below.length);
+  if (lo > hi) return cands.slice(0, count);
+  const nBelow = rng.int(lo, hi);
+  return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
+}
+
 /** Build the question: a ladder of powers of ten, or a 1 s.f. answer with named wrong turns. */
 function estimate(rng: RNG, e: Est): Generated | null {
   if (!(e.value > 0) || !Number.isFinite(e.value)) return null;
@@ -76,6 +121,13 @@ function estimate(rng: RNG, e: Est): Generated | null {
   const target = sf1(e.value);
   const ex = cleanNum(target);
   if (!ex) return null;
+  // A mistake whose 1 s.f. value *is* the answer would be quietly dropped from the options (a
+  // duplicate) and the candidate who made it would still score. Redraw the parameters instead:
+  // for the air in a room that only means avoiding volumes near 100/ρ.
+  for (const m of e.mistakes) {
+    if (m.value === null || !(m.value > 0)) continue;
+    if (Math.abs(sf1(m.value) - target) <= 1e-9 * target) return null;
+  }
   const format = fmtFor(target);
   const disp = (v: number): string => `$${E(round(v)).toLatex({ format })}${e.unit ? `\\ ${e.unit}` : ''}$`;
 
@@ -91,7 +143,11 @@ function estimate(rng: RNG, e: Est): Generated | null {
     if (wrong.length !== 4) return null;
     let options: Option[];
     try {
-      options = buildChoiceOptions(rng, disp(target), wrong.map(disp));
+      options = buildChoiceOptions(
+        rng,
+        disp(target),
+        wrong.map((v) => ({ display: disp(v), trap: rungTrap(e, Math.round(Math.log10(v / target))) })),
+      );
     } catch {
       return null;
     }
@@ -110,24 +166,27 @@ function estimate(rng: RNG, e: Est): Generated | null {
     };
   }
 
-  const ds: Distractor[] = [];
+  const cands: Distractor[] = [];
   const seen: Exact[] = [ex];
   for (const m of e.mistakes) {
-    if (ds.length >= 4 || m.value === null) continue;
+    if (m.value === null) continue;
     const v = cleanNum(sf1(m.value));
     if (!v || seen.some((s) => s.equals(v))) continue;
     const r = v.toNumber() / target;
     if (r < 1e-4 || r > 1e4) continue;
+    // An option within 50% of the answer punishes the rounding this kind of question invites
+    // (1.2 ≈ 1, g ≈ 10): the candidate who rounds would find their number in the list.
+    if (r > 1 / 1.5 && r < 1.5) continue;
     seen.push(v);
-    ds.push({ value: v, trap: m.trap });
+    cands.push({ value: v, trap: m.trap });
   }
-  for (const k of rng.shuffle([1, -1, 2, -2, 3])) {
-    if (ds.length >= 4) break;
+  for (const k of rng.shuffle([1, -1, 2, -2, 3, -3])) {
     const v = cleanNum(round(target * Math.pow(10, k)));
     if (!v || seen.some((s) => s.equals(v))) continue;
     seen.push(v);
-    ds.push({ value: v, trap: 'a power of ten out' });
+    cands.push({ value: v, trap: slipTrap(k) });
   }
+  const ds = balance(rng, ex, cands, 4);
   if (ds.length < 4) return null;
   return {
     stem: e.stem,
@@ -143,7 +202,17 @@ function estimate(rng: RNG, e: Est): Generated | null {
 
 const modeOf = (rng: RNG): 'choice' | 'exact' => (rng.bool(0.5) ? 'choice' : 'exact');
 const ASK_CHOICE = 'Which of the following is the best estimate';
-const TO_1SF = 'Give your answer to 1 significant figure.';
+
+/**
+ * The ask. Every assumption is already in the stem, so the 1 s.f. form is a determinate
+ * calculation and says "Find", not "Estimate": a candidate must not be invited to round and then
+ * punished for it.
+ */
+function ask(mode: 'choice' | 'exact', what: string, inUnits = ''): string {
+  return mode === 'choice'
+    ? `${ASK_CHOICE} of ${what}?`
+    : `Find ${what}${inUnits}, giving your answer to 1 significant figure.`;
+}
 
 // ----------------------------------------------------------------------------- level 1
 
@@ -155,22 +224,54 @@ function airMassQ(rng: RNG): Generated | null {
   const h = rng.pick([2.5, 3]);
   const value = round(rho * l * w * h);
   const mode = modeOf(rng);
+  const big = Math.max(l, w, h);
   const lead = `The density of air is $1.2\\ \\text{kg m}^{-3}$. A room measures $${n(l)}\\ \\text{m}$ by $${n(w)}\\ \\text{m}$ by $${n(h)}\\ \\text{m}$.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the mass of the air in the room?` : `Estimate the mass of the air in the room. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the mass of the air in the room')}`,
     value,
     unit: '\\text{kg}',
     mode,
     mistakes: [
       { value: round(rho * l * w), trap: 'used the floor area and forgot the height' },
+      { value: round(1000 * l * w * h), trap: 'used the density of water, $1000\\ \\text{kg m}^{-3}$, instead of that of air' },
       { value: round(l * w * h), trap: 'forgot to multiply by the density' },
+      { value: round(rho * big * big * big), trap: 'treated the room as a cube on its longest side' },
       { value: round(rho * (l + w + h)), trap: 'added the dimensions instead of multiplying them' },
       { value: round((l * w * h) / rho), trap: 'divided by the density instead of multiplying' },
     ],
     solution: `Volume $= ${n(l)} \\times ${n(w)} \\times ${n(h)} = ${n(l * w * h)}\\ \\text{m}^{3}$, so the mass is $1.2 \\times ${n(l * w * h)} \\approx ${napp(value)}\\ \\text{kg}$, i.e. about $${n(sf1(value))}\\ \\text{kg}$.`,
-    trap: 'A room is three-dimensional: leaving out one dimension changes the answer by a factor of the order of 10.',
+    trap: 'A room is three-dimensional: leaving out one dimension changes the answer by a factor of the order of 10, and air is a thousand times less dense than water.',
     tags: ['density', 'volume'],
     params: { variant: 'air-mass', rho, l, w, h },
+  });
+}
+
+/** The mass of the water in a bath. */
+function bathQ(rng: RNG): Generated | null {
+  const rho = 1000;
+  const l = rng.pick([1.4, 1.5, 1.6, 1.8]);
+  const w = rng.pick([0.5, 0.6, 0.7]);
+  const d = rng.pick([0.2, 0.3, 0.4]);
+  const value = round(rho * l * w * d);
+  const mode = modeOf(rng);
+  const lead = `Water has density $1000\\ \\text{kg m}^{-3}$. A bath holds water to a depth of $${n(d)}\\ \\text{m}$ over a rectangle measuring $${n(l)}\\ \\text{m}$ by $${n(w)}\\ \\text{m}$.`;
+  return estimate(rng, {
+    stem: `${lead}\n\n${ask(mode, 'the mass of the water in the bath')}`,
+    value,
+    unit: '\\text{kg}',
+    mode,
+    mistakes: [
+      { value: round(rho * l * w), trap: 'used the surface area and forgot the depth' },
+      { value: round(l * w * d), trap: 'gave the volume in $\\text{m}^{3}$, not the mass' },
+      { value: round(rho * l * w * d * 1000), trap: 'worked in litres and then multiplied by the density again' },
+      { value: round(1.2 * l * w * d), trap: 'used the density of air instead of that of water' },
+      { value: round(rho * (l + w + d)), trap: 'added the dimensions instead of multiplying them' },
+      { value: round((l * w * d) / rho), trap: 'divided by the density instead of multiplying' },
+    ],
+    solution: `Volume $= ${n(l)} \\times ${n(w)} \\times ${n(d)} = ${napp(l * w * d)}\\ \\text{m}^{3}$, so the mass is $1000 \\times ${napp(l * w * d)} \\approx ${napp(value)}\\ \\text{kg}$, i.e. about $${n(sf1(value))}\\ \\text{kg}$.`,
+    trap: 'Mass = density × volume, and a cubic metre of water is 1000 kg: the depth is part of the volume.',
+    tags: ['density', 'volume'],
+    params: { variant: 'bath', rho, l, w, d },
   });
 }
 
@@ -178,20 +279,21 @@ function airMassQ(rng: RNG): Generated | null {
 
 /** Heartbeats in a year. */
 function heartbeatsQ(rng: RNG): Generated | null {
-  const rate = rng.pick([60, 70, 75, 80]);
+  const rate = rng.pick([50, 55, 60, 65, 70, 72, 75, 80, 85, 90, 100]);
   const value = round(rate * 60 * 24 * 365);
   const mode = modeOf(rng);
   const lead = `A person’s heart beats ${n(rate)} times per minute. Take one year to be 365 days.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the number of beats in one year?` : `Estimate the number of beats in one year. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the number of beats in one year')}`,
     value,
     unit: '',
     mode,
     mistakes: [
       { value: round(rate * 60 * 24), trap: 'stopped at one day' },
-      { value: round(rate * 24 * 365), trap: 'forgot the 60 minutes in an hour' },
-      { value: round(rate * 60 * 365), trap: 'forgot the 24 hours in a day' },
       { value: round(rate * 60 * 24 * 365 * 60), trap: 'multiplied by 60 once too often (beats are per minute, not per second)' },
+      { value: round(rate * 24 * 365), trap: 'forgot the 60 minutes in an hour' },
+      { value: round(rate * 3600 * 365), trap: 'used 3600 minutes in a day instead of 1440' },
+      { value: round(rate * 60 * 365), trap: 'forgot the 24 hours in a day' },
     ],
     solution: `Minutes in a year $= 60 \\times 24 \\times 365 \\approx 5 \\times 10^{5}$, so the beats number $${n(rate)} \\times 5.26 \\times 10^{5} \\approx ${E(sf1(value)).toLatex({ format: 'sf' })}$.`,
     trap: 'Chain the conversions: minutes → hours → days → years, and count 60 only once.',
@@ -202,18 +304,19 @@ function heartbeatsQ(rng: RNG): Generated | null {
 
 /** The volume of air breathed in a day. */
 function breathingQ(rng: RNG): Generated | null {
-  const rate = rng.pick([12, 15, 20]);
-  const litres = rng.pick([0.5, 0.4]);
+  const rate = rng.pick([10, 12, 14, 15, 16, 18, 20]);
+  const litres = rng.pick([0.4, 0.5, 0.6, 0.75]);
   const value = round((rate * litres * 60 * 24) / 1000); // m³
   const mode = modeOf(rng);
   const lead = `A person takes ${n(rate)} breaths per minute and each breath has a volume of $${n(litres)}$ litres. Take $1000$ litres $= 1\\ \\text{m}^{3}$.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the volume of air breathed in one day?` : `Estimate the volume of air breathed in one day, in $\\text{m}^{3}$. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the volume of air breathed in one day', ', in $\\text{m}^{3}$')}`,
     value,
     unit: '\\text{m}^{3}',
     mode,
     mistakes: [
       { value: round(rate * litres * 60 * 24), trap: 'left the answer in litres' },
+      { value: round((rate * litres * 60 * 60 * 24) / 1000), trap: 'took the rate as breaths per second' },
       { value: round((rate * litres * 60) / 1000), trap: 'stopped at one hour' },
       { value: round((rate * litres * 24) / 1000), trap: 'forgot the 60 minutes in an hour' },
       { value: round((rate * litres * 60 * 24) / 1e6), trap: 'used $10^{6}$ litres in a cubic metre' },
@@ -229,19 +332,20 @@ function breathingQ(rng: RNG): Generated | null {
 
 /** The energy needed to heat water in a kettle. */
 function kettleEnergyQ(rng: RNG): Generated | null {
-  const m = rng.pick([0.5, 1, 1.5, 2]);
-  const dT = rng.pick([60, 70, 80]);
+  const m = rng.pick([0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2]);
+  const dT = rng.pick([50, 60, 70, 80]);
   const c = 4200;
   const value = round(m * c * dT);
   const mode = modeOf(rng);
   const lead = `Water has specific heat capacity $4200\\ \\text{J kg}^{-1}\\text{K}^{-1}$. A kettle heats $${n(m)}\\ \\text{kg}$ of water through $${n(dT)}\\ \\text{K}$.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the energy transferred to the water?` : `Estimate the energy transferred to the water. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the energy transferred to the water')}`,
     value,
     unit: '\\text{J}',
     mode,
     mistakes: [
       { value: round(c * dT), trap: 'forgot the mass of water' },
+      { value: round(m * c * dT * 1000), trap: 'read the specific heat capacity as $4200\\ \\text{kJ kg}^{-1}\\text{K}^{-1}$' },
       { value: round(m * c), trap: 'forgot the temperature rise' },
       { value: round((m * c * dT) / 1000), trap: 'gave the answer in kJ' },
       { value: round(m * dT), trap: 'forgot the specific heat capacity' },
@@ -255,15 +359,15 @@ function kettleEnergyQ(rng: RNG): Generated | null {
 
 /** The time a kettle of a given power takes. */
 function kettleTimeQ(rng: RNG): Generated | null {
-  const m = rng.pick([0.5, 1, 1.5]);
-  const dT = rng.pick([60, 70, 80]);
+  const m = rng.pick([0.4, 0.5, 0.6, 0.8, 1, 1.5]);
+  const dT = rng.pick([50, 60, 70, 80]);
   const kw = rng.pick([2, 2.5, 3]);
   const c = 4200;
   const value = round((m * c * dT) / (kw * 1000));
   const mode = modeOf(rng);
   const lead = `A kettle of power $${n(kw)}\\ \\text{kW}$ heats $${n(m)}\\ \\text{kg}$ of water through $${n(dT)}\\ \\text{K}$. Water has specific heat capacity $4200\\ \\text{J kg}^{-1}\\text{K}^{-1}$ and no energy is lost.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the time this takes?` : `Estimate the time this takes, in seconds. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the time this takes', ', in seconds')}`,
     value,
     unit: '\\text{s}',
     mode,
@@ -272,6 +376,7 @@ function kettleTimeQ(rng: RNG): Generated | null {
       { value: round((c * dT) / (kw * 1000)), trap: 'forgot the mass of water' },
       { value: round((m * c * dT * kw) / 1000), trap: 'multiplied by the power instead of dividing' },
       { value: round((m * c * dT) / (kw * 1000) / 60), trap: 'gave the time in minutes' },
+      { value: round((m * dT) / (kw * 1000)), trap: 'forgot the specific heat capacity' },
     ],
     solution: `$E = mc\\Delta\\theta = ${n(m * c * dT)}\\ \\text{J}$ and $t = E/P = ${n(m * c * dT)} / ${n(kw * 1000)} \\approx ${napp(value)}\\ \\text{s}$, i.e. about $${n(sf1(value))}\\ \\text{s}$.`,
     trap: 'Power must be in watts before dividing: a kW is 1000 W.',
@@ -284,47 +389,80 @@ function kettleTimeQ(rng: RNG): Generated | null {
 
 /** The force of the atmosphere on a wall. */
 function atmosphereQ(rng: RNG): Generated | null {
-  const l = rng.pick([2, 3, 4, 5]);
-  const h = rng.pick([2, 2.5, 3]);
+  const l = rng.pick([2, 2.5, 3, 3.5, 4, 5, 6, 8]);
+  const h = rng.pick([2, 2.5, 3, 3.5]);
   const p = 1e5;
   const value = round(p * l * h);
   const mode = modeOf(rng);
   const lead = `Atmospheric pressure is $1.0 \\times 10^{5}\\ \\text{Pa}$. A wall measures $${n(l)}\\ \\text{m}$ by $${n(h)}\\ \\text{m}$.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the force of the atmosphere on one side of the wall?` : `Estimate the force of the atmosphere on one side of the wall. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the force of the atmosphere on one side of the wall')}`,
     value,
     unit: '\\text{N}',
     mode,
     mistakes: [
       { value: round(p / (l * h)), trap: 'divided by the area instead of multiplying' },
+      { value: round(1e6 * l * h), trap: 'took atmospheric pressure as $10^{6}\\ \\text{Pa}$' },
       { value: round(p * (l + h)), trap: 'added the sides instead of multiplying them' },
       { value: round(p * l * h * 2), trap: 'counted both sides of the wall' },
       { value: p, trap: 'gave the pressure, not the force' },
     ],
-    solution: `Area $= ${n(l)} \\times ${n(h)} = ${n(l * h)}\\ \\text{m}^{2}$, so $F = pA = 10^{5} \\times ${n(l * h)} = ${E(value).toLatex({ format: 'sf' })}\\ \\text{N}$.`,
+    solution: `Area $= ${n(l)} \\times ${n(h)} = ${n(l * h)}\\ \\text{m}^{2}$, so $F = pA = 10^{5} \\times ${n(l * h)} = ${E(value).toLatex({ format: 'sf' })}\\ \\text{N}$, i.e. about $${E(sf1(value)).toLatex({ format: 'sf' })}\\ \\text{N}$.`,
     trap: 'Force = pressure × area; the wall does not fall over because the same air pushes on the other side.',
     tags: ['pressure', 'force'],
     params: { variant: 'atmosphere', p, l, h },
   });
 }
 
-/** The time light takes to reach the Earth from the Sun (or the Moon). */
+/** The power of the sunlight falling on a roof. */
+function solarQ(rng: RNG): Generated | null {
+  const l = rng.pick([4, 5, 6, 8, 10]);
+  const w = rng.pick([3, 4, 5, 6]);
+  const I = 1000;
+  const value = round(I * l * w);
+  const mode = modeOf(rng);
+  const lead = `Sunlight delivers about $1000\\ \\text{W m}^{-2}$ to a surface facing the Sun. A flat roof measures $${n(l)}\\ \\text{m}$ by $${n(w)}\\ \\text{m}$.`;
+  return estimate(rng, {
+    stem: `${lead}\n\n${ask(mode, 'the power of the sunlight falling on the roof')}`,
+    value,
+    unit: '\\text{W}',
+    mode,
+    mistakes: [
+      { value: round(I / (l * w)), trap: 'divided by the area instead of multiplying' },
+      { value: round(I * l * w * 3600), trap: 'multiplied by 3600: that is the energy in an hour, in joules' },
+      { value: round(I * (l + w)), trap: 'added the sides instead of multiplying them' },
+      { value: round((I * l * w) / 1000), trap: 'gave the answer in kW' },
+      { value: I, trap: 'gave the intensity, not the power' },
+    ],
+    solution: `Area $= ${n(l)} \\times ${n(w)} = ${n(l * w)}\\ \\text{m}^{2}$, so $P = IA = 1000 \\times ${n(l * w)} = ${E(value).toLatex({ format: 'sf' })}\\ \\text{W}$, i.e. about $${E(sf1(value)).toLatex({ format: 'sf' })}\\ \\text{W}$.`,
+    trap: 'Power = intensity × area: an intensity is already a power per square metre, so it is multiplied, not divided.',
+    tags: ['power', 'intensity'],
+    params: { variant: 'solar', I, l, w },
+  });
+}
+
+/** The time light takes to reach the Earth from the Sun (or another body). */
 function lightTimeQ(rng: RNG): Generated | null {
-  const [name, d] = rng.pick([['the Sun', 1.5e11], ['Mars at its closest', 7.5e10], ['the Moon', 3.9e8]] as [string, number][]);
+  const [name, d] = rng.pick([
+    ['the Sun', 1.5e11], ['Mars at its closest', 7.5e10], ['the Moon', 3.9e8],
+    ['Venus at its closest', 4.2e10], ['Jupiter at its closest', 6.3e11], ['Saturn at its closest', 1.2e12],
+    ['Mercury at its closest', 9.2e10], ['Neptune at its closest', 4.3e12],
+  ] as [string, number][]);
   const c = 3e8;
   const value = round(d / c);
   const mode = modeOf(rng);
   const lead = `${name.charAt(0).toUpperCase()}${name.slice(1)} is about $${E(d).toLatex({ format: 'sf' })}\\ \\text{m}$ from the Earth, and light travels at $3 \\times 10^{8}\\ \\text{m s}^{-1}$.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the time light takes to travel from ${name} to the Earth?` : `Estimate the time light takes to travel from ${name} to the Earth, in seconds. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, `the time light takes to travel from ${name} to the Earth`, ', in seconds')}`,
     value,
     unit: '\\text{s}',
     mode,
     mistakes: [
       { value: round(c / d), trap: 'divided the wrong way round' },
+      { value: round((d * 1000) / c), trap: 'treated the distance as kilometres' },
       { value: round(d / c / 60), trap: 'gave the time in minutes' },
       { value: round(d / (c * 1000)), trap: 'a factor of $10^{3}$ slipped in' },
-      { value: round((d * 1000) / c), trap: 'treated the distance as kilometres' },
+      { value: round((d / c) * 60), trap: 'multiplied by 60 instead of leaving the answer in seconds' },
     ],
     solution: `$t = \\dfrac{d}{c} = \\dfrac{${E(d).toLatex({ format: 'sf' })}}{3 \\times 10^{8}} \\approx ${E(sf1(value)).toLatex({ format: fmtFor(sf1(value)) })}\\ \\text{s}$.`,
     trap: 'Divide the distance by the speed; dividing the wrong way round is out by many orders of magnitude.',
@@ -338,13 +476,13 @@ function lightTimeQ(rng: RNG): Generated | null {
 /** The useful power of a person climbing stairs. */
 function stairsQ(rng: RNG): Generated | null {
   const m = rng.pick([50, 60, 70, 80]);
-  const h = rng.pick([3, 4, 5]);
-  const t = rng.pick([4, 5, 6, 8, 10]);
+  const h = rng.pick([3, 4, 5, 6]);
+  const t = rng.pick([4, 5, 6, 8, 10, 12]);
   const value = round((m * 10 * h) / t);
   const mode = modeOf(rng);
   const lead = `A person of mass $${n(m)}\\ \\text{kg}$ climbs a flight of stairs of vertical height $${n(h)}\\ \\text{m}$ in $${n(t)}\\ \\text{s}$. Take $g = 10\\ \\text{m s}^{-2}$.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the useful power developed?` : `Estimate the useful power developed. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the useful power developed')}`,
     value,
     unit: '\\text{W}',
     mode,
@@ -353,6 +491,7 @@ function stairsQ(rng: RNG): Generated | null {
       { value: round((m * h) / t), trap: 'forgot $g$ in $mgh$' },
       { value: round(m * 10 * h * t), trap: 'multiplied by the time instead of dividing' },
       { value: round((m * 10 * h) / t / 1000), trap: 'gave the answer in kW' },
+      { value: round((m * 10 * h * 10) / t), trap: 'multiplied by $g$ twice' },
     ],
     solution: `Work done $= mgh = ${n(m)} \\times 10 \\times ${n(h)} = ${n(m * 10 * h)}\\ \\text{J}$, so $P = W/t = ${n(m * 10 * h)}/${n(t)} \\approx ${napp(value)}\\ \\text{W}$, i.e. about $${n(sf1(value))}\\ \\text{W}$.`,
     trap: 'Power is energy per second: the mgh must be divided by the time, and g must not be dropped.',
@@ -361,43 +500,74 @@ function stairsQ(rng: RNG): Generated | null {
   });
 }
 
-/** The mass of water in a swimming pool. */
-function poolQ(rng: RNG): Generated | null {
+/**
+ * A swimming pool, at level 5: never just ρV (that is the level-1 room of air with rounder numbers),
+ * but volume → mass → energy, or volume → litres → time at a stated flow rate.
+ */
+function poolQ(rng: RNG, task: 'heat' | 'fill'): Generated | null {
   const l = rng.pick([20, 25, 50]);
   const w = rng.pick([8, 10, 12]);
   const d = rng.pick([1.5, 2, 2.5]);
   const rho = 1000;
-  const value = round(rho * l * w * d);
+  const V = round(l * w * d);
+  const mass = round(rho * V);
   const mode = modeOf(rng);
-  const lead = `A swimming pool is $${n(l)}\\ \\text{m}$ long, $${n(w)}\\ \\text{m}$ wide and $${n(d)}\\ \\text{m}$ deep. Water has density $1000\\ \\text{kg m}^{-3}$.`;
+  const size = `A swimming pool is $${n(l)}\\ \\text{m}$ long, $${n(w)}\\ \\text{m}$ wide and $${n(d)}\\ \\text{m}$ deep.`;
+
+  if (task === 'heat') {
+    const c = 4200;
+    const dT = rng.pick([2, 3, 5]);
+    const value = round(mass * c * dT);
+    return estimate(rng, {
+      stem: `${size} Water has density $1000\\ \\text{kg m}^{-3}$ and specific heat capacity $4200\\ \\text{J kg}^{-1}\\text{K}^{-1}$.\n\n${ask(mode, `the energy needed to warm the water in the pool by $${n(dT)}\\ \\text{K}$`)}`,
+      value,
+      unit: '\\text{J}',
+      mode,
+      mistakes: [
+        { value: round(V * c * dT), trap: 'used the volume in m³ as the mass: the density was never used' },
+        { value: round(mass * c), trap: 'forgot the temperature rise' },
+        { value: round(mass * dT), trap: 'forgot the specific heat capacity' },
+        { value: round((mass * c * dT) / 1000), trap: 'gave the answer in kJ' },
+        { value: round(rho * l * w * c * dT), trap: 'forgot the depth of the pool' },
+      ],
+      solution: `Volume $= ${n(l)} \\times ${n(w)} \\times ${n(d)} = ${napp(V)}\\ \\text{m}^{3}$, so the mass is $1000 \\times ${napp(V)} = ${E(mass).toLatex({ format: 'sf' })}\\ \\text{kg}$ and $E = mc\\Delta\\theta \\approx ${E(sf1(value)).toLatex({ format: 'sf' })}\\ \\text{J}$.`,
+      trap: 'Three steps: volume, then mass (× density), then energy (× c × Δθ) — dropping any one of them costs a factor of 10³ or more.',
+      tags: ['density', 'energy', 'heating'],
+      params: { variant: 'pool-heat', rho, l, w, d, c, dT },
+    });
+  }
+
+  const rate = rng.pick([10, 20, 25, 50]); // litres per second
+  const value = round((V * 1000) / rate);
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the mass of water in the pool?` : `Estimate the mass of water in the pool. ${TO_1SF}`}`,
+    stem: `${size} It is filled by a hose delivering $${n(rate)}$ litres of water every second. Take $1000$ litres $= 1\\ \\text{m}^{3}$.\n\n${ask(mode, 'the time taken to fill the pool')}`,
     value,
-    unit: '\\text{kg}',
+    unit: '\\text{s}',
     mode,
     mistakes: [
-      { value: round(l * w * d), trap: 'gave the volume in m³, not the mass' },
-      { value: round(rho * l * w), trap: 'forgot the depth' },
-      { value: round(rho * l * w * d * 1000), trap: 'treated the density as $10^{6}$' },
-      { value: round((rho * l * w * d) / 1000), trap: 'gave the answer in tonnes' },
+      { value: round(V / rate), trap: 'left the volume in m³ instead of turning it into litres' },
+      { value: round((V * 1000) / (rate * 60)), trap: 'gave the time in minutes' },
+      { value: round(V * 1000 * rate), trap: 'multiplied by the flow rate instead of dividing' },
+      { value: round((l * w * 1000) / rate), trap: 'forgot the depth of the pool' },
+      { value: round((V * 1e6) / rate), trap: 'used $10^{6}$ litres in a cubic metre' },
     ],
-    solution: `Volume $= ${n(l)} \\times ${n(w)} \\times ${n(d)} = ${n(l * w * d)}\\ \\text{m}^{3}$, so the mass is $1000 \\times ${n(l * w * d)} = ${E(value).toLatex({ format: 'sf' })}\\ \\text{kg}$.`,
-    trap: 'Mass = density × volume, and the volume needs all three dimensions.',
-    tags: ['density', 'volume'],
-    params: { variant: 'pool', rho, l, w, d },
+    solution: `Volume $= ${n(l)} \\times ${n(w)} \\times ${n(d)} = ${napp(V)}\\ \\text{m}^{3} = ${E(V * 1000).toLatex({ format: 'sf' })}$ litres, so $t = ${E(V * 1000).toLatex({ format: 'sf' })} / ${n(rate)} \\approx ${E(sf1(value)).toLatex({ format: 'sf' })}\\ \\text{s}$.`,
+    trap: '1 m³ is 1000 litres: the volume has to be in litres before it is divided by a flow rate in litres per second.',
+    tags: ['volume', 'time'],
+    params: { variant: 'pool-fill', l, w, d, rate },
   });
 }
 
 /** The energy a car gets from its fuel, per kilometre. */
 function fuelQ(rng: RNG): Generated | null {
-  const litres = rng.pick([5, 6, 8, 10]);
+  const litres = rng.pick([4, 5, 6, 8, 10, 12]);
   const per = 100; // km
   const perLitre = 3e7;
   const value = round((litres * perLitre) / per);
   const mode = modeOf(rng);
   const lead = `A car uses $${n(litres)}$ litres of fuel every $100\\ \\text{km}$, and one litre of fuel releases about $3 \\times 10^{7}\\ \\text{J}$.`;
   return estimate(rng, {
-    stem: `${lead}\n\n${mode === 'choice' ? `${ASK_CHOICE} of the energy released per kilometre travelled?` : `Estimate the energy released per kilometre travelled. ${TO_1SF}`}`,
+    stem: `${lead}\n\n${ask(mode, 'the energy released per kilometre travelled')}`,
     value,
     unit: '\\text{J}',
     mode,
@@ -406,6 +576,7 @@ function fuelQ(rng: RNG): Generated | null {
       { value: round(perLitre / per), trap: 'forgot how many litres are used' },
       { value: round((litres * perLitre) / (per * 1000)), trap: 'worked per metre, not per kilometre' },
       { value: round((per * perLitre) / litres), trap: 'divided by the litres instead of the distance' },
+      { value: round(litres * perLitre * per), trap: 'multiplied by the 100 km instead of dividing' },
     ],
     solution: `Energy for $100\\ \\text{km}$ $= ${n(litres)} \\times 3 \\times 10^{7} = ${E(litres * perLitre).toLatex({ format: 'sf' })}\\ \\text{J}$, so per km it is $${E(sf1(value)).toLatex({ format: 'sf' })}\\ \\text{J}$.`,
     trap: 'Divide by the 100 km, not by the number of litres: the answer is an energy per kilometre.',
@@ -417,26 +588,77 @@ function fuelQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- assembly
 
 const VARIANTS: Record<Level, ((rng: RNG) => Generated | null)[]> = {
-  1: [airMassQ],
+  1: [airMassQ, bathQ],
   2: [heartbeatsQ, breathingQ],
   3: [kettleEnergyQ, kettleTimeQ],
-  4: [atmosphereQ, lightTimeQ],
-  5: [stairsQ, poolQ, fuelQ],
+  4: [atmosphereQ, solarQ, lightTimeQ],
+  5: [stairsQ, (r) => poolQ(r, 'heat'), (r) => poolQ(r, 'fill'), fuelQ],
 };
 
-/** The true value, recomputed from the stated assumptions by a different route. */
-function trueValue(p: Record<string, number> & { variant: string }): number | null {
+const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(b), 1e-300);
+
+/**
+ * The true value the stated assumptions force, with a second relation it has to satisfy.
+ *
+ * `value` builds the quantity by a different physical route from generate's (the mass of the air
+ * standing over one square metre of floor times the floor area, beats per second times the seconds
+ * in a year, the litres a hose delivers), and `check` then substitutes that value back into a
+ * relation generate never evaluated (the density it implies, the beats in a day, the energy the
+ * kettle delivers in that time). Re-multiplying generate's own factors in a different order would
+ * be neither: both routes have to be able to disagree.
+ */
+function trueValue(p: Record<string, number> & { variant: string }): { value: number; check: (v: number) => boolean } | null {
   switch (p.variant) {
-    case 'air-mass': return ((p.h * p.w) * p.l) * p.rho;
-    case 'heartbeats': return p.rate * (365 * 1440);
-    case 'breathing': return (p.rate * 1440 * p.litres) / 1000;
-    case 'kettle-energy': return p.dT * p.c * p.m;
-    case 'kettle-time': return (p.dT * p.c * p.m) / (p.kw * 1000);
-    case 'atmosphere': return (p.h * p.l) * p.p;
-    case 'light-time': return p.d / p.c;
-    case 'stairs': return (p.h * 10 * p.m) / p.t;
-    case 'pool': return ((p.d * p.w) * p.l) * p.rho;
-    case 'fuel': return (p.perLitre / p.per) * p.litres;
+    case 'air-mass': case 'bath': case 'pool': {
+      // the air/water standing over one square metre, times the floor area of the room or pool
+      const depth = p.variant === 'air-mass' ? p.h : p.d;
+      const perSquareMetre = p.rho * depth;
+      return { value: perSquareMetre * (p.l * p.w), check: (v) => near(v / (p.l * p.w * depth), p.rho) };
+    }
+    case 'heartbeats': {
+      const perSecond = p.rate / 60;
+      return { value: perSecond * 365 * 24 * 3600, check: (v) => near(v / 365, p.rate * 1440) };
+    }
+    case 'breathing': {
+      const cubicMetresPerMinute = (p.rate * p.litres) / 1000;
+      return { value: cubicMetresPerMinute * 24 * 60, check: (v) => near((v * 1000) / p.litres, p.rate * 1440) };
+    }
+    case 'kettle-energy': {
+      // the energy one kilogram needs, times the mass
+      const perKg = p.c * p.dT;
+      return { value: perKg * p.m, check: (v) => near(v / (p.m * p.c), p.dT) };
+    }
+    case 'kettle-time': {
+      // the time for which the element must deliver its power to supply mcΔθ
+      const energy = p.m * p.c * p.dT;
+      return { value: energy / (p.kw * 1000), check: (v) => near(p.kw * 1000 * v, energy) };
+    }
+    case 'atmosphere':
+      return { value: p.p * (p.l * p.h), check: (v) => near(v / (p.l * p.h), p.p) };
+    case 'solar':
+      return { value: p.I * (p.l * p.w), check: (v) => near(v / (p.l * p.w), p.I) };
+    case 'light-time':
+      // the time in which light covers the distance: check it by travelling for that long
+      return { value: p.d / p.c, check: (v) => near(p.c * v, p.d) };
+    case 'stairs': {
+      // the power that does mgh in t seconds, checked by the work it does in that time
+      const work = p.m * 10 * p.h;
+      return { value: work / p.t, check: (v) => near(v * p.t, work) };
+    }
+    case 'pool-heat': {
+      const massOfWater = p.rho * (p.l * p.w * p.d);
+      const perKelvin = massOfWater * p.c;
+      return { value: perKelvin * p.dT, check: (v) => near(v / (p.c * p.dT), massOfWater) };
+    }
+    case 'pool-fill': {
+      const litres = (p.l * p.w * p.d) * 1000;
+      return { value: litres / p.rate, check: (v) => near(v * p.rate, litres) };
+    }
+    case 'fuel': {
+      // the energy one kilometre needs: a litre's energy shared over the distance it drives
+      const perKm = p.perLitre / p.per;
+      return { value: perKm * p.litres, check: (v) => near(v * p.per, p.litres * p.perLitre) };
+    }
   }
   return null;
 }
@@ -447,25 +669,36 @@ export default defineTemplate({
   topic: 'units',
   title: 'Order-of-magnitude estimates',
   levels: {
-    1: 'the mass of the air in a room (ρ = 1.2 kg m⁻³)',
+    1: 'the mass of the air in a room (ρ = 1.2 kg m⁻³) or of the water in a bath',
     2: 'heartbeats in a year; the volume of air breathed in a day',
     3: 'the energy to heat a kettle of water; how long the kettle takes',
-    4: 'the force of the atmosphere on a wall; the time light takes to reach the Earth',
-    5: 'the power of someone climbing stairs; the water in a swimming pool; a car’s fuel energy per km',
+    4: 'the force of the atmosphere on a wall; the sunlight on a roof; the time light takes to reach the Earth',
+    5: 'the power of someone climbing stairs; heating or filling a swimming pool (volume → mass → energy); a car’s fuel energy per km',
   },
   generate(rng, level: Level) {
     return retry(rng, () => pickVariant(rng, VARIANTS[level]));
   },
   verify(q) {
     const p = q.params as Record<string, number> & { variant: string; mode: string; opts?: { display: string; value: number }[] };
-    const truth = trueValue(p);
-    if (truth === null || !Number.isFinite(truth) || truth <= 0) return false;
+    const t = trueValue(p);
+    if (t === null || !Number.isFinite(t.value) || t.value <= 0) return false;
+    // the two routes must agree before the answer is compared with either of them
+    if (!t.check(t.value)) return false;
+    const truth = t.value;
     const target = sf1(truth);
     if (!(Math.abs(truth / target - 1) < 0.5)) return false; // 1 s.f. must really be close
 
     if (p.mode === 'exact') {
       if (q.answer.kind !== 'exact') return false;
-      return Math.abs(q.answer.value.toNumber() - target) <= 1e-9 * target;
+      if (Math.abs(q.answer.value.toNumber() - target) > 1e-9 * target) return false;
+      // no wrong option may sit close enough that rounding the assumptions would reach it
+      for (const o of q.options) {
+        if (o.correct) continue;
+        if (!o.value) return false;
+        const r = o.value.toNumber() / target;
+        if (r > 1 / 1.5 && r < 1.5) return false;
+      }
+      return true;
     }
     if (q.answer.kind !== 'choice' || q.typedAllowed || !p.opts) return false;
     if (p.opts.length !== q.options.length) return false;

@@ -14,9 +14,21 @@ import type { RNG } from '../../core/rng';
  *
  * Truth values are computed exactly in generate(); verify() recomputes every statement numerically
  * (central differences and grid scans) from the stored coefficients and statement specs.
+ *
+ * Two rules keep the eight I/II/III combinations honest.
+ *  - Each statement is drawn from its own *group* of claims, and a question never takes two
+ *    statements from the same group: "f′(x) > 0 for all x" and "f is increasing for all x" say the
+ *    same thing about these cubics, and two "exactly n stationary points" claims exclude each other,
+ *    so a candidate could rule out half the options without any calculus.
+ *  - Each statement is aimed at true or false with probability ½ (`choose` looks through the group
+ *    for a claim with the wanted truth value), so "none of them" is no longer the safe guess.
+ * Gradient-sign claims are never probed at a stationary point, where "increasing at x" is not a
+ * well-defined A-level claim.
  */
 
 type Spec = { kind: string; x?: number; v?: number; n?: number };
+/** A candidate statement plus the group it belongs to (at most one statement per group). */
+type Cand = Spec & { group: string };
 interface St { text: string; truth: boolean; spec: Spec }
 
 // ----------------------------------------------------------------------------- exact polynomial helpers (coefficients highest power first)
@@ -64,7 +76,9 @@ function truthOf(coefs: number[], s: Spec): boolean {
     case 'turning-at': return fp(s.x!) === 0 && fpp(s.x!) !== 0;
     case 'count-stationary': return stationaryCount(coefs) === s.n!;
     case 'fprime-positive-all': return coefs.length === 4 && coefs[0] > 0 && stationaryCount(coefs) === 0;
-    case 'increasing-all': return coefs.length === 4 && coefs[0] > 0 && stationaryCount(coefs) === 0;
+    // f is increasing where f′ ≥ 0 everywhere: a cubic with a repeated root of f′ (such as x³) is
+    // increasing although f′(x) > 0 fails at that one point.
+    case 'increasing-all': return coefs.length === 4 && coefs[0] > 0 && stationaryCount(coefs) <= 1;
     case 'decreasing-for-x-less': {
       // f′ < 0 on (−∞, b): quadratic with a > 0 and b ≤ vertex, or a cubic that is decreasing there (never for our cubics)
       if (coefs.length !== 3) return false;
@@ -108,6 +122,51 @@ function text(s: Spec): string {
 function make(coefs: number[], spec: Spec): St {
   return { text: text(spec), truth: truthOf(coefs, spec), spec };
 }
+
+// ----------------------------------------------------------------------------- choosing statements
+
+/** "Increasing at x" is not a claim the exam makes where f′(x) = 0, so never probe there. */
+const SIGN_KINDS = new Set(['increasing-at', 'decreasing-at', 'grad-positive-at', 'grad-negative-at']);
+
+function usable(coefs: number[], c: Cand): boolean {
+  if (c.x !== undefined && !Number.isFinite(c.x)) return false;
+  if (SIGN_KINDS.has(c.kind) && c.x !== undefined && evalExact(dCoefs(coefs), E(c.x)).isZero()) return false;
+  return true;
+}
+
+const spec = (c: Cand): Spec => {
+  const s: Spec = { kind: c.kind };
+  if (c.x !== undefined) s.x = c.x;
+  if (c.v !== undefined) s.v = c.v;
+  if (c.n !== undefined) s.n = c.n;
+  return s;
+};
+
+/** Pick a claim from one group, preferring one whose truth value is the one asked for. */
+function choose(rng: RNG, coefs: number[], pool: Cand[], want: boolean): St | null {
+  const ok = pool.filter((c) => usable(coefs, c));
+  if (!ok.length) return null;
+  const match = ok.filter((c) => truthOf(coefs, spec(c)) === want);
+  return make(coefs, spec(rng.pick(match.length ? match : ok)));
+}
+
+/** Three statements from three different groups, each independently true or false with probability ½. */
+function build(rng: RNG, coefs: number[], groups: Cand[][]): { coefs: number[]; sts: St[] } | null {
+  const usableGroups = groups.filter((g) => g.some((c) => usable(coefs, c)));
+  if (usableGroups.length < 3) return null;
+  const picked = rng.shuffle(usableGroups).slice(0, 3);
+  const sts: St[] = [];
+  for (const pool of picked) {
+    const st = choose(rng, coefs, pool, rng.bool(0.5));
+    if (!st) return null;
+    sts.push(st);
+  }
+  if (new Set(sts.map((s) => s.text)).size < 3) return null;
+  return { coefs, sts };
+}
+
+const at = (kinds: string[], xs: number[], group: string): Cand[] =>
+  xs.flatMap((x) => kinds.map((kind) => ({ kind, x, group })));
 
 // ----------------------------------------------------------------------------- random curves
 
@@ -154,90 +213,109 @@ function pickDistinctX(rng: RNG, pool: number[], n: number): number[] | null {
   return uniq.length >= n ? rng.pickDistinct(uniq, n) : null;
 }
 
+/** Candidates for "f′(k) = v": the true value half the time, a plausible wrong one otherwise. */
+function gradValueCands(coefs: number[], x: number, group: string): Cand[] {
+  if (!Number.isInteger(x)) return [];
+  const d1 = dCoefs(coefs);
+  const trueV = evalNum(d1, x);
+  if (!Number.isInteger(trueV)) return [];
+  const wrong = [evalNum(coefs, x), coefs[0] * x + coefs[1], trueV + coefs[1], -trueV, trueV + 2]
+    .filter((v) => Number.isInteger(v) && v !== trueV);
+  return [
+    { kind: 'grad-value', x, v: trueV, group },
+    ...wrong.slice(0, 2).map((v) => ({ kind: 'grad-value', x, v, group })),
+  ];
+}
+
 function level1(rng: RNG): { coefs: number[]; sts: St[] } | null {
   const { coefs, xv } = quadratic(rng);
   const xs = pickDistinctX(rng, [xv - 3, xv - 2, xv - 1, xv, xv + 1, xv + 2, xv + 3].filter(Number.isInteger), 3);
   if (!xs) return null;
-  const sts = xs.map((x, i) => {
-    const kinds = ['increasing-at', 'decreasing-at', 'grad-positive-at', 'grad-negative-at', 'grad-value'];
-    const kind = i === 2 && rng.bool(0.5) ? 'grad-value' : rng.pick(kinds.slice(0, 4));
-    if (kind === 'grad-value') {
-      const trueV = evalNum(dCoefs(coefs), x);
-      const wrong = rng.pick([evalNum(coefs, x), coefs[0] * x + coefs[1], trueV + coefs[1], -trueV].filter((v) => v !== trueV));
-      return make(coefs, { kind, x, v: rng.bool(0.5) ? trueV : wrong });
-    }
-    return make(coefs, { kind, x });
-  });
-  return { coefs, sts };
+  const groups = xs.map((x, i) => [
+    ...at(['increasing-at', 'decreasing-at', 'grad-positive-at', 'grad-negative-at'], [x], `p${i}`),
+    ...(i === 2 ? gradValueCands(coefs, x, `p${i}`) : []),
+  ]);
+  return build(rng, coefs, groups);
 }
 
 function level2(rng: RNG): { coefs: number[]; sts: St[] } | null {
   if (rng.bool(0.55)) {
     const { coefs, xv } = quadratic(rng);
     const a = coefs[0];
-    const sts: St[] = [];
-    sts.push(make(coefs, { kind: 'stationary-at', x: rng.pick([xv, xv, -xv, xv + 1, xv - 1, 2 * xv]) }));
-    const b = rng.pick([xv, xv + 1, xv - 1, xv + 2, xv - 2]);
-    sts.push(make(coefs, { kind: a > 0 ? (rng.bool() ? 'decreasing-for-x-less' : 'increasing-for-x-greater') : rng.pick(['increasing-at', 'decreasing-at']), x: b }));
-    sts.push(make(coefs, { kind: rng.pick(['grad-negative-at', 'increasing-at', 'grad-value']), x: rng.pick([xv + 1, xv - 1, xv + 2, xv - 2]), v: 0 }));
-    return { coefs, sts };
+    const probe = rng.pick([xv + 1, xv - 1, xv + 2, xv - 2]);
+    const groups: Cand[][] = [
+      at(['stationary-at'], [xv, -xv, xv + 1, xv - 1, 2 * xv], 'stat'),
+      a > 0
+        ? at(['decreasing-for-x-less', 'increasing-for-x-greater'], [xv, xv + 1, xv - 1, xv + 2, xv - 2], 'half')
+        : at(['increasing-at', 'decreasing-at'], [xv + 1, xv - 1, xv + 2, xv - 2], 'half'),
+      [
+        ...at(['grad-negative-at', 'grad-positive-at', 'increasing-at'], [probe], 'point'),
+        ...gradValueCands(coefs, probe, 'point'),
+      ],
+    ];
+    return build(rng, coefs, groups);
   }
   const cu = cubicTwo(rng);
   if (!cu) return null;
   const { coefs, r1, r2 } = cu;
   const mid = (r1 + r2) / 2;
-  const sts: St[] = [
-    make(coefs, { kind: 'stationary-at', x: rng.pick([r1, r2, -r1, -r2, mid, r1 + 1]) }),
-    make(coefs, { kind: 'stationary-at', x: rng.pick([r2, r1 - 1, r2 + 1, mid, -r2]) }),
-    make(coefs, { kind: rng.pick(['increasing-at', 'decreasing-at', 'grad-negative-at']), x: rng.pick([mid, r1 - 1, r2 + 1, r1, r2]) }),
+  const groups: Cand[][] = [
+    at(['stationary-at'], [r1, -r1, mid, r1 + 1], 'stat1'),
+    at(['stationary-at'], [r2, -r2, r2 + 1, r1 - 1], 'stat2'),
+    at(['increasing-at', 'decreasing-at', 'grad-negative-at'], [mid, r1 - 1, r2 + 1], 'point'),
   ];
-  if (sts[0].text === sts[1].text) return null;
-  return { coefs, sts };
+  return build(rng, coefs, groups);
 }
 
 function level3(rng: RNG): { coefs: number[]; sts: St[] } | null {
   if (rng.bool(0.35)) {
     const { coefs, xv } = quadratic(rng);
-    const sts: St[] = [
-      make(coefs, { kind: rng.pick(['local-min-at', 'local-max-at']), x: rng.pick([xv, xv, -xv, xv + 1]) }),
-      make(coefs, { kind: rng.pick(['turning-at', 'stationary-at']), x: rng.pick([xv, -xv, xv - 1]) }),
-      make(coefs, { kind: rng.pick(['local-min-at', 'local-max-at', 'grad-negative-at']), x: rng.pick([xv, xv + 2, xv - 2]) }),
+    const groups: Cand[][] = [
+      at(['local-min-at', 'local-max-at'], [xv, -xv, xv + 1], 'nature'),
+      at(['turning-at', 'stationary-at'], [xv, -xv, xv - 1], 'turning'),
+      [
+        ...at(['local-min-at', 'local-max-at', 'grad-negative-at', 'increasing-at'], [xv + 2, xv - 2], 'away'),
+      ],
     ];
-    if (new Set(sts.map((s) => s.text)).size < 3) return null;
-    return { coefs, sts };
+    return build(rng, coefs, groups);
   }
   const cu = cubicTwo(rng, true);
   if (!cu) return null;
   const { coefs, r1, r2 } = cu;
-  const pts = [r1, r2, (r1 + r2) / 2, r1 - 1, r2 + 1];
-  const sts: St[] = [
-    make(coefs, { kind: rng.pick(['local-min-at', 'local-max-at']), x: rng.pick([r1, r2, r1, r2, (r1 + r2) / 2]) }),
-    make(coefs, { kind: rng.pick(['local-min-at', 'local-max-at', 'turning-at']), x: rng.pick([r1, r2, r1 - 1]) }),
-    make(coefs, { kind: rng.pick(['turning-at', 'stationary-at', 'stationary-at']), x: rng.pick(pts) }),
+  const mid = (r1 + r2) / 2;
+  // At a stationary point the claim can be true or false depending on the nature; away from one only
+  // the gradient-sign claims can be true, so every group can supply a true statement.
+  const nature = ['local-min-at', 'local-max-at', 'turning-at', 'stationary-at'];
+  const away = ['turning-at', 'stationary-at', 'increasing-at', 'decreasing-at'];
+  const groups: Cand[][] = [
+    at(nature, [r1], 'first'),
+    r1 === r2 ? at(away, [r1 + 1], 'second') : at(nature, [r2], 'second'),
+    at(away, r1 === r2 ? [r1 - 1, r1 + 2] : [mid, r1 - 1, r2 + 1], 'other'),
   ];
-  if (new Set(sts.map((s) => s.text)).size < 3) return null;
-  return { coefs, sts };
+  return build(rng, coefs, groups);
 }
 
 function level4(rng: RNG): { coefs: number[]; sts: St[] } | null {
   const which = rng.weighted(['none', 'one', 'two'], [4, 3, 2]);
   let coefs: number[];
-  let probe: number;
-  if (which === 'none') { const c = cubicNone(rng); if (!c) return null; coefs = c; probe = rng.int(-2, 2); }
-  else if (which === 'one') { const c = cubicOne(rng); coefs = c.coefs; probe = rng.pick([c.r, c.r + 1, c.r - 1]); }
-  else { const c = cubicTwo(rng); if (!c) return null; coefs = c.coefs; probe = rng.pick([c.r1, c.r2, (c.r1 + c.r2) / 2, c.r1 - 1]); }
-  const count = stationaryCount(coefs);
-  const kinds: Spec[] = [
-    { kind: 'count-stationary', n: rng.pick([count, count, 0, 1, 2]) },
-    { kind: 'fprime-positive-all' },
-    ...(count === 1 ? [] : [{ kind: 'increasing-all' }]),
-    { kind: rng.pick(['increasing-at', 'grad-negative-at', 'stationary-at']), x: probe },
-    { kind: 'count-stationary', n: rng.pick([0, 1, 2].filter((n) => n !== count)) },
+  let probes: number[];
+  if (which === 'none') { const c = cubicNone(rng); if (!c) return null; coefs = c; probes = [rng.int(-2, 2), rng.int(-2, 2)]; }
+  else if (which === 'one') { const c = cubicOne(rng); coefs = c.coefs; probes = [c.r, c.r + 1, c.r - 1]; }
+  else { const c = cubicTwo(rng); if (!c) return null; coefs = c.coefs; probes = [c.r1, c.r2, (c.r1 + c.r2) / 2, c.r1 - 1]; }
+  const infl = -coefs[1] / (3 * coefs[0]); // f'' = 0 there
+  const groups: Cand[][] = [
+    // how many stationary points: at most one such claim, or two of them would exclude each other
+    [0, 1, 2].map((n) => ({ kind: 'count-stationary', n, group: 'count' })),
+    // "f′ > 0 everywhere" and "f is increasing everywhere" say the same thing about a cubic with no
+    // stationary point, so they share a group and never appear together
+    [{ kind: 'fprime-positive-all', group: 'monotone' }, { kind: 'increasing-all', group: 'monotone' }],
+    at(['increasing-at', 'grad-negative-at', 'stationary-at'], probes, 'point'),
+    Number.isInteger(infl) || Number.isInteger(2 * infl)
+      ? at(['inflection-at'], [infl, infl + 1, infl - 1], 'inflection')
+      : [],
+    gradValueCands(coefs, probes[0], 'grad'),
   ];
-  const chosen = rng.pickDistinct(kinds, 3);
-  const sts = chosen.map((s) => make(coefs, s));
-  if (new Set(sts.map((s) => s.text)).size < 3) return null;
-  return { coefs, sts };
+  return build(rng, coefs, groups);
 }
 
 function level5(rng: RNG): { coefs: number[]; sts: St[] } | null {
@@ -254,15 +332,13 @@ function level5(rng: RNG): { coefs: number[]; sts: St[] } | null {
     coefs[3] = e;
   } else if (coefs[3] === 2 * a * d ** 3 + b * d * d) return null;
   const infl = (r1 + r2) / 2; // f'' = 0 at the midpoint of the stationary points
-  const sts: St[] = [
-    make(coefs, { kind: 'tangent-origin', x: d }),
-    make(coefs, { kind: 'inflection-at', x: rng.pick([infl, infl, r1, r2, infl + 1, -infl]) }),
-    make(coefs, r1 === r2
-      ? { kind: rng.pick(['turning-at', 'stationary-at', 'local-min-at']), x: r1 }
-      : { kind: rng.pick(['local-max-at', 'local-min-at', 'turning-at']), x: rng.pick([r1, r2, infl]) }),
+  const groups: Cand[][] = [
+    [{ kind: 'tangent-origin', x: d, group: 'tangent' }],
+    at(['inflection-at'], [infl, r1 === infl ? infl + 1 : r1, r2 === infl ? infl - 1 : r2, infl + 1], 'inflection'),
+    at(r1 === r2 ? ['turning-at', 'stationary-at', 'local-min-at'] : ['local-max-at', 'local-min-at', 'turning-at'],
+      r1 === r2 ? [r1, r1 + 1] : [r1, r2, infl], 'nature'),
   ];
-  if (new Set(sts.map((s) => s.text)).size < 3) return null;
-  return { coefs, sts };
+  return build(rng, coefs, groups);
 }
 
 // ----------------------------------------------------------------------------- numeric truth for verify()
@@ -307,7 +383,12 @@ function numericTruth(coefs: number[], s: Spec): boolean {
     case 'turning-at': return isZero(d1(s.x!)) && d1(s.x! - 0.01) * d1(s.x! + 0.01) < 0;
     case 'count-stationary': return roots() === s.n!;
     case 'fprime-positive-all': return minDeriv() > 1e-3;
-    case 'increasing-all': return minDeriv() > -1e-9;
+    // "increasing" is checked on f itself, not on f′: at a stationary point of inflection the central
+    // difference is zero to within rounding noise, but f(x + δ) − f(x) is safely positive.
+    case 'increasing-all': {
+      for (let x = -20; x < 20; x += 0.05) if (f(x + 0.05) < f(x) - 1e-9) return false;
+      return true;
+    }
     case 'decreasing-for-x-less': {
       for (let x = s.x! - 0.001; x > s.x! - 25; x -= 0.25) if (d1(x) >= 0) return false;
       return true;

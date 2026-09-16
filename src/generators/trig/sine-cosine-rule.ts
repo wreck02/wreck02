@@ -1,5 +1,5 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
-import { E, frac, surd, piFrac, Exact } from '../../core/exact';
+import { E, frac, surd, Exact } from '../../core/exact';
 import { buildOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import { exactSin, exactCos } from '../../core/gen-utils';
@@ -103,8 +103,11 @@ for (const ang of [60, 90, 120] as const) {
     }
   }
 }
-/** Small enough for ½bc sin C to stay mental: bc even keeps the area a whole number or a whole multiple of √3. */
-const AREA_OBLIQUE = TRIANGLES.filter((t) => t.ang !== 90 && t.b * t.c <= 200 && (t.b * t.c) % 2 === 0);
+/**
+ * Small enough for ½bc sin C to stay mental: bc even keeps the area a whole number or a
+ * whole multiple of √3, and bc ≤ 80 keeps the oblique areas between 6√3 and 20√3.
+ */
+const AREA_OBLIQUE = TRIANGLES.filter((t) => t.ang !== 90 && t.b * t.c <= 80 && (t.b * t.c) % 2 === 0);
 const AREA_RIGHT = TRIANGLES.filter((t) => t.ang === 90 && t.b * t.c <= 200 && (t.b * t.c) % 2 === 0);
 
 // ----------------------------------------------------------------------------- level 1: ½ab sin C
@@ -149,13 +152,15 @@ function areaQ(rng: RNG): Generated | null {
 function cosineSideQ(rng: RNG): Generated | null {
   const ang = rng.pick([60, 120]);
   const k = ang === 60 ? 1 : -1;
-  const p = rng.int(2, 12);
-  const q = rng.int(2, 12);
+  // Sides up to 16: the pool of perfect-square cosine triangles is intrinsically small,
+  // so the range and the surd share are both widened to keep level 2 from repeating.
+  const p = rng.int(2, 16);
+  const q = rng.int(2, 16);
   const s = p * p + q * q - k * p * q;
   const root = Math.round(Math.sqrt(s));
   const square = root * root === s;
-  // Perfect squares most of the time; otherwise a single small surd such as √7 or √13.
-  if (!square && (s > 40 || rng.bool(0.75))) return null;
+  // Perfect squares about half the time; otherwise a single clean surd such as √7 or √13.
+  if (!square && (s > 80 || rng.bool(0.5))) return null;
   if (ang === 60 && p === q) return null; // equilateral
   const answer = surd(s);
   if (!isCleanExact(answer).ok || answer.hasSurd() === square) return null;
@@ -235,10 +240,11 @@ function angleQ(rng: RNG): Generated | null {
     ? 'Find the size of the largest angle, in degrees.'
     : `Find the size of the angle between the sides of length $${b}$ cm and $${c}$ cm, in degrees.`;
   const sides = rng.shuffle([a, b, c]);
-  // Angles: 0° is allowed as a distractor (the "cos θ = 0 means θ = 0" slip) but 180° is not.
+  // Every option has to be a possible angle of a triangle stated in degrees: 0° and an
+  // answer in radians are both eliminated on sight, so neither is ever offered.
   const keep = (ds: { value: Exact | null; trap: string }[]): Distractor[] =>
     ds.filter((d): d is { value: Exact; trap: string } =>
-      d.value !== null && isCleanExact(d.value).ok && d.value.toNumber() >= 0 && d.value.toNumber() < 180);
+      d.value !== null && isCleanExact(d.value).ok && d.value.toNumber() > 0 && d.value.toNumber() < 180);
   const sinMisread = ang === 60 ? 30 : 150; // cos θ = ±½ misread as sin θ = ±½
   const must = keep(ang === 90
     ? [
@@ -252,18 +258,18 @@ function angleQ(rng: RNG): Generated | null {
     ]);
   const extra = keep(ang === 90
     ? [
-      { value: piFrac(90, 180), trap: 'gave the angle in radians when degrees were asked for' },
-      { value: E(0), trap: 'read $\\cos\\theta = 0$ as $\\theta = 0^{\\circ}$' },
+      { value: E(120), trap: 'mis-signed the numerator and read $\\cos\\theta = -\\tfrac{1}{2}$' },
+      { value: E(30), trap: 'read $\\cos\\theta = 0$ as the angle whose sine is $\\tfrac{1}{2}$' },
+      { value: E(135), trap: 'assumed two equal sides and then took the obtuse solution' },
     ]
     : ang === 60
       ? [
-        { value: piFrac(60, 180), trap: 'gave the angle in radians when degrees were asked for' },
-        { value: E(0), trap: 'divided by $bc$ instead of $2bc$, giving $\\cos\\theta = 1$' },
         { value: E(150), trap: 'read $\\cos\\theta = \\tfrac{1}{2}$ as $\\sin\\theta = \\tfrac{1}{2}$ and took the obtuse solution' },
+        { value: E(45), trap: 'confused $\\cos\\theta = \\tfrac{1}{2}$ with $\\cos\\theta = \\tfrac{\\sqrt{2}}{2}$' },
       ]
       : [
-        { value: piFrac(120, 180), trap: 'gave the angle in radians when degrees were asked for' },
         { value: E(30), trap: 'ignored the minus sign and read $\\sin\\theta = \\tfrac{1}{2}$, taking the acute solution' },
+        { value: E(135), trap: 'confused $\\cos\\theta = -\\tfrac{1}{2}$ with $\\cos\\theta = -\\tfrac{\\sqrt{2}}{2}$' },
       ]);
   const distractors = ranked(rng, answer, must, extra);
   if (distractors.length < 4) return null;
@@ -317,13 +323,14 @@ const ANGLE_SETS: [number, number, number][] = [[30, 60, 90], [45, 45, 90], [30,
 
 function sineThenAreaQ(rng: RNG): Generated | null {
   const [A, B, C] = rng.pick(ANGLE_SETS);
-  const a = rng.int(3, 12);
+  // a ≤ 8 keeps a² ≤ 64, so the areas top out around 32 instead of reaching 121√3/4.
+  const a = rng.int(3, 8);
   const sinA = exactSin(A), sinB = exactSin(B), sinC = exactSin(C);
   if (sinA.equals(sinB)) return null; // the sine-rule step would be a no-op
   const b = attempt(() => E(a).mul(sinB).div(sinA));
   if (!b || !isCleanExact(b).ok) return null;
   const answer = attempt(() => E(a).mul(b).mul(sinC).mul(frac(1, 2)));
-  if (!answer || !isCleanExact(answer).ok || answer.toNumber() > 200) return null;
+  if (!answer || !isCleanExact(answer).ok || answer.toNumber() > 100) return null;
   if (!(answer.terms.length === 1 && answer.terms[0].c.d <= 4n)) return null;
   const distractors = ranked(rng, answer, cleanOnly([
     { value: attempt(() => E(a).mul(b).mul(sinC)), trap: 'forgot the ½ in ½ab sin C' },
@@ -331,6 +338,8 @@ function sineThenAreaQ(rng: RNG): Generated | null {
     { value: attempt(() => E(a).mul(b).mul(sinA).mul(frac(1, 2))), trap: 'used an angle that is not between the two sides' },
     { value: attempt(() => E(a).mul(E(a).mul(sinA).div(sinB)).mul(sinC).mul(frac(1, 2))), trap: 'sine rule upside down when finding the second side' },
   ]), cleanOnly([
+    // Not a multiple of the same surd, so the option list is not one geometric ladder.
+    { value: attempt(() => E(a).mul(E(a)).mul(sinC).mul(frac(1, 2))), trap: 'used $BC$ for both sides instead of finding the second one' },
     { value: b, trap: 'stopped after finding the second side' },
     { value: attempt(() => E(a).mul(b).mul(exactCos(C)).mul(frac(1, 2))), trap: 'used cos C instead of sin C' },
   ]));

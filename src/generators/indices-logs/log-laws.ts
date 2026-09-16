@@ -8,11 +8,18 @@ import type { RNG } from '../../core/rng';
  * The three log laws: log a + log b = log ab, log a − log b = log(a/b), n log a = log a^n,
  * plus change of base and a log equation.
  *
- * Level 1: collapse a sum/difference of logs onto a power of the base — log_10 4 + log_10 25 = 2
+ * Level 1: collapse a sum/difference onto a power of the base — log_10 4 + log_10 25 = 2
  * Level 2: a coefficient appears — 2 log_3 6 − log_3 4 = 2
  * Level 3: write an expression as a single logarithm (choice) — 2 log_2 3 + log_2 4 = log_2 36
  * Level 4: log_a x in terms of p = log_a 2 and q = log_a 3 (choice) — log_a 12 = 2p + q
  * Level 5: a chain of logs, log_4 8 × log_8 16 = 2, or solving log_2 x + log_2 (x − 2) = 3
+ *
+ * Levels 1 and 2 are built so that a law really has to be used: at least one argument is never
+ * a power of the base (otherwise the candidate just reads the indices off and adds them), and the
+ * parameters are drawn to favour draws where one of the spec's named slips —
+ * log a ± log b = log(a ± b), n log a = log(na) — lands on a power of the base and can therefore
+ * be offered as a value. Those slips, and the "divided the wrong way round" reversal of a
+ * difference, are the must-keep distractors.
  *
  * params carry the raw numbers so verify() can redo everything with Math.log / substitution:
  *   collapse, single-log: { b, coefs: number[], args: number[] }
@@ -79,79 +86,169 @@ function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generat
 
 // ----------------------------------------------------------------------------- levels 1–2
 
-/** Distractors shared by the "find the value" levels: the three classic law slips, then index slips. */
+interface Collapse { coefs: number[]; args: number[] }
+
+/** The single-log argument a candidate reaches by slipping one of the laws, with the slip named. */
+function slipArgs(coefs: number[], args: number[]): { arg: number; trap: string }[] {
+  const hasCoef = coefs.some((c) => Math.abs(c) !== 1);
+  const hasMinus = coefs.some((c) => c < 0);
+  const out: { arg: number; trap: string }[] = [
+    {
+      arg: coefs.reduce((acc, c, i) => acc + Math.sign(c) * args[i] ** Math.abs(c), 0),
+      trap: hasMinus ? 'treated log a − log b as log(a − b)' : 'treated log a + log b as log(a + b)',
+    },
+  ];
+  if (hasCoef) {
+    out.push({
+      arg: argument(coefs.map((c) => Math.sign(c)), args.map((a, i) => Math.abs(coefs[i]) * a)),
+      trap: 'used n log a = log(na) instead of log(a^n)',
+    });
+    out.push({
+      arg: coefs.reduce((acc, c, i) => acc + Math.sign(c) * Math.abs(c) * args[i], 0),
+      trap: 'multiplied out the coefficient and then added the arguments',
+    });
+  }
+  if (hasMinus) {
+    out.push({
+      arg: argument(coefs.map((c, i) => (i === 0 ? c : -c)), args),
+      trap: 'multiplied the arguments where the minus sign means divide',
+    });
+  }
+  return out.filter((s) => Number.isFinite(s.arg) && s.arg > 0);
+}
+
+/** Does a named slip land on a power of the base, so that it can be offered as a value? */
+function slipsLand(b: number, k: number, coefs: number[], args: number[]): boolean {
+  return slipArgs(coefs, args).some((s) => {
+    const m = powerExp(b, s.arg);
+    return m !== null && m !== k;
+  });
+}
+
+/**
+ * Distractors for the "find the value" levels. Every one is the value a named mistake produces:
+ * the law slips that land on a power of the base, the reversal of a difference, the argument
+ * quoted instead of the logarithm, and a single miscount of the powers of b.
+ */
 function collapseDistractors(b: number, k: number, coefs: number[], args: number[]): Distractor[] {
   const T = b ** k;
-  const out: Distractor[] = [];
-  const fromArg = (x: number, trap: string) => {
-    const m = powerExp(b, x);
-    if (m !== null && m !== k) out.push({ value: E(m), trap });
-  };
-  // log a ± log b read as log(a ± b)
-  fromArg(coefs.reduce((acc, c, i) => acc + Math.sign(c) * args[i] ** Math.abs(c), 0), 'treated log a + log b as log(a + b)');
-  // n log a read as log(na)
-  fromArg(coefs.reduce((acc, c, i) => acc * (Math.abs(c) * args[i]) ** Math.sign(c), 1), 'used n log a = log(na) instead of log(a^n)');
-  // both slips at once
-  fromArg(coefs.reduce((acc, c, i) => acc + Math.sign(c) * Math.abs(c) * args[i], 0), 'multiplied out the coefficient and then added the arguments');
-  // every sign after the first flipped: multiply where you should divide
-  fromArg(argument(coefs.map((c, i) => (i === 0 ? c : -c)), args), 'multiplied the arguments where the minus sign means divide');
-  out.push({ value: E(k + 1), trap: 'index slip: the argument is not b^(k+1)' });
-  out.push({ value: E(k - 1), trap: 'index slip: the argument is not b^(k−1)' });
-  if (k !== 1) out.push({ value: E(1), trap: 'thought the arguments cancelled down to log_b b = 1' });
-  if (k !== 0) out.push({ value: E(0), trap: 'thought the arguments cancelled down to log_b 1 = 0' });
-  out.push({ value: E(2 * k), trap: 'doubled the index' });
-  if (T <= 100) out.push({ value: E(T), trap: 'gave the argument of the logarithm rather than its value' });
-  out.push({ value: E(k + 2), trap: 'arithmetic slip in the index' });
-  out.push({ value: E(k - 2), trap: 'arithmetic slip in the index' });
-  return clean(out);
+  const named: Distractor[] = [];
+  for (const s of slipArgs(coefs, args)) {
+    const m = powerExp(b, s.arg);
+    if (m !== null && m !== k) named.push({ value: E(m), trap: s.trap });
+  }
+  // reversing a two-term difference gives log_b(y / x^n) = −k
+  if (coefs.length === 2 && coefs.some((c) => c < 0) && k !== 0) {
+    named.push({ value: E(-k), trap: 'divided the wrong way round: that is the logarithm of the reciprocal' });
+  }
+  named.slice(0, 2).forEach((d) => { d.must = true; });
+  const extra: Distractor[] = [];
+  if (T <= 1000) {
+    extra.push({
+      value: E(T),
+      trap: 'gave the argument of the logarithm rather than its value',
+      // when no law slip lands on a power of the base, this is the mistake the question tests
+      must: named.length === 0,
+    });
+  }
+  if (Number.isInteger(T / b) && T / b <= 100) {
+    extra.push({ value: E(T / b), trap: `divided the argument by the base: $\\log_{${b}} ${T}$ is not $${T} \\div ${b}$` });
+  }
+  if (k !== 0) extra.push({ value: E(0), trap: 'thought the arguments cancelled down to $\\log_b 1 = 0$' });
+  if (k !== 1) extra.push({ value: E(1), trap: 'thought the arguments cancelled down to $\\log_b b = 1$' });
+  extra.push({ value: E(k - 1), trap: `miscounted the powers of ${b}: ${T} = ${b}^{${k}}` });
+  extra.push({ value: E(k + 1), trap: `miscounted the powers of ${b}: ${T} = ${b}^{${k}}` });
+  return clean([...named, ...extra]);
 }
 
 function collapseValue(rng: RNG, b: number, k: number, coefs: number[], args: number[], level: Level): Generated {
   const answer = E(k);
   const T = b ** k;
   const single = argument(coefs, args);
+  const hasCoef = coefs.some((c) => Math.abs(c) !== 1);
+  const hasMinus = coefs.some((c) => c < 0);
+  const trap = hasCoef
+    ? 'n log a = log(a^n), not log(na): the coefficient becomes a power before the arguments are combined.'
+    : hasMinus
+      ? 'log a + log b = log(ab) and log a − log b = log(a/b): the arguments multiply and divide, they never add.'
+      : 'log a + log b = log(ab): the arguments multiply, they never add.';
   return {
     stem: `Find the value of $${exprTex(b, coefs, args)}$.`,
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, collapseDistractors(b, k, coefs, args), { fallback: [E(k + 3), E(k - 2), E(3 * k)] }),
+    options: buildOptions(rng, answer, collapseDistractors(b, k, coefs, args), { fallback: [E(k + 2), E(k - 2), E(2 * k)] }),
     solution: `Combine into one logarithm: $${exprTex(b, coefs, args)} = \\log_{${b}} ${single}$, and $${b}^{${k}} = ${T}$, so the value is $${k}$.`,
-    trap: 'log a + log b = log(ab) and n log a = log(a^n): the arguments multiply, they never add.',
+    trap,
     tags: ['logarithms', 'log-laws', level >= 2 ? 'power-law' : 'product-law'],
     params: { variant: 'collapse', b, coefs, args, k },
     typedAllowed: true,
   };
 }
 
-/** Level 1: log_10 4 + log_10 25, log_3 12 + log_3 3 − log_3 4. */
+/** Level 1: log_10 4 + log_10 25, log_2 96 − log_2 3, log_3 4 + log_3 9 − log_3 12. */
 function plainCollapse(rng: RNG): Generated | null {
   const b = rng.pick(BASES);
   const k = rng.int(b === 10 ? 1 : 2, b === 2 ? 5 : b === 3 ? 4 : 3);
   const T = b ** k;
   if (T > 1000) return null;
-  if (rng.bool(0.55)) {
-    const pairs = factorPairs(T, 100);
-    if (pairs.length === 0) return null;
-    const [x, y] = rng.pick(pairs);
-    const [u, v] = rng.bool() ? [x, y] : [y, x];
-    return collapseValue(rng, b, k, [1, 1], [u, v], 1);
+  // A product of two arguments that are both powers of b is no question at all (the candidate
+  // reads the indices off and adds them), and for a prime base uv = b^k forces exactly that —
+  // so the two-term product form only exists for the composite base.
+  const form = rng.weighted(['product', 'quotient', 'triple'], [b === 10 ? 4 : 0, 3, 4]);
+  const draws: Collapse[] = [];
+  if (form === 'product') {
+    for (const [x, y] of factorPairs(T, 100)) {
+      if (powerExp(b, x) !== null && powerExp(b, y) !== null) continue;
+      draws.push({ coefs: [1, 1], args: [x, y] }, { coefs: [1, 1], args: [y, x] });
+    }
+  } else if (form === 'quotient') {
+    for (let v = 2; v <= 30; v++) {
+      if (powerExp(b, v) !== null || T * v > 600) continue;
+      draws.push({ coefs: [1, -1], args: [T * v, v] });
+    }
+  } else {
+    for (let z = 2; z <= 12; z++) {
+      for (const [x, y] of factorPairs(T * z, 100)) {
+        if (x === z || y === z) continue;
+        if ([x, y, z].every((g) => powerExp(b, g) !== null)) continue;
+        draws.push({ coefs: [1, 1, -1], args: [x, y, z] }, { coefs: [1, 1, -1], args: [y, x, z] });
+      }
+    }
   }
-  const z = rng.int(2, 9);
-  const pairs = factorPairs(T * z, 100);
-  if (pairs.length === 0) return null;
-  const [x, y] = rng.pick(pairs);
-  if (x === z || y === z) return null;
-  const [u, v] = rng.bool() ? [x, y] : [y, x];
-  return collapseValue(rng, b, k, [1, 1, -1], [u, v, z], 1);
+  if (draws.length === 0) return null;
+  // Prefer a draw whose named slip lands on a power of b, so the trap can be offered as a value.
+  // log(a ± b) is the rarest of them — with integer arguments and a base that is not a perfect
+  // power, a slipped argument is only usable when it happens to be a power of b — so when one of
+  // those draws exists it gets an extra look-in.
+  const landing = draws.filter((d) => slipsLand(b, k, d.coefs, d.args));
+  const sumLanding = draws.filter((d) => {
+    const m = powerExp(b, d.args.reduce((acc, a, i) => acc + Math.sign(d.coefs[i]) * a, 0));
+    return m !== null && m !== k;
+  });
+  const pool = sumLanding.length > 0 && rng.bool(0.3) ? sumLanding : landing.length > 0 && rng.bool(0.7) ? landing : draws;
+  const d = rng.pick(pool);
+  return collapseValue(rng, b, k, d.coefs, d.args, 1);
 }
 
-/** Level 2: 2 log_3 6 − log_3 4 = 2, 2 log_2 6 + log_2 8 − log_2 9 = 5. */
+/**
+ * (b, x) with x = 2b^s: exactly the draws for which "n log a = log(na)" lands on a power of b,
+ * because the slipped argument is n·b^k / x^(n−1) = b^(k−s). 2 log_3 6 − log_3 4 is the classic.
+ */
+const NA_FAMILIES: [number, number][] = [[3, 6], [3, 18], [3, 54], [5, 10], [5, 50], [10, 20], [10, 200]];
+
+/** Level 2: 2 log_3 6 − log_3 4 = 2, 3 log_2 6 − log_2 27 = 3, 2 log_5 10 + log_5 5 − log_5 4 = 3. */
 function coefCollapse(rng: RNG): Generated | null {
-  const n = rng.pick([2, 2, 2, 3]);
-  const x = rng.int(2, 16);
+  let b: number, n: number, x: number;
+  if (rng.bool(0.5)) {
+    [b, x] = rng.pick(NA_FAMILIES);
+    n = 2;
+  } else {
+    b = rng.pick(BASES);
+    n = rng.pick([2, 2, 3]);
+    x = rng.int(2, 16);
+    if (powerExp(b, x) !== null) return null; // n log_b b^m is no question at all
+  }
   const P = x ** n;
-  if (P < 8 || P > 600) return null;
-  const b = rng.pick(BASES);
-  if (powerExp(b, x) !== null) return null; // n log_b b^m is no question at all
+  if (P < 8 || P > 50000) return null;
   let kMax = 0;
   let rest = P;
   while (rest % b === 0) { rest /= b; kMax++; }
@@ -171,7 +268,10 @@ function coefCollapse(rng: RNG): Generated | null {
   while (h) [g, h] = [h, g % h];
   const y = T / g, z = P / g;
   if (y < 2 || y > 100 || z < 2 || z > 100 || y === z) return null;
-  return collapseValue(rng, b, k, [n, 1, -1], [x, y, z], 2);
+  // the coefficient reads just as naturally in the middle: log_5 5 + 2 log_5 10 − log_5 4
+  return rng.bool(0.5)
+    ? collapseValue(rng, b, k, [n, 1, -1], [x, y, z], 2)
+    : collapseValue(rng, b, k, [1, n, -1], [y, x, z], 2);
 }
 
 // ----------------------------------------------------------------------------- level 3
@@ -191,10 +291,10 @@ function singleLog(rng: RNG): Generated | null {
   const coefs = [c1, c2];
   const args = [A, B];
   const correct = `$\\log_{${b}} ${N}$`;
-  const wrongArg = (x: number, trap: string) => ({ value: x, trap });
+  const wrongArg = (x: number, trap: string, must = false) => ({ value: x, trap, must });
   const cands = [
-    wrongArg(Math.abs(c1) * A * B ** c2, 'used n log a = log(na) instead of log(a^n)'),
-    wrongArg(P + Math.sign(c2) * B ** Math.abs(c2), 'treated log a + log b as log(a + b)'),
+    wrongArg(Math.abs(c1) * A * B ** c2, 'used n log a = log(na) instead of log(a^n)', true),
+    wrongArg(P + Math.sign(c2) * B ** Math.abs(c2), 'treated log a + log b as log(a + b)', true),
     wrongArg(Math.abs(c1) * A + Math.sign(c2) * Math.abs(c2) * B, 'multiplied out the coefficient and then added the arguments'),
     wrongArg(P * B ** -c2, 'multiplied where the minus sign means divide (or the other way round)'),
     wrongArg((A * B) ** c1, 'applied the power to both arguments'),
@@ -204,7 +304,7 @@ function singleLog(rng: RNG): Generated | null {
   const usable = cands.filter((c) => Number.isInteger(c.value) && c.value >= 2 && c.value <= cap && c.value !== N);
   const wrong = usable
     .filter((c, idx) => usable.findIndex((v) => v.value === c.value) === idx)
-    .map((c) => ({ display: `$\\log_{${b}} ${c.value}$`, trap: c.trap }));
+    .map((c) => ({ display: `$\\log_{${b}} ${c.value}$`, trap: c.trap, must: c.must }));
   if (wrong.length < 4) return null;
   return {
     stem: `Write $${exprTex(b, coefs, args)}$ as a single logarithm.`,
@@ -241,9 +341,8 @@ function inTerms(rng: RNG): Generated | null {
   const i = rng.int(-2, 3);
   const j = rng.int(-2, 2);
   const c = rng.bool(0.25) ? 1 : 0;
+  if (i === 0 || j === 0) return null; // the stem promises "in terms of p and q", so both must appear
   if (i < 0 && j < 0) return null;
-  if (Math.abs(i) + Math.abs(j) < 2) return null; // log_a 2 = p is not a question
-  if ((i === 0 || j === 0) && rng.bool(0.6)) return null; // mostly use both primes
   const num = P1 ** Math.max(i, 0) * P2 ** Math.max(j, 0);
   const den = P1 ** Math.max(-i, 0) * P2 ** Math.max(-j, 0);
   if (num > 200 || den > 27 || (num === 1 && den === 1)) return null;
@@ -259,12 +358,12 @@ function inTerms(rng: RNG): Generated | null {
   const topTex = top.length ? top.join(' \\times ') : '1';
   const factorTex = bot.length ? `\\frac{${topTex}}{${bot.join(' \\times ')}}` : topTex;
   const correct = `$${combo(i, j, c)}$`;
-  const cands: { display: string; trap: string }[] = [];
-  const add = (text: string, trap: string) => { if (text !== combo(i, j, c)) cands.push({ display: `$${text}$`, trap }); };
+  const cands: { display: string; trap: string; must?: boolean }[] = [];
+  const add = (text: string, trap: string, must = false) => { if (text !== combo(i, j, c)) cands.push({ display: `$${text}$`, trap, must }); };
+  add(combo(i === 0 ? 0 : Math.sign(i) * P1 ** Math.abs(i), j === 0 ? 0 : Math.sign(j) * P2 ** Math.abs(j), c), 'used the factor itself as the coefficient instead of the index', true);
+  if (i > 0 && j > 0) add(`${i * j === 1 ? '' : i * j}pq`, 'multiplied the logs instead of adding them: log(ab) ≠ log a × log b', true);
   if (i !== j) add(combo(j, i, c), 'swapped p and q');
-  if (i > 0 && j > 0) add(`${i * j === 1 ? '' : i * j}pq`, 'multiplied the logs instead of adding them: log(ab) ≠ log a × log b');
   add(combo(i, -j, c), 'sign slip: division subtracts the logarithm');
-  add(combo(i === 0 ? 0 : Math.sign(i) * P1 ** Math.abs(i), j === 0 ? 0 : Math.sign(j) * P2 ** Math.abs(j), c), 'used the factor itself as the coefficient instead of the index');
   add(combo(Math.sign(i), Math.sign(j), c), 'ignored the indices: log 2^3 = 3p, not p');
   if (c === 1) add(combo(i, j, 0), 'dropped log_a a = 1');
   else add(combo(i, j, 1), 'invented an extra 1');
@@ -303,14 +402,14 @@ function chain(rng: RNG): Generated | null {
   if (m === B || m === 1 || m > 200) return null;
   if (usePower && (m === N || p ** mPow > 128)) return null;
   const cands: Distractor[] = [
-    { value: frac(a, e), trap: 'inverted the chain: this is log_N B, not log_B N' },
+    { value: frac(a, e), trap: 'inverted the chain: this is log_N B, not log_B N', must: true },
     { value: E(p ** (e - a)), trap: 'divided the numbers instead of taking logarithms' },
     { value: answer.add(E(1)), trap: 'index slip of one' },
     { value: answer.sub(E(1)), trap: 'index slip of one' },
     { value: answer.mulRat(2), trap: 'doubled the result' },
   ];
   if (usePower) {
-    cands.push({ value: frac(mPow, a).add(frac(e, mPow)), trap: 'added the two logarithms instead of multiplying them' });
+    cands.push({ value: frac(mPow, a).add(frac(e, mPow)), trap: 'added the two logarithms instead of multiplying them', must: true });
     cands.push({ value: frac(mPow, a).mul(frac(mPow, e)), trap: 'inverted the second logarithm' });
   }
   return {
@@ -340,13 +439,13 @@ function solveEquation(rng: RNG): Generated | null {
   const d = r - other;
   const answer = E(r);
   const cands: Distractor[] = [
-    { value: E(-other), trap: 'kept the negative root, but a logarithm needs a positive argument' },
+    { value: E(-other), trap: 'kept the negative root, but a logarithm needs a positive argument', must: true },
     { value: E(other), trap: `solved for $x - ${d}$ rather than for $x$` },
     { value: E(N), trap: 'ignored the second logarithm and read x = b^k straight off' },
     { value: E(r + d), trap: 'added the difference back on again' },
     { value: E(k), trap: 'gave the value of the logarithm, not of x' },
   ];
-  if ((N + d) % 2 === 0) cands.push({ value: E((N + d) / 2), trap: 'treated log a + log b as log(a + b)' });
+  if ((N + d) % 2 === 0) cands.push({ value: E((N + d) / 2), trap: 'treated log a + log b as log(a + b)', must: true });
   return {
     stem: `Solve $\\log_{${b}} x + \\log_{${b}} (x - ${d}) = ${k}$.`,
     answer: { kind: 'exact', value: answer },
@@ -389,6 +488,12 @@ export default defineTemplate({
       case 'collapse': {
         if (q.answer.kind !== 'exact') return false;
         const b = p.b as number, coefs = p.coefs as number[], args = p.args as number[];
+        // at least one argument must not be a power of the base, or no law is being used
+        const allPowers = args.every((a) => {
+          const l = Math.log(a) / Math.log(b);
+          return Math.abs(l - Math.round(l)) < 1e-9;
+        });
+        if (allPowers) return false;
         const value = coefs.reduce((acc, c, i) => acc + c * (Math.log(args[i]) / Math.log(b)), 0);
         return close(q.answer.value.toNumber(), value) && q.answer.value.isInteger();
       }
@@ -422,6 +527,7 @@ export default defineTemplate({
         }
         if (matched !== text.length) return false;
         const i = p.i as number, j = p.j as number, c = p.c as number;
+        if (i === 0 || j === 0) return false; // the stem asks for both p and q
         const target = Math.log((p.P1 as number) ** i * (p.P2 as number) ** j * a ** c) / Math.log(a);
         return close(value, target);
       }

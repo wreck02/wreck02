@@ -251,6 +251,9 @@ function choose(rng: RNG, pool: Stmt[], level: Level): Stmt[] | null {
   const usedGroups = new Set<string>();
   const take = (s: Stmt) => {
     if (chosen.some((c) => c.key === s.key) || (s.group && usedGroups.has(s.group))) return;
+    // Two statements quoting the same number (an impact speed of 14 and a rebound speed of 14) are
+    // visibly mutually exclusive, so a candidate deletes two of the eight combinations for free.
+    if (s.claim !== null && chosen.some((c) => c.claim !== null && Math.abs(c.claim - s.claim!) < 1e-9)) return;
     chosen.push(s);
     if (s.group) usedGroups.add(s.group);
   };

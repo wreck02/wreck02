@@ -15,6 +15,10 @@ import type { RNG } from '../../core/rng';
  *
  * params keep a, the ratio as num/den and the index, so verify() can multiply the terms out one
  * at a time (or literally add them up) rather than reusing a closed formula.
+ *
+ * For a fractional ratio the first term is a multiple of den^n, so a·r^n — the off-by-one slip the
+ * question is really testing — is a whole number like every other option, and any candidate term on
+ * the wrong side of u_1 is dropped: the stem already shows whether the sequence climbs or falls.
  */
 
 interface Ratio { num: number; den: number }
@@ -61,23 +65,36 @@ function nthTerm(rng: RNG, level: Level): Generated | null {
     : rng.pick([{ num: 2, den: 1 }, { num: 2, den: 1 }, { num: 3, den: 1 }, { num: 4, den: 1 }, { num: 1, den: 2 }]);
   const big = Math.max(r.num, r.den);
   const n = fractional ? rng.pick([4, 5]) : rng.int(5, big === 2 ? 8 : big === 3 ? 6 : 5);
-  const c = rng.int(1, 6);
+  // a multiple of den keeps a·r^n whole as well, so the r^n slip is an integer among integers
+  const c = rng.int(1, fractional ? 3 : 10) * r.den;
   const a = c * r.den ** (n - 1);
-  if (a > 100 || a < 1) return null;
+  if (a > (fractional ? 400 : 100) || a < 1) return null;
   const answer = term(a, r, n - 1);
   if (!answer.isInteger() || Math.abs(answer.toNumber()) > 3000 || !isCleanExact(answer).ok) return null;
-  const shown = termList(a, r, fractional ? 3 : 3);
+  const shown = termList(a, r, 3);
   if (shown === null) return null;
-  const arithmetic = E(a).add(E(n - 1).mul(term(a, r, 1).sub(E(a))));
-  const ds: Distractor[] = [
-    { value: term(a, r, n), trap: 'used r^n instead of r^(n−1): one term too far' },
-    { value: term(a, r, n - 2), trap: 'stopped one term too early' },
-    { value: arithmetic, trap: 'treated it as an arithmetic sequence and added the first difference' },
-    { value: E(a * (n - 1)).mul(ratioExact(r)), trap: 'multiplied by r once and by (n − 1), instead of by r^(n−1)' },
-    { value: term(a, r, n - 1).add(term(a, r, n - 2)), trap: 'added the previous term on as well' },
-  ];
-  // an inverted ratio only looks like a real answer when the ratio is itself a fraction
-  if (r.den > 1) ds.push({ value: E(a).mul(ratioExact({ num: r.den, den: r.num }).pow(n - 1)), trap: 'inverted the common ratio' });
+  const rising = answer.toNumber() > a;
+  // a term on the wrong side of u_1 is eliminated on sight, whatever mistake produced it
+  const termLike = (v: Exact) => {
+    const x = v.toNumber();
+    return x > 0 && (rising ? x > a : x < a);
+  };
+  const ds: Distractor[] = [];
+  const push = (value: Exact, trap: string, must = false) => { if (termLike(value)) ds.push({ value, trap, must }); };
+  push(term(a, r, n), 'used r^n instead of r^(n−1): one term too far', true);
+  push(term(a, r, n - 2), 'stopped one term too early');
+  push(E(a).add(E(n - 1).mul(term(a, r, 1).sub(E(a)))), 'treated it as an arithmetic sequence and added the first difference');
+  push(E(a * (n - 1)).mul(ratioExact(r)), 'multiplied by r once and by (n − 1), instead of by r^(n−1)');
+  push(answer.add(term(a, r, n - 2)), 'added the previous term on as well');
+  if (r.den > 1) {
+    // an inverted ratio turns the sequence round, so it only survives when it still points the right way
+    push(E(a).mul(ratioExact({ num: r.den, den: r.num }).pow(n - 1)), 'inverted the common ratio');
+    push(answer.mulRat(r.den), 'divided by the denominator of the ratio one time too few');
+  }
+  // the sum is not a term of the sequence, so the "same side as the answer" rule does not apply
+  let total = Exact.ZERO;
+  for (let k = 0; k < n; k++) total = total.add(term(a, r, k));
+  if (total.isInteger()) ds.push({ value: total, trap: `gave the sum of the first ${n} terms instead of the ${ordinal(n)} term` });
   return {
     stem: `The first three terms of a geometric sequence are $${shown}$.\n\nFind the ${ordinal(n)} term.`,
     answer: { kind: 'exact', value: answer },
@@ -107,10 +124,10 @@ function findRatio(rng: RNG): Generated | null {
   if (ask === 'ratio') {
     const answer = E(r);
     const ds: Distractor[] = [
-      { value: E(ratio), trap: `divided the terms but forgot to take the ${gap === 2 ? 'square' : 'cube'} root` },
+      { value: E(ratio), trap: `divided the terms but forgot to take the ${gap === 2 ? 'square' : 'cube'} root`, must: true },
+      { value: E(-r), trap: 'kept the negative root although the ratio is positive', must: true },
       { value: frac(ratio, gap), trap: 'divided by the gap in the indices instead of taking a root' },
       { value: frac(1, r), trap: 'inverted the ratio: divided the earlier term by the later one' },
-      { value: E(-r), trap: 'kept the negative root although the ratio is positive' },
       { value: E(r + 1), trap: 'off by one when taking the root' },
       { value: E(uq - up), trap: 'treated it as an arithmetic sequence and took a difference' },
     ];
@@ -127,7 +144,7 @@ function findRatio(rng: RNG): Generated | null {
   }
   const mid = up * r;
   const ds: Distractor[] = [
-    { value: frac(up + uq, 2), trap: 'took the arithmetic mean instead of the geometric mean' },
+    { value: frac(up + uq, 2), trap: 'took the arithmetic mean instead of the geometric mean', must: true },
     { value: frac(uq, 2), trap: 'halved the later term' },
     { value: E(-mid), trap: 'kept the negative square root although the terms are positive' },
     { value: E(up * 2), trap: 'assumed the ratio was 2' },
@@ -155,8 +172,8 @@ function formulaQ(rng: RNG): Generated | null {
   if (shown === null || a * r ** 3 > 2500) return null;
   const correct = `$${a} \\times ${r}^{n-1}$`;
   const wrong = [
-    { display: `$${a} \\times ${r}^{n}$`, trap: 'off by one: r^n counts one multiplication too many' },
-    { display: `$${r} \\times ${a}^{n-1}$`, trap: 'swapped the first term and the common ratio' },
+    { display: `$${a} \\times ${r}^{n}$`, trap: 'off by one: r^n counts one multiplication too many', must: true },
+    { display: `$${r} \\times ${a}^{n-1}$`, trap: 'swapped the first term and the common ratio', must: true },
     { display: `$${a * r}^{n-1}$`, trap: 'multiplied a and r together before raising to the power' },
     { display: `$${a} + ${a * (r - 1)}(n-1)$`, trap: 'used the arithmetic nth-term formula a + (n − 1)d' },
     { display: `$${a} \\times ${r}^{n+1}$`, trap: 'shifted the index the wrong way' },
@@ -195,7 +212,7 @@ function exceedQ(rng: RNG): Generated | null {
   if (n < 5 || n > 12) return null;
   const answer = E(n);
   const ds: Distractor[] = [
-    { value: E(n - 1), trap: 'solved r^(n−1) > M/a but then forgot to add the 1 back' },
+    { value: E(n - 1), trap: 'solved r^(n−1) > M/a but then forgot to add the 1 back', must: true },
     { value: E(n + 1), trap: 'one term too far: u_n is already above M' },
     { value: E(n - 2), trap: 'off by two in the index' },
     { value: E(n + 2), trap: 'off by two in the index' },
@@ -234,14 +251,14 @@ function threeTermsQ(rng: RNG): Generated | null {
   const answer = E(x);
   const slip = frac(q * q - p * s, p + s === 0 ? 1 : p + s);
   const ds: Distractor[] = [
+    { value: E(t2), trap: 'gave the middle term of the sequence, not x', must: true },
     { value: E(-x), trap: 'sign slip when rearranging the linear equation' },
     { value: E(t1), trap: 'gave the first term of the sequence, not x' },
-    { value: E(t2), trap: 'gave the middle term of the sequence, not x' },
     { value: frac(r.num, r.den), trap: 'gave the common ratio, not x' },
     { value: E(x + 1), trap: 'arithmetic slip of one' },
     { value: E(x - 1), trap: 'arithmetic slip of one' },
   ];
-  if (p + s !== 0 && slip.isInteger() && slip.toNumber() !== x) ds.unshift({ value: slip, trap: 'dropped the middle term when expanding (x + q)²' });
+  if (p + s !== 0 && slip.isInteger() && slip.toNumber() !== x) ds.unshift({ value: slip, trap: 'dropped the middle term when expanding (x + q)²', must: true });
   return {
     stem: `The expressions $${shift(p)}$, $${shift(q)}$ and $${shift(s)}$ are three consecutive terms of a geometric sequence.\n\nFind the value of $x$.`,
     answer: { kind: 'exact', value: answer },
@@ -269,7 +286,7 @@ function sumQ(rng: RNG): Generated | null {
   const pos: Ratio = { num: Math.abs(r.num), den: r.den };
   const px = ratioExact(pos);
   const ds: Distractor[] = [
-    { value: E(a).mul(E(1).sub(px.pow(n))).div(E(1).sub(px)), trap: 'ignored the minus sign in the common ratio' },
+    { value: E(a).mul(E(1).sub(px.pow(n))).div(E(1).sub(px)), trap: 'ignored the minus sign in the common ratio', must: true },
     { value: E(a).mul(E(1).sub(rx.pow(n - 1))).div(E(1).sub(rx)), trap: 'summed only n − 1 terms' },
     { value: E(a).mul(E(1).sub(rx.pow(n + 1))).div(E(1).sub(rx)), trap: 'summed one term too many' },
     { value: answer.neg(), trap: 'sign slip in (1 − r)' },

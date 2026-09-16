@@ -18,16 +18,26 @@ import type { RNG } from '../../core/rng';
  * `buildOptions` appends the answer's unit to every option, a "J vs kJ" or "W vs kW" slip cannot be
  * expressed here at all — such a candidate would print as "96000 kJ", which is not what the mistake
  * produces — so those candidates are not offered; the unit traps live in which-statements, where each
- * statement carries its own unit. Every wrong option is a named mistake (P = VI², R = V × I, P ∝ V,
- * the rated power at the wrong p.d., the time left in minutes); the ×2 / ÷2 / ×10 near-misses are a
- * last resort (`spare`) used only when the named traps do not yield four distinct clean values, and
- * parameters that still cannot supply four are redrawn rather than padded.
+ * statement carries its own unit.
+ *
+ * Every wrong option is the value a named mistake produces: a formula confused with another
+ * (P = VI², R = V × I, P = V/R), a quantity read off the stem in place of the one asked for, a factor
+ * left out, or a conversion done the wrong way. Distractors are never built by adding or subtracting
+ * quantities of different dimensions — nobody subtracts amperes from volts, and "58.5 Ω" is not a
+ * number the exam would print. The ×2 / ÷2 / ×10 near-misses in `spare` are a genuine last resort:
+ * at most one may appear in any option list, and parameters that cannot supply four distinct clean
+ * values are redrawn rather than padded.
  */
 
 const U_V = '\\text{V}', U_A = '\\text{A}', U_W = '\\text{W}', U_OHM = '\\text{Ω}', U_J = '\\text{J}', U_KJ = '\\text{kJ}';
 
 type Mode = 'decimal' | 'fraction';
-type Candidate = { value: Exact | null; trap: string };
+/**
+ * `wide` marks the one family of candidates allowed outside the ±100× option window: the rating
+ * question's R = V/P and I = P/V slips, which are a factor of V² and V away from V²/P but are
+ * exactly the two numbers a candidate writes down when they pick the wrong combination.
+ */
+type Candidate = { value: Exact | null; trap: string; wide?: boolean };
 
 /** Plain number for a stem: 1200, 0.05, 21.6. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
@@ -46,6 +56,13 @@ const supply = (v: number): string => {
   return `${art} ${n(v)} V supply`;
 };
 const Supply = (v: number): string => supply(v).charAt(0).toUpperCase() + supply(v).slice(1);
+
+/**
+ * Supply p.d.s a candidate recognises. Where the stem quotes a supply that the generator derived
+ * (V = I × R_total) the value is only printed when it lands on one of these: "a 46 V supply" reads
+ * as a typo, and the exam uses supplies you would find on a bench or a battery.
+ */
+const STANDARD_SUPPLIES = new Set([6, 9, 12, 15, 18, 20, 24, 30, 36, 40, 48, 50, 60, 80, 90, 100, 120, 150, 180, 200, 240]);
 
 // --------------------------------------------------------------------------- plausible devices
 
@@ -90,12 +107,16 @@ function val(x: number): Exact | null {
   }
 }
 
-/** At most four significant digits once printed: an option a candidate can read at a glance. */
+/**
+ * At most three significant digits once printed. Four digits is one too many: 23.04 W, 187.5 Ω and
+ * 129.6 J are not numbers an examiner sets against a clean answer, and a candidate cannot compare
+ * them at a glance. Parameters whose traps only produce such values are redrawn.
+ */
 function readable(v: Exact): boolean {
   const dec = ratToDecimalString(v.toRat());
   if (dec === null) return true; // shown as a fraction; the denominator check covers it
   const digits = dec.replace('-', '').replace('.', '').replace(/^0+/, '').replace(/0+$/, '');
-  return digits.length <= 4;
+  return digits.length <= 3;
 }
 
 /** Exact fraction a/b in its lowest terms, or null if it is not an exam-clean ratio. */
@@ -115,39 +136,63 @@ function ratio(a: number, b: number): Exact | null {
  * Positive, finite, clean, exam-sized option values. Every option carries the answer's unit, so the
  * window is absolute: anything more than 100 times the answer (or less than a hundredth of it) is
  * dropped, an option no candidate would consider. The limit is 100 rather than 20 because the named
- * "left the time in minutes" slip is exactly a factor of 60; nothing wider is ever offered.
+ * "left the time in minutes" slip is exactly a factor of 60; only a `wide` candidate may go further.
  */
 function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
   const a = answer.toNumber();
-  return ds.filter((d): d is { value: Exact; trap: string } => {
+  const out: Distractor[] = [];
+  for (const d of ds) {
     const v = d.value;
-    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !v.isRational() || !isCleanExact(v).ok) return false;
+    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !v.isRational() || !isCleanExact(v).ok) continue;
     const x = v.toNumber();
-    if (x < 0.001 || x > 5e6) return false;
-    if (x > 100 * a || x < a / 100) return false;
-    const d2 = v.toRat().d;
-    if (mode === 'fraction') return d2 <= 24n;
-    if (!readable(v)) return false;
-    return d2 <= 24n || Number.isInteger(r(x * 1000));
-  });
+    if (x < 0.001 || x > 5e6) continue;
+    const span = d.wide ? 1e4 : 100;
+    if (x > a * span * (1 + 1e-9) || x < (a / span) * (1 - 1e-9)) continue;
+    const den = v.toRat().d;
+    if (mode === 'fraction') {
+      if (den > 24n) continue;
+    } else {
+      if (!readable(v)) continue;
+      if (den > 24n && !Number.isInteger(r(x * 1000))) continue;
+    }
+    out.push({ value: v, trap: d.trap });
+  }
+  return out;
 }
 
 /**
  * Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled
- * out; `spare` near-misses (doubled, halved, a decimal place out) are taken last, only when the named
- * mistakes did not yield four distinct clean values.
+ * out. At most one `spare` near-miss (doubled, halved, a decimal place out) may ever be used, and
+ * only after every named mistake has been tried: ×2 and ÷2 must never cluster an option list
+ * geometrically around the answer. Fewer than four candidates means the parameters are redrawn.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4): Distractor[] {
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4, maxSpare = 1): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const take = (d: Distractor): boolean => {
+    if (out.length >= count || seen.some((s) => s.equals(d.value))) return false;
     seen.push(d.value);
     out.push(d);
+    return true;
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  rng.shuffle(spare).forEach(take);
+  // Fill the remaining slots towards a randomly drawn number of options *below* the answer. Most slips
+  // in an energy question leave a factor out, so without this the answer sits third or fourth of five in
+  // almost every instance and both extremes can be discarded unread.
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
+  let used = 0;
+  for (const d of rng.shuffle(spare)) {
+    if (out.length >= count || used >= maxSpare) break;
+    if (take(d)) used++;
+  }
   return out;
 }
 
@@ -168,7 +213,7 @@ interface Pack {
   mode?: Mode;
   must: Candidate[];
   extra: Candidate[];
-  /** generic near-misses, used only if the named mistakes ran short */
+  /** generic near-misses; at most one is ever used, and only if the named mistakes ran short */
   spare?: Candidate[];
   solution: string;
   trap: string;
@@ -219,12 +264,13 @@ function ohmVQ(rng: RNG): Generated | null {
     unit: U_V,
     must: [
       { value: val(R / I), trap: 'divided instead of multiplying: V = IR' },
-      { value: val(I + R), trap: 'added the current and the resistance' },
+      { value: val(I * I * R), trap: 'gave the power VI in watts, not the p.d.' },
     ],
     extra: [
       { value: val(I / R), trap: 'inverted the product: divided the current by the resistance' },
-      { value: val(V * I), trap: 'gave the power VI in watts, not the p.d.' },
-      { value: val(R - I), trap: 'subtracted the current from the resistance' },
+      { value: val(R), trap: 'quoted the resistance as the p.d.' },
+      { value: val(I * R * R), trap: 'multiplied by the resistance twice' },
+      { value: val(I), trap: 'quoted the current as the p.d.' },
     ],
     spare: [
       { value: val(2 * V), trap: 'doubled the p.d.' },
@@ -255,8 +301,10 @@ function ohmIQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val((V * V) / R), trap: 'gave the power V²/R in watts, not the current' },
-      { value: val(V - R), trap: 'subtracted the resistance from the p.d.' },
       { value: val(V / (R * R)), trap: 'divided by R² instead of R' },
+      { value: val(V), trap: 'quoted the supply p.d. as the current' },
+      { value: val(R), trap: 'quoted the resistance as the current' },
+      { value: val((V / R) * (V / R)), trap: 'squared the current' },
     ],
     spare: [
       { value: val(2 * I), trap: 'doubled the current' },
@@ -287,9 +335,11 @@ function ohmRQ(rng: RNG): Generated | null {
       { value: val(I / V), trap: 'inverted the fraction: R = I/V' },
     ],
     extra: [
-      { value: val(V - I), trap: 'subtracted the current from the p.d.' },
       { value: val(V / (I * I)), trap: 'divided by I² instead of I (that mixes R = V/I with P = I²R)' },
       { value: val(I * I * V), trap: 'multiplied by the current twice' },
+      { value: val(V), trap: 'quoted the supply p.d. as the resistance' },
+      { value: val((V * V) / I), trap: 'squared the p.d. as well' },
+      { value: val(I), trap: 'quoted the current as the resistance' },
     ],
     spare: [
       { value: val(2 * R), trap: 'doubled the resistance' },
@@ -320,9 +370,11 @@ function powerVIQ(rng: RNG): Generated | null {
       { value: val(V / I), trap: 'divided instead of multiplying (that is the resistance)' },
     ],
     extra: [
-      { value: val(V + I), trap: 'added the p.d. and the current' },
       { value: val(V * V * I), trap: 'squared the p.d. as well' },
       { value: val(V * I * I * I), trap: 'cubed the current' },
+      { value: val(V), trap: 'quoted the supply p.d. as the power' },
+      { value: val(I), trap: 'quoted the current as the power' },
+      { value: val(V / (I * I)), trap: 'divided by the current twice' },
     ],
     spare: [
       { value: val(2 * P), trap: 'doubled the power' },
@@ -358,6 +410,8 @@ function powerI2RQ(rng: RNG): Generated | null {
       { value: val((I * I) / R), trap: 'divided by R instead of multiplying' },
       { value: val(I * I * R * R), trap: 'squared the resistance as well as the current' },
       { value: val(I * I), trap: 'squared the current but forgot to multiply by the resistance' },
+      { value: val(I * R * I * R), trap: 'used V² without dividing by the resistance' },
+      { value: val(R), trap: 'quoted the resistance as the power' },
     ],
     spare: [
       { value: val(2 * P), trap: 'doubled the power' },
@@ -428,22 +482,23 @@ function energyPtQ(rng: RNG): Generated | null {
   const pText = inKW ? `${n(Pstated)} kW` : `${Pstated} W`;
   const tText = `${tStated} minute${tStated === 1 ? '' : 's'}`;
   const d = deviceForPower(rng, P);
-  // Both minute slips are real, but offering "÷ 60" and "× 60" together would stretch the option list
-  // over a factor of 3600, so each question shows one of them.
-  const overshoot = rng.bool(0.5);
+  // Every wrong option here is one of the conversions the question is about, so both minute slips are
+  // offered: leaving the time in minutes and multiplying by 60 a second time are equally common, and a
+  // ×2 near-miss in their place would say nothing about the mistake.
   return pack(rng, {
     stem: `${d.subject} of power ${pText} is switched on for ${tText}. Find the energy it transfers, in ${unitName}.`,
     answer,
     unit,
     must: [
-      { value: overshoot ? null : val(Pstated * tStated), trap: `multiplied the numbers as they stand (${pText} × ${tText}) without converting` },
-      { value: overshoot ? null : val(P * tStated * scale), trap: 'left the time in minutes instead of converting it to seconds' },
+      { value: val(Pstated * tStated), trap: `multiplied the numbers as they stand (${pText} × ${tText}) without converting` },
+      { value: val(P * tStated * scale), trap: 'left the time in minutes instead of converting it to seconds' },
     ],
     extra: [
-      { value: overshoot ? val(Ej * scale * 60) : null, trap: 'multiplied by 60 once too often' },
-      { value: val((P + t) * scale), trap: 'added the power and the time instead of multiplying' },
+      { value: val(Ej * scale * 60), trap: 'multiplied by 60 once too often' },
       { value: inKW ? val(Pstated * t * scale) : null, trap: 'left the power in kilowatts instead of converting it to watts' },
       { value: inKJ ? val(Ej / 100) : null, trap: 'divided the joules by 100 instead of 1000 to reach kilojoules' },
+      { value: val(P * 60 * scale), trap: 'used 60 s instead of the stated number of minutes' },
+      { value: inKJ ? null : val(t), trap: 'quoted the time in seconds as the energy' },
     ],
     spare: [
       { value: val(2 * Ej * scale), trap: 'doubled the energy' },
@@ -492,6 +547,10 @@ function energyVItQ(rng: RNG): Generated | null {
       { value: val(I * t * scale), trap: 'forgot the p.d. — that product is the charge in coulombs' },
       { value: val(V * t * scale), trap: 'forgot the current' },
       { value: val((V / I) * t * scale), trap: 'divided the p.d. by the current instead of multiplying' },
+      { value: val((I / V) * t * scale), trap: 'divided the current by the p.d. instead of multiplying' },
+      { value: val(V * V * I * t * scale), trap: 'squared the p.d. as well' },
+      { value: val(P * 60 * scale), trap: 'used 60 s instead of the stated number of minutes' },
+      { value: inKJ ? null : val(t), trap: 'quoted the time in seconds as the energy' },
     ],
     spare: [
       { value: val(2 * Ej * scale), trap: 'doubled the energy' },
@@ -526,9 +585,11 @@ function currentFromRatingQ(rng: RNG): Generated | null {
       { value: val((V * V) / P), trap: 'gave the resistance of the appliance, not the current' },
       { value: inKW ? val(Pstated) : null, trap: 'quoted the power rating in kilowatts as the current' },
       { value: val(P * V), trap: 'multiplied instead of dividing: I = P/V' },
-      { value: val(P - V), trap: 'subtracted the p.d. from the power' },
       { value: val(Math.sqrt(P / V)), trap: 'used P = VI² and took a square root' },
       { value: val(P / (V * V)), trap: 'divided by V² instead of V' },
+      { value: val(V), trap: 'quoted the supply p.d. as the current' },
+      { value: val(P), trap: 'quoted the power rating in watts as the current' },
+      { value: inKW ? val(Pstated * V) : null, trap: 'multiplied the rating in kilowatts by the supply p.d. instead of dividing' },
     ],
     spare: [
       { value: val((P / V) * 10), trap: 'slipped a decimal place' },
@@ -563,14 +624,17 @@ function bulbResistanceQ(rng: RNG): Generated | null {
     answer,
     unit: U_OHM,
     must: [
-      { value: val(V / P), trap: 'used R = V/P instead of R = V²/P' },
-      { value: val(P / V), trap: 'gave the current the device draws, not its resistance' },
+      // the two ways of pairing V with P: both are values a candidate writes down, and for a
+      // low-current lamp they sit far below V²/P, so they are the one `wide` family in this file
+      { value: val(V / P), trap: 'used R = V/P instead of R = V²/P', wide: true },
+      { value: val(P / V), trap: 'gave the current the device draws, not its resistance', wide: true },
     ],
     extra: [
       { value: val(P), trap: 'quoted the power rating as the resistance' },
       { value: val(V), trap: 'quoted the rated p.d. as the resistance' },
       { value: val(V * P), trap: 'multiplied instead of dividing' },
       { value: val((P * P) / V), trap: 'squared the power instead of the p.d.' },
+      { value: val((V * V) / (P * P)), trap: 'squared the power as well as the p.d.' },
     ],
     spare: [
       { value: val(2 * R), trap: 'doubled the resistance' },
@@ -612,6 +676,7 @@ function heatInResistorQ(rng: RNG): Generated | null {
       { value: inKJ ? null : val(P), trap: 'gave the power in watts, not the energy' },
       { value: val(I * R * R * t * scale), trap: 'squared the resistance instead of the current' },
       { value: val(I * I * t * scale), trap: 'forgot the resistance' },
+      { value: inMin ? null : val((P * t * scale) / 60), trap: 'divided by 60, as if the time had been given in minutes' },
       { value: inKJ ? val(Ej / 100) : null, trap: 'divided the joules by 100 instead of 1000 to reach kilojoules' },
     ],
     spare: [
@@ -647,6 +712,7 @@ function currentFromPRQ(rng: RNG): Generated | null {
       { value: val(P / (R * R)), trap: 'divided by R² instead of R' },
       { value: val(R / P), trap: 'inverted the fraction' },
       { value: val(P / (2 * R)), trap: 'halved P/R instead of taking its square root' },
+      { value: val(R), trap: 'quoted the resistance as the current' },
     ],
     spare: [
       { value: val(2 * I), trap: 'doubled the current' },
@@ -720,8 +786,8 @@ function resistanceRatioQ(rng: RNG): Generated | null {
         { value: ratio(P1 * P1, P2 * P2), trap: 'squared the inverted ratio' },
       ],
       spare: [
-        { value: ratio(2 * P2, P1), trap: 'arithmetic slip in the ratio' },
-        { value: ratio(P2, 2 * P1), trap: 'arithmetic slip in the ratio' },
+        { value: ratio(P2, P1 + P2), trap: 'gave the share of the total power rather than the ratio of the resistances' },
+        { value: ratio(P1 + P2, P1), trap: 'compared the total power with the power of the first lamp' },
       ],
       solution: `$R = \\dfrac{V^2}{P}$ and the p.d. is the same for both, so $\\dfrac{R_1}{R_2} = \\dfrac{P_2}{P_1} = \\dfrac{${P2}}{${P1}} = ${answer.toLatex()}$.`,
       trap: 'At a fixed p.d. the more powerful lamp has the smaller resistance: R ∝ 1/P.',
@@ -747,7 +813,8 @@ function resistanceRatioQ(rng: RNG): Generated | null {
       { value: ratio(V1 * V1 * V1, V2 * V2 * V2), trap: 'cubed the p.d. ratio' },
     ],
     spare: [
-      { value: ratio(2 * V1, V2), trap: 'arithmetic slip in the ratio' },
+      { value: ratio(V1 * V1, V2), trap: 'squared only the first p.d.' },
+      { value: ratio(V1, V2 * V2), trap: 'squared only the second p.d.' },
     ],
     solution: `$R = \\dfrac{V^2}{P}$ with $P$ the same for both, so $\\dfrac{R_1}{R_2} = \\dfrac{V_1^2}{V_2^2} = \\dfrac{${V1 * V1}}{${V2 * V2}} = ${answer.toLatex()}$.`,
     trap: 'R = V²/P: the p.d. ratio must be squared, and a higher rated p.d. means a larger resistance for the same power.',
@@ -763,7 +830,10 @@ function seriesPowerQ(rng: RNG): Generated | null {
   if (R1 === R2) return null;
   const V = r(I * (R1 + R2));
   const P1 = r(I * I * R1);
-  if (!Number.isInteger(V) || V < 6 || V > 240 || !Number.isInteger(P1) || P1 < 2 || P1 > 2000) return null;
+  // the supply is derived from I and the pair, so it is only printed when it is one a candidate reads
+  // as a supply: "a 46 V supply" would look like a misprint
+  if (!STANDARD_SUPPLIES.has(V)) return null;
+  if (!Number.isInteger(P1) || P1 < 2 || P1 > 2000) return null;
   const answer = val(P1);
   if (!answer) return null;
   return pack(rng, {
@@ -779,6 +849,7 @@ function seriesPowerQ(rng: RNG): Generated | null {
       { value: val(I * R1), trap: 'that is the p.d. across the resistor, in volts' },
       { value: val(V / (R1 + R2)), trap: 'gave the current, not the power' },
       { value: val(I * (R1 + R2)), trap: 'used the total resistance with P = IR' },
+      { value: val(I * I * (R1 + R2)), trap: 'used the total resistance in P = I²R' },
     ],
     spare: [
       { value: val(2 * P1), trap: 'doubled the power' },
@@ -839,10 +910,11 @@ export default defineTemplate({
         return Math.abs(got * p.I - p.V) < 1e-9 && Math.abs(p.I * p.I * got - p.V * p.I) < 1e-9;
       }
       case 'power-vi': {
-        // energy route: in 5 s a charge of 5I coulombs passes through a p.d. of V volts
-        const t = 5;
-        const Q = p.I * t;
-        return close((Q * p.V) / t);
+        // resistance route: get R from Ohm's law on the stem's numbers, then use the two power
+        // formulas that the generator did not use (it multiplied V by I directly)
+        const R = p.V / p.I;
+        if (!(Math.abs(p.I * p.I * R - got) < 1e-9 * Math.max(1, got))) return false;
+        return close((p.V * p.V) / R);
       }
       case 'power-i2r': {
         // build the p.d. by adding R volts for each ampere, then use P = V²/R

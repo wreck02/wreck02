@@ -243,6 +243,9 @@ function halfLivesFromRatio(rng: RNG): Generated | null {
   const A0 = rng.pick([64, 128, 256, 320, 640, 960, 1280]);
   const A1 = A0 / ratio;
   if (!Number.isInteger(A1) || A1 < 1) return null;
+  // The answer is a count of halvings — a single-digit number. Only the headline trap (the ratio itself)
+  // may be large; anything else in the hundreds is eliminated on sight and wastes an option.
+  const small = (x: number): number | null => (x >= 1 && x <= 3 * k + 4 ? x : null);
   return pack(rng, {
     stem: `The activity of a radioactive source falls from ${A0} Bq to ${num(A1)} Bq. Find the number of half-lives that have passed.`,
     answer: k,
@@ -252,9 +255,11 @@ function halfLivesFromRatio(rng: RNG): Generated | null {
     ],
     extra: [
       { value: k - 1, trap: 'counted one halving too few' },
+      { value: k + 2, trap: 'counted two halvings too many' },
+      { value: small(k - 2), trap: 'counted two halvings too few' },
       { value: 2 * k, trap: 'doubled the number of half-lives' },
-      { value: ratio / 2, trap: 'halved the ratio instead of counting the halvings' },
-      { value: A0 - A1, trap: 'gave the drop in activity' },
+      { value: small(ratio / 2), trap: 'halved the ratio instead of counting the halvings' },
+      { value: small(Math.round(k / 2)), trap: 'halved the number of halvings' },
     ],
     solution: `$${A0} \\div ${num(A1)} = ${ratio} = 2^{${k}}$, so ${k} half-lives have passed.`,
     trap: 'Count the halvings: a fall to 1/32 is five half-lives, not 32.',

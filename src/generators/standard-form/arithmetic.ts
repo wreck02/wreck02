@@ -60,14 +60,35 @@ function pickExp(rng: RNG, lo: number, hi: number): number {
   return rng.pick(pool);
 }
 
+/**
+ * Choose the four distractors with a random number of them below the answer.
+ *
+ * The mistakes here are exponent slips, and a list built from k ± 1 and k ± 2 is symmetric about the
+ * answer: the answer would be the middle of the five options in more than half of all questions, and
+ * never the largest or the smallest. Drawing how many fall below it first — headline traps first
+ * within each side — makes its position worth nothing.
+ */
+function balance(rng: RNG, answer: Exact, pool: Distractor[], count: number): Distractor[] {
+  const headsFirst = (ds: Distractor[]) => [...ds.filter((d) => d.must), ...ds.filter((d) => !d.must)];
+  const below = headsFirst(pool.filter((d) => d.value.cmp(answer) < 0));
+  const above = headsFirst(pool.filter((d) => d.value.cmp(answer) > 0));
+  const lo = Math.max(0, count - above.length);
+  const hi = Math.min(count, below.length);
+  if (lo > hi) return pool.slice(0, count);
+  const nBelow = rng.int(lo, hi);
+  return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
+}
+
 function pack(rng: RNG, stem: string, ans: Exact, ds: Distractor[], solution: string, trap: string, tags: string[], params: Record<string, unknown>): Generated | null {
   if (!displayable(ans)) return null;
   const pool = ds.filter((d) => !d.value.equals(ans));
   if (pool.length < 4) return null; // never pad: redraw instead
+  const chosen = balance(rng, ans, rng.shuffle(pool), 4);
+  if (chosen.length < 4) return null;
   return {
     stem,
     answer: { kind: 'exact' as const, value: ans, format: 'sf' as const },
-    options: buildOptions(rng, ans, pool, { format: 'sf' }),
+    options: buildOptions(rng, ans, chosen, { format: 'sf' }),
     solution,
     trap,
     tags,
@@ -102,13 +123,22 @@ function convert(rng: RNG): Generated | null {
   const mant = second === 0 ? first : first + second / 10;
   const k = rng.bool(0.6) ? rng.int(2, 7) : -rng.int(2, 5);
   const ans = sf(mant, k);
+  // The sign slip is only offered for a number below 1, where writing 3.2 x 10^{3} for 0.0032 is the
+  // mistake the mark scheme records. A number in the millions with a negative exponent is discarded
+  // on sight, and two such options would leave only two live distractors.
+  const flip: { value: Exact | null; trap: string } = k < 0
+    ? (rng.bool()
+      ? { value: sf(mant, -k), trap: 'wrong sign on the exponent' }
+      : { value: sf(mant, -k + 1), trap: 'wrong sign on the exponent and an off-by-one' })
+    : { value: null, trap: '' };
   const ds = keep([
     { value: sf(mant, k + 1), trap: k > 0 ? 'counted the digits instead of the places the point moves' : 'counted the zeros after the point rather than the places the point moves' },
     { value: sf(mant, k - 1), trap: 'counted one place too few' },
-    { value: sf(mant, -k), trap: 'wrong sign on the exponent' },
-    { value: sf(mant, -k + (k > 0 ? -1 : 1)), trap: 'wrong sign on the exponent and an off-by-one' },
+    flip,
     { value: sf(mant, k + 2), trap: 'moved the decimal point two places too many' },
     { value: sf(mant, k - 2), trap: 'moved the decimal point two places too few' },
+    { value: sf(mant, k + 3), trap: 'a whole group of three zeros counted twice' },
+    { value: sf(mant, k - 3), trap: 'a whole group of three zeros missed' },
   ]);
   const num = ordinary(digits, k);
   const stem = `Write $${num}$ in standard form.`;
@@ -188,6 +218,8 @@ function renormProduct(rng: RNG): Generated | null {
   const ds = keep([
     { value: sf(ab / 10, m + n), trap: 'renormalised the mantissa but forgot to add 1 to the exponent' },
     { value: sf(ab / 10, m + n - 1), trap: 'adjusted the exponent the wrong way when renormalising' },
+    { value: sf(ab, m + n + 1), trap: 'added 1 to the exponent without dividing the mantissa by 10' },
+    { value: sf(ab, m + n + 2), trap: 'renormalised twice: the exponent went up by 2' },
     { value: sf(ab, m * n), trap: 'multiplied the exponents' },
     { value: sf(a + b, m + n), trap: 'added the mantissas' },
     { value: sf(ab, m - n), trap: 'subtracted the exponents' },
@@ -292,7 +324,7 @@ function squareRoot(rng: RNG): Generated | null {
   const sw = even ? s / 10 : s; // √Mw
   const ds = keep([
     { value: sf(Mw / 2, kA), trap: 'halved the mantissa instead of square-rooting it' },
-    { value: sf(sw, Ew), trap: even ? 'square-rooted the mantissa but left the power of ten alone' : `rewrote as ${Mw} \\times 10^{${Ew}} but forgot to halve the exponent` },
+    { value: sf(sw, Ew), trap: even ? 'square-rooted the mantissa but left the power of ten alone' : `rewrote as $${Mw} \\times 10^{${Ew}}$ but forgot to halve the exponent` },
     { value: even ? null : sf(sw, Ex), trap: 'square-rooted the mantissa but left the power of ten alone' },
     { value: sf(sw, kA + 1), trap: even ? 'exponent off by one' : `halved ${Ex + 1} instead of rewriting with the even exponent ${Ew}` },
     { value: sf(sw, kA - 1), trap: 'exponent off by one' },

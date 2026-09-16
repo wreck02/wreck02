@@ -299,13 +299,13 @@ function parabolaAxisQ(rng: RNG): Generated | null {
 
 function lineParabolaQ(rng: RNG): Generated | null {
   const a = rng.pick([1, 1, 2, 3]);
-  const r1 = rng.int(-4, 3);
+  const r1 = rng.int(-5, 4);
   const w = rng.pick([1, 2, 2, 3, 3, 4, 5, 6]);
   const r2 = r1 + w;
-  if (r2 > 5 || a * w ** 3 > 900) return null;
+  if (r2 > 6 || a * w ** 3 > 900) return null;
   const m = a * (r1 + r2);
   const c = -a * r1 * r2;
-  if (m === 0 || Math.abs(m) > 12 || Math.abs(c) > 24) return null;
+  if (m === 0 || Math.abs(m) > 14 || Math.abs(c) > 30) return null;
   const line: Poly = [m, c];
   const para: Poly = [a, 0, 0];
   const area = frac(a * w ** 3, 6);
@@ -449,7 +449,7 @@ function cubicCrossQ(rng: RNG): Generated | null {
     { value: area.mulRat(frac(4, 3).toRat()), trap: 'divided x⁴ by 3 instead of by 4' },
     { value: oldPowInt(f, lo, mid).abs().add(oldPowInt(f, mid, hi).abs()), trap: 'divided by the old powers' },
     { value: samePowInt(f, lo, mid).abs().add(samePowInt(f, mid, hi).abs()), trap: 'divided by the new powers but forgot to raise them' },
-    { value: area.mulRat(frac(2, 3).toRat()), trap: 'arithmetic slip with the ¼' },
+    { value: area.mulRat(frac(2, 3).toRat()), trap: 'used x⁴/6 in place of x⁴/4 when integrating' },
     { value: E(hi - lo).mul(lobe), trap: 'multiplied one region by the width of the interval' },
   ];
   return finish(rng, {

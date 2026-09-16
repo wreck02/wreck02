@@ -20,8 +20,14 @@ function cleanOnly(ds: Candidate[]): Distractor[] {
   return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
-/** Every distinct `must` candidate (the spec-named traps) goes in before any `extra` one. */
+/**
+ * Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never
+ * shuffled out. The remaining slots are filled towards a randomly chosen number of options *below* the
+ * answer, so where the correct option lands in the sorted list is a property of the draw and not of the
+ * sub-variant.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -30,7 +36,14 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && below.length + above.length > 0) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
@@ -53,6 +66,17 @@ function choiceOrNull(rng: RNG, correct: string, wrong: { display: string; trap:
   const distinct = new Set(wrong.map((w) => w.display).filter((d) => d !== correct));
   if (distinct.size < 4) return null;
   return buildChoiceOptions(rng, correct, wrong);
+}
+
+/**
+ * "1/2", "-1/2", "2": a root in plain text. Trap lines are printed verbatim by the UI, so they must
+ * never contain LaTeX (\\frac{1}{2} would be shown literally); toLatex() belongs in the stem and solution.
+ */
+function rootText(s: number, m: number): string {
+  const g = (a: number, b: number): number => (b === 0 ? Math.abs(a) : g(b, a % b));
+  const d = g(Math.abs(s), m) || 1;
+  const num = s / d, den = m / d;
+  return den === 1 ? `${num}` : `${num}/${den}`;
 }
 
 /** Horner evaluation of a polynomial given highest power first (works for rational x too). */
@@ -151,8 +175,9 @@ function remainderQ(level: Level) {
       { value: E(d), trap: 'read off the constant term as the remainder' },
       { value: cubeSlip !== null ? E(cubeSlip) : null, trap: `took (${a})³ as positive` },
       { value: squareSlip !== null ? E(squareSlip) : null, trap: `took (${a})² as negative` },
-      { value: E(R + 1), trap: 'arithmetic slip' },
-      { value: E(R - 1), trap: 'arithmetic slip' },
+      { value: a !== 1 ? E(horner(coefs, 1)) : null, trap: 'evaluated f(1) instead of f at the root of the divisor' },
+      { value: a !== -1 ? E(horner(coefs, -1)) : null, trap: 'evaluated f(-1) instead of f at the root of the divisor' },
+      { value: E(R - coefs[0] * a ** (coefs.length - 1)), trap: 'forgot the leading term' },
     ];
     return {
       stem: `Find the remainder when $${poly(coefs)}$ is divided by $${rootFactor(a)}$.`,
@@ -191,12 +216,18 @@ function findKQ(rng: RNG): Generated | null {
     { value: solveFor(-a, false), trap: `used f(${-a}) = 0 instead of f(${a}) = 0` },
     { value: answer.neg(), trap: 'sign slip when moving the terms across' },
   ];
+  const solveWith = (rest: number): Exact | null => {
+    const div = slot === 'x2' ? a * a : a;
+    return div === 0 ? null : frac(-rest, div);
+  };
+  const other = slot === 'x2' ? c1 * a : c2 * a * a; // the known term that is not the unknown's
   const extra: Candidate[] = [
     { value: solveFor(a, true), trap: 'forgot the constant term' },
     { value: slot === 'x2' && a !== 1 ? frac(-(a ** 3 + c1 * a + q), a) : null, trap: 'divided by a instead of a² (the unknown multiplies x²)' },
-    { value: E(k + 1), trap: 'arithmetic slip' },
-    { value: E(k - 1), trap: 'arithmetic slip' },
+    { value: solveWith(other + q), trap: `forgot the ${a}³ term when substituting` },
+    { value: solveWith(a ** 3 + other - q), trap: 'sign slip on the constant term' },
     { value: E(-q), trap: 'gave minus the constant term' },
+    { value: E(q), trap: 'read off the constant term of the cubic' },
   ];
   const aTex = a < 0 ? `(${a})` : `${a}`;
   const st = (v: number, sym: string) => ` ${v < 0 ? '-' : '+'} ${Math.abs(v) === 1 && sym ? '' : Math.abs(v)}${sym}`;
@@ -205,11 +236,12 @@ function findKQ(rng: RNG): Generated | null {
     : `${aTex}^{3}${st(c2 * a * a, '')}${st(a, 'k')}${st(q, '')} = 0`;
   const coefK = slot === 'x2' ? a * a : a;
   const rest = -(a ** 3 + (slot === 'x2' ? c1 * a : c2 * a * a) + q);
+  const kTerm = coefK === 1 ? 'k' : coefK === -1 ? '-k' : `${coefK}k`;
   return {
     stem: `Given that $${rootFactor(a)}$ is a factor of $${polyWithK(c2, c1, q, slot)}$, find the value of $k$.`,
     answer: { kind: 'exact', value: answer },
     options: options(rng, answer, must, extra),
-    solution: `By the factor theorem $f(${a}) = 0$: $${eq}$, so $${coefK === 1 ? '' : coefK}k = ${rest}$ and $k = ${k}$.`,
+    solution: `By the factor theorem $f(${a}) = 0$: $${eq}$, so $${kTerm} = ${rest}$${coefK === 1 ? '' : `, i.e. $k = ${k}$`}.`,
     trap: `A factor (x ${a >= 0 ? '-' : '+'} ${Math.abs(a)}) means f(${a}) = 0; substitute x = ${a} (not ${-a}) and keep every term, including the constant.`,
     tags: ['factor-theorem', 'polynomials', 'unknown-coefficient'],
     params: { variant: 'find-k', known, slot, a },
@@ -228,8 +260,9 @@ function halfQ(rng: RNG): Generated | null {
   const R = hornerExact(coefs, root);
   if (R.isZero() || !isCleanExact(R).ok || R.toRat().d > 4n || Math.abs(R.toNumber()) > 40) return null;
   const wrongRoot = hornerExact(coefs, root.neg());
+  const rTxt = rootText(s, m), negTxt = rootText(-s, m);
   const must: Candidate[] = [
-    { value: wrongRoot, trap: `evaluated at x = ${root.neg().toLatex()} instead of x = ${root.toLatex()}` },
+    { value: wrongRoot, trap: `evaluated at x = ${negTxt} instead of x = ${rTxt}` },
     { value: E(horner(coefs, s)), trap: `evaluated at x = ${s}, ignoring the coefficient of x in the divisor` },
   ];
   const extra: Candidate[] = [
@@ -245,7 +278,7 @@ function halfQ(rng: RNG): Generated | null {
     answer: { kind: 'exact', value: R },
     options: options(rng, R, must, extra),
     solution: `$${factor(m, -s)} = 0$ when $x = ${rt}$, so the remainder is $f\\left(${rt}\\right) = ${substFracTex(coefs, rt)} = ${R.toLatex()}$.`,
-    trap: `For a divisor (${m}x ${s > 0 ? '-' : '+'} ${Math.abs(s)}) evaluate at x = ${rt}, the value that makes it zero, not at x = ${s} or ${-s}.`,
+    trap: `For a divisor (${m}x ${s > 0 ? '-' : '+'} ${Math.abs(s)}) evaluate at x = ${rTxt}, the value that makes it zero, not at x = ${s} or ${-s}.`,
     tags: ['remainder-theorem', 'polynomials'],
     params: { variant: 'half', coefs, m, s },
     typedAllowed: true,
@@ -281,12 +314,14 @@ function twoConditionsQ(rng: RNG): Generated | null {
     { value: E(askA ? b : a), trap: `gave the value of ${askA ? 'b' : 'a'} instead of ${askA ? 'a' : 'b'}` },
     { value: pick(flipped), trap: `substituted x = ${-s} and x = ${-m} instead of x = ${s} and x = ${m}` },
   ];
+  const swappedConds = solve2(s * s, s, -(s ** 3) - r, m * m, m, R - m ** 3 - r);
+  const noConst = solve2(s * s, s, R - s ** 3, m * m, m, -(m ** 3));
   const extra: Candidate[] = [
     { value: answer.neg(), trap: 'sign slip when solving the simultaneous equations' },
     { value: pick(zeroRem), trap: `treated the remainder ${R} as zero (as if (x ${s >= 0 ? '-' : '+'} ${Math.abs(s)}) were a factor)` },
     { value: oneEq, trap: `used only the factor condition and assumed ${askA ? 'b' : 'a'} = 0` },
-    { value: answer.add(E(1)), trap: 'arithmetic slip' },
-    { value: answer.sub(E(1)), trap: 'arithmetic slip' },
+    { value: pick(swappedConds), trap: `swapped the two conditions: took f(${s}) = 0 and f(${m}) = ${R}` },
+    { value: pick(noConst), trap: `left the constant term ${r} out of both equations` },
   ];
   const sTex = s < 0 ? `(${s})` : `${s}`;
   const mTex = m < 0 ? `(${m})` : `${m}`;
@@ -332,12 +367,16 @@ function factoriseQ(rng: RNG): Generated | null {
   const coefs = mul(mul([1, -given], [1, -r2]), [1, -r3]);
   if (coefs.some((c) => Math.abs(c) > 40)) return null;
   const correct = productTex(roots);
+  // Every option keeps the factor the stem hands the candidate: an option without it is eliminated on
+  // sight. The two single-sign slips are named by the root they come from, so no trap text is repeated.
   const wrong: { display: string; trap: string }[] = [
-    { display: productTex([given, -r2, -r3]), trap: 'signs of the two remaining roots flipped: a root r gives the factor (x − r)' },
-    { display: productTex([given, -r2, r3]), trap: 'sign of one bracket wrong' },
-    { display: productTex([given, r2, -r3]), trap: 'sign of one bracket wrong' },
-    { display: productTex([-given, -r2, -r3]), trap: 'every sign flipped' },
-    ...otherPairs(r2, r3).slice(0, 2).map(([u, v]) => ({ display: productTex([given, u, v]), trap: 'quadratic factor split into a pair with the right product but the wrong sum' })),
+    { display: productTex([given, -r2, -r3]), trap: 'signs of both remaining roots flipped: a root r gives the factor (x − r)' },
+    { display: productTex([given, -r2, r3]), trap: `sign wrong in the bracket for the root ${r2}: it gives ${rootFactor(r2)}` },
+    { display: productTex([given, r2, -r3]), trap: `sign wrong in the bracket for the root ${r3}: it gives ${rootFactor(r3)}` },
+    ...otherPairs(r2, r3)
+      .filter(([u, v]) => !(u === -r2 && v === -r3) && !(u === -r3 && v === -r2))
+      .slice(0, 3)
+      .map(([u, v]) => ({ display: productTex([given, u, v]), trap: `quadratic factor split as ${rootFactor(u)}${rootFactor(v)}: the right product but the wrong sum` })),
   ];
   const opts = choiceOrNull(rng, correct, wrong);
   if (!opts) return null;

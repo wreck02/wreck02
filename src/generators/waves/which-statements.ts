@@ -107,8 +107,10 @@ function airSound(rng: RNG): Built | null {
         'The pitch of the note is determined by the frequency of the wave.',
         'The pitch of the note is determined by the amplitude of the wave.',
         'pitch goes with frequency; amplitude sets the loudness'),
+      // group 'double': the doubled-frequency statements are derived from this one, and quoting both
+      // lets a candidate settle them against each other instead of against the numbers
       numeric(rng, 'lambda', 1, lam, [r(f / v), r(lam / 2), r(2 * lam)], (x) => `The wavelength of the sound in air is ${val(x, M)}.`,
-        `$\\lambda = v/f = ${v}/${f} = ${n(lam)}$ m`),
+        `$\\lambda = v/f = ${v}/${f} = ${n(lam)}$ m`, 'double'),
       qual(rng, 'speed-f', 2,
         'Doubling the frequency of the note would leave the speed of the sound in the air unchanged.',
         'Doubling the frequency of the note would double the speed of the sound in the air.',
@@ -190,8 +192,9 @@ function stringWave(rng: RNG): Built | null {
         'The wave on the string is transverse.',
         'The wave on the string is longitudinal.',
         'the string moves at right angles to the direction the wave travels'),
+      // group 'change': the doubled-speed statements are this wavelength scaled, so only one may appear
       numeric(rng, 'lambda', 1, lam, [r(f / v), r(v * f)], (x) => `The wavelength of the wave is ${val(x, M)}.`,
-        `$\\lambda = v/f = ${v}/${f} = ${n(lam)}$ m`),
+        `$\\lambda = v/f = ${v}/${f} = ${n(lam)}$ m`, 'change'),
       qual(rng, 'tension', 1,
         'Increasing the tension in the string increases the speed of the wave along it.',
         'Increasing the tension in the string decreases the speed of the wave along it.',

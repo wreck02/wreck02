@@ -25,7 +25,12 @@ const U_N = '\\text{N}', U_J = '\\text{J}', U_M = '\\text{m}', U_CM = '\\text{cm
 const NPM = '$\\text{N m}^{-1}$';
 const TAKE_G = 'Take $g = 10\\ \\text{m s}^{-2}$.';
 
-type Candidate = { value: Exact | null; trap: string };
+/**
+ * A candidate distractor. `wide` marks a unit slip (cm read as m): those are the point of a Hooke's law
+ * question, so they may sit up to 100× from the answer; everything else must stay within a factor of 20,
+ * because 100 000 J beside 10 J is not an option list the exam would print.
+ */
+type Candidate = { value: Exact | null; trap: string; wide?: boolean };
 
 /** Plain number for a stem: 1200, 0.05, 22.5. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
@@ -41,28 +46,52 @@ function tryE(f: () => Exact): Exact | null {
   }
 }
 
-/** Positive, finite, clean and exam-sized candidates. */
-function cleanOnly(ds: Candidate[]): Distractor[] {
-  return ds.filter((d): d is { value: Exact; trap: string } => {
+/** Positive, finite, clean candidates that sit close enough to the answer to be weighed against it. */
+function cleanOnly(ds: Candidate[], answer: Exact): Distractor[] {
+  const a = answer.toNumber();
+  const out: Distractor[] = [];
+  for (const d of ds) {
     const v = d.value;
-    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) return false;
+    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) continue;
     const x = v.toNumber();
-    if (x < 0.001 || x > 2e6) return false;
-    return !v.isRational() || Number.isInteger(r(x * 1000)); // decimals must terminate: no 10/3 among 30 and 0.3
-  });
+    if (x < 0.001 || x > 2e6) continue;
+    const span = d.wide ? 100 : 20;
+    if (x > span * a || x < a / span) continue;
+    if (v.isRational() && !Number.isInteger(r(x * 1000))) continue; // decimals must terminate: no 10/3 among 30 and 0.3
+    out.push({ value: v, trap: d.trap });
+  }
+  return out;
 }
 
-/** Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled out. */
+/**
+ * Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never
+ * shuffled out. The remaining slots are filled towards a randomly chosen number of options *below* the
+ * answer, so where the correct option lands in the sorted list is a property of the draw and not of the
+ * sub-variant — "the energy is the smallest number" must never be a strategy.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
+  const nums: number[] = [a];
   const take = (d: Distractor) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    // a unit slip may be 100x out, but the list as a whole must stay readable: never 250 N beside 0.25 N
+    const x = d.value.toNumber();
+    if (out.length > 0 && Math.max(...nums, x) / Math.min(...nums, x) > 250) return;
     seen.push(d.value);
+    nums.push(x);
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
@@ -90,7 +119,7 @@ interface Pack {
 
 function pack(rng: RNG, p: Pack): Generated | null {
   if (!p.answer || !isCleanExact(p.answer).ok || p.answer.sign() <= 0) return null;
-  const ds = ranked(rng, p.answer, cleanOnly(p.must), cleanOnly(p.extra));
+  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer), cleanOnly(p.extra, p.answer));
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -125,14 +154,13 @@ function hookeQ(rng: RNG): Generated | null {
       answer: E(F),
       unit: U_N,
       must: [
-        { value: E(k * xcm), trap: 'used the extension in cm rather than m' },
+        { value: E(k * xcm), trap: 'used the extension in cm rather than m', wide: true },
         { value: E(F / 2), trap: 'used ½kx (mixing up the force with the energy ½kx²)' },
       ],
       extra: [
-        { value: E(F / 10), trap: 'converted cm to m with the wrong power of ten' },
-        { value: E(F * 10), trap: 'converted cm to m with the wrong power of ten' },
-        { value: xcm % 10 === 0 || k % 10 === 0 ? E(r(k * x * x)) : null, trap: 'squared the extension' },
-        { value: E(2 * F), trap: 'doubled the force' },
+        { value: E(F * 10), trap: 'converted cm to m by dividing by 10 instead of 100' },
+        { value: E(r(k * x * x)), trap: 'squared the extension' },
+        { value: E(2 * F), trap: 'doubled the force, counting the tension at both ends of the spring' },
       ],
       solution: `$${xcm}\\ \\text{cm} = ${n(x)}\\ \\text{m}$, so $F = kx = ${k} \\times ${n(x)} = ${n(F)}\\ \\text{N}$.`,
       trap: 'Convert the extension to metres before using F = kx with k in N m^-1.',
@@ -141,38 +169,42 @@ function hookeQ(rng: RNG): Generated | null {
     });
   }
   if (ask === 'x') {
+    // asking in cm or in m flips which side of the answer the cm/m slip falls on
+    const inCm = rng.bool(0.6);
+    const s = inCm ? 100 : 1;
     return pack(rng, {
-      stem: `A force of ${n(F)} N stretches a spring of stiffness ${k} ${NPM}. Find the extension of the spring, in cm.`,
-      answer: E(xcm),
-      unit: U_CM,
+      stem: `A force of ${n(F)} N stretches a spring of stiffness ${k} ${NPM}. Find the extension of the spring${inCm ? ', in cm' : ''}.`,
+      answer: E(inCm ? xcm : x),
+      unit: inCm ? U_CM : U_M,
       must: [
-        { value: E(x), trap: 'found the extension in metres and called it cm' },
-        { value: E(r(F * k)), trap: 'multiplied instead of dividing' },
+        { value: E(inCm ? x : xcm), trap: inCm ? 'left the extension in metres and called it cm' : 'gave the extension in cm', wide: true },
+        { value: E(r(2 * x * s)), trap: 'used F = ½kx for the force' },
       ],
       extra: [
-        { value: E(xcm * 10), trap: 'converted m to cm with the wrong power of ten' },
-        { value: E(xcm / 10), trap: 'converted m to cm with the wrong power of ten' },
-        { value: E(2 * xcm), trap: 'used ½kx for the force' },
-        { value: tryE(() => E(k).div(E(F))), trap: 'divided the wrong way round' },
+        { value: E(r((x * s) / 2)), trap: 'used F = 2kx, as if the spring were stretched at both ends' },
+        { value: E(r(x * s * 10)), trap: 'slipped a power of ten in the conversion' },
+        { value: E(r((x * s) / 10)), trap: 'slipped a power of ten in the conversion the other way' },
+        { value: tryE(() => E(k).div(E(F)).mulRat(s)), trap: 'divided the stiffness by the force instead of the force by the stiffness' },
+        { value: E(r(F * k)), trap: 'multiplied instead of dividing' },
       ],
-      solution: `$x = \\dfrac{F}{k} = \\dfrac{${n(F)}}{${k}} = ${n(x)}\\ \\text{m} = ${xcm}\\ \\text{cm}$.`,
-      trap: 'x = F/k comes out in metres; multiply by 100 for cm.',
+      solution: `$x = \\dfrac{F}{k} = \\dfrac{${n(F)}}{${k}} = ${n(x)}\\ \\text{m}${inCm ? ` = ${xcm}\\ \\text{cm}` : ''}$.`,
+      trap: inCm ? 'x = F/k comes out in metres; multiply by 100 for cm.' : 'x = F/k with k in N m^-1 is already in metres: do not convert again.',
       tags: ['hooke', 'extension', 'units'],
-      params: { variant: 'hooke', ask: 'x', k, F },
+      params: { variant: 'hooke', ask: 'x', k, F, inCm },
     });
   }
   return pack(rng, {
     stem: `A force of ${n(F)} N stretches a spring by ${xcm} cm. Find the stiffness of the spring, in ${NPM}.`,
     answer: E(k),
     must: [
-      { value: tryE(() => E(F).div(E(xcm))), trap: 'divided by the extension in cm' },
-      { value: E(r(F * x)), trap: 'multiplied the force by the extension' },
+      { value: tryE(() => E(F).div(E(xcm))), trap: 'divided by the extension in cm', wide: true },
+      { value: E(2 * k), trap: 'used F = ½kx, so doubled the stiffness' },
     ],
     extra: [
-      { value: E(k * 10), trap: 'converted cm to m with the wrong power of ten' },
-      { value: E(k / 10), trap: 'converted cm to m with the wrong power of ten' },
-      { value: tryE(() => E(x).div(E(F))), trap: 'divided the wrong way round' },
-      { value: E(k / 2), trap: 'used ½kx for the force' },
+      { value: E(k / 10), trap: 'divided the extension by 1000, as if it were in millimetres' },
+      { value: E(k * 10), trap: 'converted cm to m by dividing by 10 instead of 100' },
+      { value: E(r(F * x)), trap: 'multiplied the force by the extension' },
+      { value: E(k / 2), trap: 'used F = 2kx, as if the spring were stretched at both ends' },
     ],
     solution: `$${xcm}\\ \\text{cm} = ${n(x)}\\ \\text{m}$, so $k = \\dfrac{F}{x} = \\dfrac{${n(F)}}{${n(x)}} = ${k}\\ \\text{N m}^{-1}$.`,
     trap: 'Stiffness in N m^-1 needs the extension in metres: dividing by the cm value is 100 times too small.',
@@ -184,25 +216,34 @@ function hookeQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 2
 
 function epeQ(rng: RNG): Generated | null {
-  const k = rng.pick([50, 100, 200, 250, 400, 500, 800, 1000]);
-  const xcm = rng.pick([5, 10, 15, 20, 25, 30, 40, 50]);
+  // Long stretches (a bungee pulled 3 m) matter: with x > 1 m the "forgot to square" and "forgot the ½"
+  // slips fall on opposite sides of the answer, so the energy is not always the smallest option.
+  const long = rng.bool(0.4);
+  const k = long ? rng.pick([20, 25, 40, 50, 80, 100]) : rng.pick([50, 100, 200, 250, 400, 500, 800, 1000]);
+  const xcm = long ? rng.pick([150, 250, 300]) : rng.pick([5, 10, 15, 20, 25, 30, 40, 50]);
   const x = xcm / 100;
   const Ev = r(0.5 * k * x * x);
   if (!tidy(Ev) || !Number.isInteger(r(Ev * 10)) || Ev > 200) return null; // at most one decimal place
+  const ext = long ? `${n(x)} m` : `${xcm} cm`;
+  /** The cm → m slip, which only exists when the stem quotes centimetres; one direction per question. */
+  const cmSlipUp = rng.bool(0.5);
   const askK = rng.bool(0.3);
   if (askK) {
+    const cord = long ? rng.pick(['An elastic cord', 'A bungee cord']) : rng.pick(['A spring', 'A light spring']);
     return pack(rng, {
-      stem: `A spring stores ${n(Ev)} J of elastic potential energy when it is stretched by ${xcm} cm. Find the stiffness of the spring, in ${NPM}.`,
+      stem: `${cord} stores ${n(Ev)} J of elastic potential energy when it is stretched by ${ext}. Find the stiffness, in ${NPM}.`,
       answer: E(k),
       must: [
         { value: E(k / 2), trap: 'forgot the ½: used E = kx²' },
-        { value: tryE(() => E(2 * Ev).div(E(x))), trap: 'forgot to square the extension' },
+        { value: E(2 * k), trap: 'halved twice: used E = ¼kx²' },
       ],
       extra: [
-        { value: tryE(() => E(2 * Ev).div(E(xcm * xcm))), trap: 'used the extension in cm' },
+        { value: tryE(() => E(2 * Ev).div(E(x))), trap: 'forgot to square the extension' },
         { value: tryE(() => E(Ev).div(E(x))), trap: 'used E = kx' },
-        { value: E(k * 10), trap: 'slipped a decimal place' },
-        { value: E(k / 10), trap: 'slipped a decimal place' },
+        { value: E(4 * k), trap: 'used half the extension in the formula' },
+        { value: !long && cmSlipUp ? E(k / 100) : null, trap: 'converted the extension to metres by dividing by 10 instead of 100', wide: true },
+        { value: !long && !cmSlipUp ? E(k * 100) : null, trap: 'divided the extension by 1000, as if it were in millimetres', wide: true },
+        { value: E(rng.bool(0.5) ? k * 10 : k / 10), trap: 'slipped a decimal place' },
       ],
       solution: `$\\tfrac12 k x^2 = ${n(Ev)}$ with $x = ${n(x)}\\ \\text{m}$, so $k = \\dfrac{2 \\times ${n(Ev)}}{${n(x)}^2} = \\dfrac{${n(2 * Ev)}}{${n(r(x * x))}} = ${k}\\ \\text{N m}^{-1}$.`,
       trap: 'Double the energy and divide by x² (in m²): k = 2E/x².',
@@ -210,20 +251,22 @@ function epeQ(rng: RNG): Generated | null {
       params: { variant: 'epe-k', Ev, xcm },
     });
   }
-  const spring = rng.pick(['A spring', 'A light spring', 'A bungee cord']);
+  const spring = long ? rng.pick(['A bungee cord', 'An elastic rope']) : rng.pick(['A spring', 'A light spring']);
   return pack(rng, {
-    stem: `${spring} of stiffness ${k} ${NPM} is stretched by ${xcm} cm. Find the elastic potential energy stored.`,
+    stem: `${spring} of stiffness ${k} ${NPM} is stretched by ${ext}. Find the elastic potential energy stored.`,
     answer: E(Ev),
     unit: U_J,
     must: [
       { value: E(r(k * x * x)), trap: 'forgot the ½: used kx²' },
-      { value: E(r(0.5 * k * x)), trap: 'forgot to square the extension' },
+      { value: E(r(0.25 * k * x * x)), trap: 'halved twice: took the average force ½kx and then halved the product as well' },
     ],
     extra: [
-      { value: E(0.5 * k * xcm * xcm), trap: 'used the extension in cm' },
+      { value: E(r(0.5 * k * x)), trap: 'forgot to square the extension' },
       { value: E(r(k * x)), trap: 'gave the force kx instead of the energy' },
-      { value: E(r(0.5 * k * k * x * x)), trap: 'squared the stiffness as well' },
-      { value: E(Ev * 10), trap: 'slipped a decimal place' },
+      { value: E(r(0.125 * k * x * x)), trap: 'used half the extension in the formula' },
+      { value: !long && cmSlipUp ? E(r(50 * k * x * x)) : null, trap: 'converted the extension to metres by dividing by 10 instead of 100', wide: true },
+      { value: !long && !cmSlipUp ? E(r(0.005 * k * x * x)) : null, trap: 'divided the extension by 1000, as if it were in millimetres', wide: true },
+      { value: E(r(rng.bool(0.5) ? Ev * 10 : Ev / 10)), trap: 'slipped a decimal place' },
     ],
     solution: `$x = ${n(x)}\\ \\text{m}$, so $E = \\tfrac12 k x^2 = \\tfrac12 \\times ${k} \\times ${n(x)}^2 = \\tfrac12 \\times ${k} \\times ${n(r(x * x))} = ${n(Ev)}\\ \\text{J}$.`,
     trap: 'EPE = ½kx² with x in metres: keep the ½ and square the extension.',
@@ -247,15 +290,18 @@ function hangingMassQ(rng: RNG): Generated | null {
     stem: `A mass of ${n(m)} kg hangs at rest from a light spring of stiffness ${k} ${NPM}. ${TAKE_G} Find the extension of the spring${inCm ? ', in cm' : ''}.`,
     answer,
     unit: inCm ? U_CM : U_M,
+    // one headline trap on each side of the answer, so the extension is not systematically the small number
     must: [
       { value: E(r((m / k) * s)), trap: 'forgot g: used the mass instead of the weight' },
-      { value: inCm ? E(x) : E(xcm), trap: inCm ? 'found the extension in metres and called it cm' : 'gave the extension in cm' },
+      { value: E(r(((2 * m * G) / k) * s)), trap: 'used F = ½kx for the spring force' },
     ],
     extra: [
-      { value: E(r(m * G * k)), trap: 'multiplied the weight by the stiffness' },
-      { value: E(r(((2 * m * G) / k) * s)), trap: 'used ½kx for the force' },
+      { value: inCm ? E(x) : E(xcm), trap: inCm ? 'found the extension in metres and called it cm' : 'gave the extension in cm', wide: true },
+      { value: E(r(((m * G) / (2 * k)) * s)), trap: 'used F = 2kx, as if the spring were stretched at both ends' },
       { value: E(r(x * s * 10)), trap: 'slipped a decimal place' },
+      { value: E(r((x * s) / 10)), trap: 'slipped a decimal place the other way' },
       { value: tryE(() => E(k).div(E(m * G)).mulRat(s)), trap: 'divided the stiffness by the weight' },
+      { value: E(r(m * G * k)), trap: 'multiplied the weight by the stiffness' },
     ],
     solution: `At rest the tension equals the weight: $kx = mg$, so $x = \\dfrac{${n(m)} \\times 10}{${k}} = \\dfrac{${n(m * G)}}{${k}} = ${n(x)}\\ \\text{m}${inCm ? ` = ${n(xcm)}\\ \\text{cm}` : ''}$.`,
     trap: 'The spring force balances the weight mg, not the mass; x = mg/k is in metres.',
@@ -277,15 +323,16 @@ function combinationQ(rng: RNG): Generated | null {
     return pack(rng, {
       stem: `${words} identical light springs, each of stiffness ${k} ${NPM}, are ${arrangement}. Find the effective stiffness of the combination, in ${NPM}.`,
       answer: E(kEff),
+      // the swap and the double-factor slips land on opposite sides of the answer
       must: [
         { value: E(series ? k * count : k / count), trap: series ? 'multiplied as if the springs were in parallel' : 'divided as if the springs were in series' },
-        { value: E(k), trap: 'assumed identical springs combine to the same stiffness' },
+        { value: E(series ? k / (count * count) : k * count * count), trap: 'applied the factor twice' },
       ],
       extra: [
-        { value: E(series ? k / (count * count) : k * count * count), trap: 'applied the factor twice' },
+        { value: E(k), trap: 'assumed identical springs combine to the same stiffness' },
         { value: E(series ? k * count * count : k / (count * count)), trap: 'swapped series and parallel and applied the factor twice' },
         { value: E(kEff * 10), trap: 'slipped a decimal place' },
-        { value: E(kEff / 10), trap: 'slipped a decimal place' },
+        { value: E(kEff / 10), trap: 'slipped a decimal place the other way' },
       ],
       solution: series
         ? `In series each spring carries the full load and stretches by $F/k$, so the total extension is $${count}F/k$ and the effective stiffness is $k/${count} = ${n(kEff)}\\ \\text{N m}^{-1}$.`
@@ -306,13 +353,14 @@ function combinationQ(rng: RNG): Generated | null {
     unit: U_CM,
     must: [
       { value: E(swapped), trap: series ? 'treated the springs as if they were in parallel' : 'treated the springs as if they were in series' },
-      { value: E(single), trap: series ? 'gave the extension of one spring only' : 'gave the extension a single spring would have under the whole load' },
+      { value: E(r((F / (series ? k / (count * count) : k * count * count)) * 100)), trap: 'applied the factor twice' },
     ],
     extra: [
-      { value: E(x), trap: 'found the extension in metres and called it cm' },
-      { value: E(r((F / (series ? k / (count * count) : k * count * count)) * 100)), trap: 'applied the factor twice' },
+      { value: E(single), trap: series ? 'gave the extension of one spring only' : 'gave the extension a single spring would have under the whole load' },
+      { value: E(x), trap: 'found the extension in metres and called it cm', wide: true },
       { value: E(xcm * 10), trap: 'slipped a decimal place' },
-      { value: E(2 * xcm), trap: 'doubled the extension' },
+      { value: E(xcm / 10), trap: 'slipped a decimal place the other way' },
+      { value: E(2 * xcm), trap: 'used F = ½kx for each spring' },
     ],
     solution: series
       ? `In series each spring carries the full ${F} N and stretches by $\\dfrac{${F}}{${k}} = ${n(r(F / k))}\\ \\text{m}$, so the total extension is $${count} \\times ${n(r(F / k))} = ${n(x)}\\ \\text{m} = ${n(xcm)}\\ \\text{cm}$.`
@@ -353,20 +401,26 @@ function launchQ(rng: RNG): Generated | null {
       ['trolley', `A trolley of mass ${n(m)} kg is held against a spring of stiffness ${k} ${NPM} on a smooth horizontal track, compressing it by ${xcm} cm, and then released.`],
     ];
   const [object, scenario] = rng.pick(scenarios);
+  const surdHigh = rng.bool(0.5);
   return pack(rng, {
     stem: `${scenario} Find the speed of the ${object} as it leaves the spring.`,
     answer: E(v),
     unit: U_MS,
     must: [
       { value: E(r((k * x * x) / m)), trap: 'forgot to take the square root: gave v²' },
-      { value: tryE(() => surd(2, v)), trap: 'kept the ½ on only one side: ½kx² = mv² or kx² = ½mv²' },
+      // one surd only: v√2 and v√2/2 are the same slip written twice, and two surds in a list of five
+      // are discarded on sight
+      surdHigh
+        ? { value: tryE(() => surd(2, v)), trap: 'kept the ½ on only one side: ½kx² = mv²' }
+        : { value: tryE(() => surd(2, v).mulRat(0.5)), trap: 'kept the ½ on only one side: kx² = ½mv²' },
     ],
     extra: [
-      { value: tryE(() => surd(2, v).mulRat(0.5)), trap: 'kept the ½ on only one side: kx² = ½mv²' },
       { value: E(Ev), trap: 'gave the energy stored in joules' },
       { value: E(r((k * x) / m)), trap: 'used v = kx/m (the initial acceleration, not the speed)' },
-      { value: E(r(x * s * 100)), trap: 'used the compression in cm' },
-      { value: E(2 * v), trap: 'doubled the speed' },
+      { value: E(r(s)), trap: 'found √(k/m) but forgot to multiply by the compression' },
+      { value: E(r(v / 2)), trap: 'kept the ½ from ½mv² as a factor on v' },
+      { value: E(r(v * 10)), trap: 'converted the compression to metres by dividing by 10 instead of 100' },
+      { value: E(r(v / 10)), trap: 'divided the compression by 1000, as if it were in millimetres' },
     ],
     solution: `$\\tfrac12 k x^2 = \\tfrac12 m v^2$, so $v = x\\sqrt{k/m} = ${n(x)} \\times \\sqrt{${n(k / m)}} = ${n(x)} \\times ${n(s)} = ${v}\\ ${U_MS}$ (the energy stored is $${n(Ev)}$ J).`,
     trap: 'The two ½s cancel: v = x√(k/m); keep x in metres and take the square root.',
@@ -502,7 +556,7 @@ export default defineTemplate({
       case 'hooke': {
         // substitute back into Hooke's law with everything in SI units
         if (p.ask === 'F') return Math.abs(got - p.k * (p.xcm / 100)) < 1e-9;
-        if (p.ask === 'x') return Math.abs(p.k * (got / 100) - p.F) < 1e-9;
+        if (p.ask === 'x') return Math.abs(p.k * (p.inCm ? got / 100 : got) - p.F) < 1e-9;
         return Math.abs(got * (p.xcm / 100) - p.F) < 1e-9;
       }
       case 'epe':

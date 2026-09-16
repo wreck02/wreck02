@@ -7,11 +7,17 @@ import type { RNG } from '../../core/rng';
 
 /**
  * Definite integrals with clean limits.
- * Level 1: ∫₀² 3x² dx = 8 — one term from 0
+ * Level 1: ∫₀² 3x² dx = 8 — one term, usually from 0
  * Level 2: ∫₁³ (2x + 1) dx = 10 — two terms, both limits substituted
  * Level 3: ∫₁⁴ √x dx = 14/3, ∫₁² 1/x² dx = 1/2 — fractional and negative powers
  * Level 4: odd/even tricks over [−a, a]; ∫₀¹ (x − 1)² dx = 1/3
  * Level 5: find k: ∫₀ᵏ (x² − 4) dx = 0 → 2√3, ∫₁ᵏ 2x dx = 15 → 4; two-term fractional-power integrands
+ *
+ * Distractor policy. Where the integrand keeps one sign across [a, b] the sign of the answer is
+ * not in doubt, so an option of the other sign (or zero) is a free elimination — in particular the
+ * "F(a) − F(b)" slip, which is exactly −answer. `signPlausible` drops those. What is left is drawn
+ * from both sides of the answer (`ranked`), so the answer's place in the sorted list moves around,
+ * and a draw that cannot offer four clean named distractors is rejected rather than padded.
  */
 
 /** A term (cn/cd) · x^(pn/pd). JSON-friendly so it can live in params. */
@@ -35,6 +41,10 @@ const oldPower = (ts: Term[]): Term[] => ts.map(([cn, cd, pn, pd]) => (pn === 0 
 const samePower = (ts: Term[]): Term[] => ts.map(([cn, cd, pn, pd]) => norm(cn * pd, cd * (pn + pd), pn, pd));
 const downPower = (ts: Term[]): Term[] => ts.map(([cn, cd, pn, pd]) => (pn < 0 ? norm(cn * pd, cd * (pn - pd), pn - pd, pd) : norm(cn * pd, cd * (pn + pd), pn + pd, pd)));
 const negFlip = (ts: Term[]): Term[] => integrate(ts).map(([cn, cd, pn, pd]) => (pn < 0 ? norm(-cn, cd, pn, pd) : [cn, cd, pn, pd]));
+/** The power's sign dropped: 1/x² read as x², √x read as 1/√x. */
+const flipPower = (ts: Term[]): Term[] => ts.map(([cn, cd, pn, pd]) => norm(cn, cd, -pn, pd));
+/** The coefficient thrown away: ∫3x² read as ∫x². */
+const bareCoef = (ts: Term[]): Term[] => ts.map(([, , pn, pd]) => norm(1, 1, pn, pd));
 
 function evalTerms(ts: Term[], x: number): number {
   return ts.reduce((s, [cn, cd, pn, pd]) => s + (cn / cd) * Math.pow(x, pn / pd), 0);
@@ -109,7 +119,53 @@ function cleanOnly(ds: Candidate[]): Distractor[] {
   return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/** The sign the integrand keeps across [a, b], or 0 if it changes sign there. */
+function constantSign(f: Term[], a: number, b: number): number {
+  let pos = 0, neg = 0;
+  for (let i = 0; i <= 40; i++) {
+    const y = evalTerms(f, a + ((b - a) * i) / 40);
+    if (!Number.isFinite(y)) continue;
+    if (y > 1e-12) pos++; else if (y < -1e-12) neg++;
+  }
+  return pos && !neg ? 1 : neg && !pos ? -1 : 0;
+}
+
+/**
+ * Drop candidates whose sign the candidate can rule out without integrating. If the integrand never
+ * changes sign the integral must have that sign, so a zero or opposite-signed option is eliminated
+ * on sight — and "subtracted the wrong way round" is then just −answer, an option/answer pair that
+ * gives the answer away.
+ */
+function signPlausible(ds: Candidate[], sign: number): Candidate[] {
+  if (sign === 0) return ds;
+  return ds.filter((d) => !d.value || d.value.sign() === sign);
+}
+
+/** Reject options that are orders of magnitude away from the answer: 416 next to 2 is eliminated on sight. */
+function scalePlausible(ds: Candidate[], answer: Exact, factor = 12): Candidate[] {
+  const m = Math.abs(answer.toNumber());
+  if (!(m > 0)) return ds;
+  return ds.filter((d) => {
+    if (!d.value) return true;
+    const v = Math.abs(d.value.toNumber());
+    return v <= factor * m && v * factor >= m;
+  });
+}
+
+/** Reject options whose denominator dwarfs the answer's: 45/1024 next to 9/32 reads as junk. */
+function denPlausible(ds: Candidate[], answer: Exact): Candidate[] {
+  if (!answer.isRational()) return ds;
+  const limit = BigInt(Math.max(8, 4 * Number(answer.toRat().d)));
+  return ds.filter((d) => !d.value || !d.value.isRational() || d.value.toRat().d <= limit);
+}
+
+/**
+ * Take the headline traps, then fill from both sides of the answer: a target number of options
+ * below the answer is drawn first, so the answer's rank in the sorted option list moves around
+ * instead of sitting at (say) the second largest every time. Returns null when there are not
+ * enough distinct named candidates, so the caller redraws instead of letting `buildOptions` pad.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] | null {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -118,12 +174,23 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const wantBelow = rng.int(0, count);
+  const pool = rng.shuffle(extra).filter((d) => !seen.some((s) => s.equals(d.value)));
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  while (out.length < count) {
+    if (pool.length === 0) return null;
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    let i = pool.findIndex((d) => isBelow(d) === needBelow);
+    if (i < 0) i = 0;
+    take(pool[i]);
+    pool.splice(i, 1);
+  }
   return out;
 }
 
 function options(rng: RNG, answer: Exact, must: Candidate[], extra: Candidate[]) {
-  return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must), cleanOnly(extra)), { format: 'fraction' });
+  const ds = ranked(rng, answer, cleanOnly(must), cleanOnly(extra));
+  return ds && buildOptions(rng, answer, ds, { format: 'fraction' });
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -159,13 +226,29 @@ function standardWrong(f: Term[], a: number, b: number): Candidate[] {
   ];
 }
 
+/** Wrong routes that replace the integral by a one-step area formula. */
+function areaGuesses(f: Term[], a: number, b: number): Candidate[] {
+  const w = b - a;
+  const fa = evalExact(f, a), fb = evalExact(f, b);
+  const m = (a + b) / 2;
+  const fm = Number.isInteger(m) ? evalExact(f, m) : null;
+  return [
+    { value: fa && fa.mulRat(w), trap: `used height × width with the height at $x = ${a}$, as if the region were a rectangle` },
+    { value: fb && fb.mulRat(w), trap: `used height × width with the height at $x = ${b}$, as if the region were a rectangle` },
+    { value: fa && fb && fa.add(fb).mulRat(rat(w, 2)), trap: 'used the trapezium ½(f(a) + f(b)) × width instead of integrating' },
+    { value: fm && fm.mulRat(w), trap: 'used the height at the middle of the interval × the width' },
+  ];
+}
+
 function evaluateQ(rng: RNG, f: Term[], a: number, b: number, must: Candidate[], extra: Candidate[], solution: string, trap: string, variant: string, tags: string[]): Generated | null {
   const answer = defInt(f, a, b);
   if (!answer || !isCleanExact(answer).ok) return null;
+  const opts = options(rng, answer, must, extra);
+  if (!opts) return null;
   return {
     stem: `Evaluate $${integralTex(f, a, b)}$.`,
     answer: { kind: 'exact', value: answer },
-    options: options(rng, answer, must, extra),
+    options: opts,
     solution,
     trap,
     tags: ['integration', 'definite', ...tags],
@@ -193,16 +276,29 @@ const brNeg = (x: Exact): string => (x.sign() < 0 ? `\\left(${x.toLatex({ format
 // ----------------------------------------------------------------------------- level 1
 
 function monomialQ(rng: RNG): Generated | null {
-  const n = rng.pick([1, 2, 2, 3]);
-  const a = n === 1 ? rng.pick([1, 2, 4, 6, 3]) : n === 2 ? rng.pick([1, 3, 6, 2, 3]) : rng.pick([1, 4, 2, 4]);
-  const b = n === 3 ? rng.pick([1, 2]) : rng.pick([1, 2, 3, 2]);
+  const n = rng.pick([1, 1, 2, 2, 2, 3]);
+  const a = rng.int(1, n === 3 ? 8 : 9);
+  const lo = rng.bool(0.25) ? rng.pick([1, 1, 2]) : 0;
+  const hi = lo + (n === 3 ? rng.pick([1, 2]) : rng.pick([1, 2, 2, 3, 3, 4]));
   const f = [T(a, n)];
-  const answer = defInt(f, 0, b)!;
+  const answer = defInt(f, lo, hi)!;
   if (!answer.isInteger() && rng.bool(0.7)) return null;
+  if (answer.toNumber() > 150) return null;
   const F = integrate(f);
-  const w = standardWrong(f, 0, b);
-  return evaluateQ(rng, f, 0, b, [w[1], w[0]], [w[2], w[5], w[6], w[7]],
-    `$\\left[${antiTex(F)}\\right]_{0}^{${b}} = ${L(evalExact(F, b))} - 0 = ${L(answer)}$.`,
+  const w = standardWrong(f, lo, hi);
+  const g = areaGuesses(f, lo, hi);
+  const must = [w[1], lo !== 0 ? w[3] : g[1]];
+  const extra: Candidate[] = [
+    w[2], w[4], w[5], w[6], w[7], g[0], g[2], g[3],
+    { value: a !== 1 ? bracket(integrate(bareCoef(f)), lo, hi) : null, trap: `dropped the coefficient ${a} when integrating` },
+    { value: answer.mulRat(2), trap: 'doubled the integral' },
+    { value: bracket(noDivision(f), lo, hi)?.mulRat(n + 1) ?? null, trap: 'multiplied by the new power instead of dividing by it' },
+  ];
+  const sign = constantSign(f, lo, hi);
+  return evaluateQ(rng, f, lo, hi, signPlausible(must, sign), signPlausible(extra, sign),
+    lo === 0
+      ? `$\\left[${antiTex(F)}\\right]_{0}^{${hi}} = ${L(evalExact(F, hi))} - 0 = ${L(answer)}$.`
+      : `$\\left[${antiTex(F)}\\right]_{${lo}}^{${hi}} = ${L(evalExact(F, hi))} - ${L(evalExact(F, lo))} = ${L(answer)}$.`,
     'Integrate first (raise the power, divide by the new power), then substitute the top limit minus the bottom limit.',
     'evaluate', ['monomial']);
 }
@@ -220,7 +316,15 @@ function twoTermQ(rng: RNG): Generated | null {
   if ((!answer.isInteger() && rng.bool(0.7)) || answer.isZero() || Math.abs(answer.toNumber()) > 80) return null;
   const F = integrate(f);
   const w = standardWrong(f, a, b);
-  return evaluateQ(rng, f, a, b, [w[0], a !== 0 ? w[3] : w[1]], [w[1], w[2], w[4], w[6], w[7]],
+  const g = areaGuesses(f, a, b);
+  const must = [a !== 0 ? w[3] : w[1], w[0]];
+  const extra: Candidate[] = [
+    w[1], w[2], w[4], w[6], w[7], g[0], g[1], g[2], g[3],
+    { value: defInt([f[0]], a, b), trap: `dropped the constant term ${q}` },
+    { value: defInt([f[1]], a, b), trap: 'integrated the constant term only' },
+  ];
+  const sign = constantSign(f, a, b);
+  return evaluateQ(rng, f, a, b, signPlausible(must, sign), signPlausible(extra, sign),
     `$\\left[${antiTex(F)}\\right]_{${a}}^{${b}} = ${brNeg(evalExact(F, b)!)} - ${brNeg(evalExact(F, a)!)} = ${L(answer)}$.`,
     'Substitute both limits into the antiderivative and subtract: F(b) − F(a), keeping the signs of each bracket.',
     'evaluate', ['linear']);
@@ -228,33 +332,42 @@ function twoTermQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 3
 
-const SQUARE_LIMITS: [number, number][] = [[1, 4], [1, 4], [1, 9], [4, 9]];
+const SQUARE_LIMITS: [number, number][] = [[1, 4], [1, 4], [1, 9], [4, 9], [1, 16], [4, 16], [9, 16]];
+const INV2_LIMITS: [number, number][] = [[1, 2], [1, 3], [1, 4], [2, 4], [2, 3], [3, 4], [1, 6], [2, 6], [3, 6], [4, 8], [2, 8]];
+const INV3_LIMITS: [number, number][] = [[1, 2], [1, 3], [2, 4], [2, 6], [3, 6], [1, 4]];
 
 function fractionalQ(rng: RNG): Generated | null {
   const kind = rng.pick(['sqrt', 'sqrt', 'invsqrt', 'inv2', 'inv2', 'inv3']);
-  const k = rng.pick([1, 1, 1, 2, 3]);
+  const k = rng.pick([1, 1, 2, 3, 4, 5, 6]);
   let f: Term[], a: number, b: number;
   if (kind === 'sqrt' || kind === 'invsqrt') {
     [a, b] = rng.pick(SQUARE_LIMITS);
     f = [TF(k, 1, kind === 'sqrt' ? 1 : -1, 2)];
   } else {
-    [a, b] = rng.pick(kind === 'inv2' ? [[1, 2], [1, 3], [1, 4], [2, 4], [1, 2]] : [[1, 2], [1, 3], [2, 4]]);
+    [a, b] = rng.pick(kind === 'inv2' ? INV2_LIMITS : INV3_LIMITS);
     f = [T(k, kind === 'inv2' ? -2 : -3)];
   }
+  const answer = defInt(f, a, b);
+  // the answer has to be something the exam would print, and mental: /32 fractions are not
+  if (!answer || !answer.isRational() || answer.toRat().d > 16n || answer.toNumber() > 80) return null;
   const F = integrate(f);
   const w = standardWrong(f, a, b);
+  const g = areaGuesses(f, a, b);
   const negPower = kind === 'inv2' || kind === 'inv3';
-  const must = negPower
-    ? [{ value: bracket(negFlip(f), a, b), trap: 'sign error: ∫ x^{−2} dx = −x^{−1}, the new power −1 makes the term negative' }, w[0]]
-    : [w[1], w[2]];
-  const extra = [
+  const must: Candidate[] = [w[6], w[2]];
+  const extra: Candidate[] = [
+    w[1], w[3], w[7], g[0], g[1], g[2], g[3],
     { value: bracket(downPower(f), a, b), trap: 'took the power down by one instead of up' },
-    w[0], w[1], w[2], w[6], w[7],
+    { value: bracket(integrate(flipPower(f)), a, b), trap: negPower ? `lost the minus sign in the index: integrated $x^{${kind === 'inv2' ? 2 : 3}}$ instead of $x^{-${kind === 'inv2' ? 2 : 3}}$` : 'confused $\\sqrt{x}$ with $1/\\sqrt{x}$' },
+    { value: k !== 1 ? bracket(integrate(bareCoef(f)), a, b) : null, trap: `dropped the coefficient ${k}` },
+    { value: negPower ? bracket(negFlip(f), a, b) : null, trap: 'sign error: ∫ x^{−2} dx = −x^{−1}, the new power −1 makes the term negative' },
   ];
+  const sign = constantSign(f, a, b);
+  const keep = (ds: Candidate[]) => scalePlausible(denPlausible(signPlausible(ds, sign), answer), answer);
   const [cn, , pn, pd] = f[0];
   const asPower = `${cn === 1 ? '' : cn}x^{${pd === 1 ? pn : `${pn}/${pd}`}}`;
-  return evaluateQ(rng, f, a, b, must, extra,
-    `Write the integrand as $${asPower}$: $\\left[${antiTex(F)}\\right]_{${a}}^{${b}} = ${brNeg(evalExact(F, b)!)} - ${brNeg(evalExact(F, a)!)} = ${L(defInt(f, a, b))}$.${powersHint(f, a, b)}`,
+  return evaluateQ(rng, f, a, b, keep(must), keep(extra),
+    `Write the integrand as $${asPower}$: $\\left[${antiTex(F)}\\right]_{${a}}^{${b}} = ${brNeg(evalExact(F, b)!)} - ${brNeg(evalExact(F, a)!)} = ${L(answer)}$.${powersHint(f, a, b)}`,
     'Rewrite roots and reciprocals as powers; the new power of x^{−2} is −1, and 4^{3/2} = 8, 9^{3/2} = 27.',
     'evaluate', ['fractional-powers']);
 }
@@ -280,9 +393,13 @@ function symmetricQ(rng: RNG): Generated | null {
     { value: answer.add(frac(p * a ** 4, 2)), trap: '(−a)⁴ taken as negative when substituting the lower limit' },
     { value: bracket(noDivision(f), -a, a), trap: 'did not divide by the new powers' },
     { value: answer.mulRat(2), trap: 'doubled twice' },
+    { value: E(2 * a).mul(evalExact(f, a)!), trap: 'used the width of the interval × the value of the integrand at the top limit' },
+    { value: evalExact(F, a), trap: 'forgot to subtract the value at the lower limit: this is F(a) alone' },
+    { value: E(r), trap: 'gave the constant term itself, forgetting to multiply by the width' },
   ];
+  const sign = constantSign(f, -a, a);
   const oddTerms = q === 0 ? `$x^{3}$ is an odd function` : `$x^{3}$ and $x$ are odd functions`;
-  return evaluateQ(rng, f, -a, a, must, extra,
+  return evaluateQ(rng, f, -a, a, signPlausible(must, sign), signPlausible(extra, sign),
     `${oddTerms}, so ${q === 0 ? 'it integrates' : 'they integrate'} to zero over $[-${a}, ${a}]$. Only the constant survives: $\\int_{-${a}}^{${a}} ${r < 0 ? `(${r})` : r}\\,dx = ${r} \\times ${2 * a} = ${L(answer)}$.`,
     'Over a symmetric interval odd powers integrate to zero; the constant term does not, and it contributes r × (width).',
     'evaluate', ['symmetry', 'odd-function']);
@@ -307,13 +424,20 @@ function shiftedSquareQ(rng: RNG): Generated | null {
     { value: answer.neg(), trap: 'subtracted the wrong way round' },
     { value: bracket(integrate([T(1, 2), T(m * m, 0)]), lo, hi), trap: 'dropped the cross term and kept both squares' },
     { value: answer.mulRat(3), trap: 'multiplied by 3 instead of dividing' },
+    { value: E((hi - lo) * (hi - m) ** 2), trap: 'used width × (the height at the top limit), as if the region were a rectangle' },
+    { value: frac((hi - lo) * ((hi - m) ** 2 + (lo - m) ** 2), 2), trap: 'used the trapezium ½(f(a) + f(b)) × width instead of integrating' },
+    { value: E((hi - lo) * ((lo + hi) / 2 - m) ** 2), trap: 'used width × the height at the middle of the interval' },
+    { value: frac(u1 ** 3 - u0 ** 3, 2), trap: 'divided by 2 instead of by 3' },
   ];
+  const sign = constantSign(f, lo, hi); // (x − m)² ≥ 0: a negative or zero option is a free elimination
+  const opts = options(rng, answer, signPlausible(must, sign), signPlausible(extra, sign));
+  if (!opts) return null;
   const bracketTex = `(x - ${m})`;
   const stemInt = `\\int_{${lo}}^{${hi}} ${bracketTex}^{2}\\,dx`;
   return {
     stem: `Evaluate $${stemInt}$.`,
     answer: { kind: 'exact', value: answer },
-    options: options(rng, answer, must, extra),
+    options: opts,
     solution: `Quickest: $\\int ${bracketTex}^{2}dx = \\frac{${bracketTex}^{3}}{3}$, so the integral is $\\frac{${u1 < 0 ? `(${u1})` : u1}^{3} - ${u0 < 0 ? `(${u0})` : u0}^{3}}{3} = ${L(answer)}$. (Expanding to $${termsTex(f)}$ gives the same.)`,
     trap: 'Either use (x − m)³/3 directly or expand fully — (x − m)² is not x² − m².',
     tags: ['integration', 'definite', 'expand'],
@@ -352,13 +476,15 @@ function findKZeroQ(rng: RNG): Generated | null {
       { value: frac(3 * m, 4), trap: 'used x³/4 instead of x³/3' },
     ];
   const F = integrate(f);
+  const opts = options(rng, k, must, extra);
+  if (!opts) return null;
   const working = kind === 'x2-m2'
     ? `$\\frac{k^{3}}{3} - ${m * m}k = 0$, so $k\\left(\\frac{k^{2}}{3} - ${m * m}\\right) = 0$; as $k > 0$, $k^{2} = ${3 * m * m}$ and $k = ${k.toLatex()}$.`
     : `$\\frac{k^{3}}{3} - \\frac{${m}k^{2}}{2} = 0$, so $k^{2}\\left(\\frac{k}{3} - \\frac{${m}}{2}\\right) = 0$; as $k > 0$, $k = ${k.toLatex()}$.`;
   return {
     stem: `Given that $${integralTex(f, 0, 'k')} = 0$, where $k > 0$, find the value of $k$.`,
     answer: { kind: 'exact', value: k },
-    options: options(rng, k, must, extra),
+    options: opts,
     solution: `$\\left[${antiTex(F)}\\right]_{0}^{k}$: ${working}`,
     trap: 'Integrate, substitute the limits and solve the resulting equation in k — the zero of the integral is not the zero of the integrand.',
     tags: ['integration', 'definite', 'unknown-limit'],
@@ -369,7 +495,7 @@ function findKZeroQ(rng: RNG): Generated | null {
 
 function findKTargetQ(rng: RNG): Generated | null {
   const kind = rng.pick(['2x', '2x', '3x2', '2x+p']);
-  const a = kind === '3x2' ? rng.pick([0, 1]) : rng.pick([1, 1, 2]); // a lower limit to forget
+  const a = rng.pick([1, 1, 2]); // a lower limit to forget
   const k = kind === '3x2' ? rng.pick([2, 3, 4].filter((v) => v > a)) : rng.pick([3, 4, 5, 6].filter((v) => v > a));
   const p = kind === '2x+p' ? rng.pick([1, 2, 3, -1, -2, 4]) : 0;
   const f = kind === '3x2' ? [T(3, 2)] : kind === '2x' ? [T(2, 1)] : [T(2, 1), T(p, 0)];
@@ -378,35 +504,39 @@ function findKTargetQ(rng: RNG): Generated | null {
   const Nn = N.toInt();
   const F = integrate(f);
   const attempt = (g: () => Exact): Exact | null => { try { const v = g(); return Number.isFinite(v.toNumber()) ? v : null; } catch { return null; } };
-  const noLower = kind === '3x2' ? attempt(() => E(Nn).powRat(rat(1, 3))) : kind === '2x' ? attempt(() => E(Nn).sqrt()) : null;
-  const otherRoot = kind === '2x+p' ? E(-(k + p)) : E(-k);
+  // k³ = N + a³ for the cubic route, k² (+ pk) = N + a² + pa for the quadratic ones
+  const solved = kind === '3x2' ? Nn + a ** 3 : Nn + a * a + p * a;
+  const noLower = kind === '3x2' ? attempt(() => E(Nn).powRat(rat(1, 3))) : attempt(() => E(Nn).sqrt());
   const must: Candidate[] = [
-    { value: a !== 0 ? noLower : null, trap: 'forgot the contribution of the lower limit' },
-    { value: E(k + 1), trap: 'arithmetic slip' },
+    { value: noLower, trap: 'forgot the contribution of the lower limit' },
+    { value: E(solved), trap: kind === '3x2' ? 'forgot to take the cube root' : 'forgot to take the square root' },
   ];
   const extra: Candidate[] = [
-    { value: otherRoot, trap: `the other root of the equation is negative and is ruled out by k > ${a}` },
-    { value: E(k - 1), trap: 'arithmetic slip' },
-    { value: kind === '3x2' ? E(Nn + a ** 3) : E(Nn + a * a + p * a), trap: 'forgot to take the root' },
-    { value: frac(Nn, 2), trap: 'divided by 2 instead of solving the equation' },
-    { value: E(2 * k), trap: 'doubled' },
+    { value: frac(Nn, 2), trap: 'divided the value of the integral by 2 instead of solving the equation' },
+    { value: E(2 * k), trap: 'doubled the answer' },
+    { value: E(Nn - a * a - p * a), trap: 'subtracted the lower limit again instead of adding it back' },
+    { value: E(Nn), trap: 'gave the value of the integral instead of solving for k' },
+    { value: kind === '3x2' ? attempt(() => E(solved).sqrt()) : attempt(() => E(solved).powRat(rat(1, 3))), trap: kind === '3x2' ? 'took the square root instead of the cube root' : 'took the cube root instead of the square root' },
+    { value: kind === '3x2' ? frac(Nn, 3) : frac(solved, 2), trap: kind === '3x2' ? 'divided by 3 instead of taking the cube root' : 'halved k² instead of taking its square root' },
   ];
+  const opts = options(rng, E(k), must, extra);
+  if (!opts) return null;
   const eq = kind === '3x2'
-    ? `k^{3}${a === 0 ? '' : ` - ${a ** 3}`} = ${Nn}`
+    ? `k^{3} - ${a ** 3} = ${Nn}`
     : kind === '2x'
       ? `k^{2} - ${a * a} = ${Nn}`
       : `(k^{2} ${p < 0 ? '-' : '+'} ${Math.abs(p)}k) - (${a * a + p * a}) = ${Nn}`;
   const solve = kind === '3x2'
-    ? `$k^{3} = ${Nn + a ** 3}$, so $k = ${k}$.`
+    ? `$k^{3} = ${solved}$, so $k = ${k}$.`
     : kind === '2x'
-      ? `$k^{2} = ${Nn + a * a}$, so $k = ${k}$ (taking the positive root).`
-      : `$k^{2} ${p < 0 ? '-' : '+'} ${Math.abs(p)}k - ${Nn + a * a + p * a} = 0$, i.e. $(k - ${k})(k + ${k + p}) = 0$, so $k = ${k}$.`;
+      ? `$k^{2} = ${solved}$, so $k = ${k}$ (taking the positive root).`
+      : `$k^{2} ${p < 0 ? '-' : '+'} ${Math.abs(p)}k - ${solved} = 0$, i.e. $(k - ${k})(k + ${k + p}) = 0$, so $k = ${k}$.`;
   return {
     stem: `Given that $${integralTex(f, a, 'k')} = ${Nn}$ and $k > ${a}$, find the value of $k$.`,
     answer: { kind: 'exact', value: E(k) },
-    options: options(rng, E(k), must, extra),
+    options: opts,
     solution: `$\\left[${antiTex(F)}\\right]_{${a}}^{k} = ${Nn}$ gives $${eq}$. ${solve}`,
-    trap: 'Integrate, substitute k and the lower limit, then solve for k, discarding any root the condition k > a rules out.',
+    trap: 'Integrate, substitute k and the lower limit, then solve for k: the lower limit adds back into the equation.',
     tags: ['integration', 'definite', 'unknown-limit'],
     params: { variant: 'find-k', integrand: f, a, target: Nn },
     typedAllowed: true,
@@ -426,18 +556,21 @@ function twoTermFractionalQ(rng: RNG): Generated | null {
   if (!answer || !isCleanExact(answer).ok || answer.toRat().d > 12n || Math.abs(answer.toNumber()) > 60 || answer.isZero()) return null;
   const F = integrate(f);
   const w = standardWrong(f, a, b);
+  const g = areaGuesses(f, a, b);
   const hasNeg = f.some((t) => t[2] < 0);
   const must: Candidate[] = [
     hasNeg ? { value: bracket(negFlip(f), a, b), trap: 'sign of the negative-power term: dividing by the new negative power makes it negative' } : w[1],
     w[0],
   ];
   const extra: Candidate[] = [
-    w[1], w[2], w[6],
+    w[1], w[2], w[6], g[0], g[1], g[2],
     { value: defInt([f[0]], a, b), trap: 'dropped the second term' },
     { value: defInt([f[1]], a, b), trap: 'dropped the first term' },
     { value: bracket(downPower(f), a, b), trap: 'took a negative power down by one instead of up' },
   ];
-  return evaluateQ(rng, f, a, b, must, extra,
+  const sign = constantSign(f, a, b);
+  const keep = (ds: Candidate[]) => scalePlausible(denPlausible(signPlausible(ds, sign), answer), answer, 20);
+  return evaluateQ(rng, f, a, b, keep(must), keep(extra),
     `$\\left[${antiTex(F)}\\right]_{${a}}^{${b}} = ${brNeg(evalExact(F, b)!)} - ${brNeg(evalExact(F, a)!)} = ${L(answer)}$.${powersHint(f, a, b)}`,
     'Convert each term to a power of x, integrate term by term and evaluate both limits carefully — the square-number limits keep the surds away.',
     'evaluate', ['fractional-powers', 'two-terms']);
@@ -451,7 +584,7 @@ export default defineTemplate({
   topic: 'integration',
   title: 'Definite integrals with clean limits',
   levels: {
-    1: '∫₀² 3x² dx = 8',
+    1: '∫₀² 3x² dx = 8; sometimes a lower limit to subtract',
     2: '∫₁³ (2x + 1) dx = 10',
     3: '∫₁⁴ √x dx = 14/3; ∫₁² x⁻² dx = 1/2',
     4: 'odd/even over [−a, a]: ∫₋₂² (x³ + 4) dx = 16; ∫₀¹ (x − 1)² dx = 1/3',

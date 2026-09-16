@@ -10,11 +10,15 @@ import type { RNG } from '../../core/rng';
  * Level 2: a block floating with part of its volume submerged — upthrust, density, what happens in another liquid
  * Level 3: a uniform beam on two supports — which reaction is bigger, their sum, their values
  * Level 4: a diver at depth — liquid pressure, total pressure, and why doubling the depth does not double it
- * Level 5: a hydraulic jack (force, pressure, distances, work); a particle in equilibrium under three forces
+ * Level 5: a deep diver (harder numbers, the pressure difference between his head and his feet); a hydraulic
+ *          jack with a big area ratio and the work done at the small piston; a particle under three forces
  *
- * Two rules keep the statements answerable: a force is only ever named by its magnitude when the two
- * magnitudes differ, and every scenario's `note` is a function of the three statement kinds actually
- * drawn, so the worked solution quotes no quantity that the stem does not state.
+ * Three rules keep the statements answerable and worth answering: a force is only ever named by its
+ * magnitude when the two magnitudes differ; every scenario's `note` is a function of the three statement
+ * kinds actually drawn, so the worked solution quotes no quantity that the stem does not state; and every
+ * scenario declares `requireAny`, the statements that need a calculation, so no instance can be answered
+ * from definitions alone (those combinations have the same answer whatever the numbers are, which makes
+ * them memorable rather than solvable).
  *
  * verify() recomputes every statement's truth from the raw numbers in params with an explicit
  * moment / pressure / upthrust calculation, then rebuilds the expected option text from the truth vector.
@@ -31,6 +35,7 @@ const KG = (x: number) => `$${num(x)}\\ \\text{kg}$`;
 const RHO = (x: number) => `$${num(x)}\\ \\text{kg m}^{-3}$`;
 const M = (x: number) => `$${num(x)}\\ \\text{m}$`;
 const CM = (x: number) => `$${num(x)}\\ \\text{cm}$`;
+const J = (x: number) => `$${num(x)}\\ \\text{J}$`;
 
 const sig = (x: number) => Number(x.toFixed(9));
 const eq = (a: number, b: number) => Math.abs(a - b) < 1e-7;
@@ -104,6 +109,8 @@ function rodOnPivot(rng: RNG): Scenario | null {
       return parts.join(' ');
     },
     exclusive: [['turns-towards-1', 'bigger-moment-1'], ['balanced', 'turns-towards-1'], ['moment1', 'moment2']],
+    // a moment has to be worked out: "the rod turns that way" plus two definitions is not a question
+    requireAny: ['moment1', 'moment2', 'pivot-force'],
   };
 }
 
@@ -152,6 +159,8 @@ function floatingBlock(rng: RNG): Scenario | null {
       return parts.join(' ');
     },
     exclusive: [['upthrust-equals-weight', 'upthrust']],
+    // "the upthrust equals the weight" and "a denser liquid submerges less" are true of every block
+    requireAny: ['density', 'upthrust', 'mass', 'volume-submerged'],
   };
 }
 
@@ -183,83 +192,114 @@ function beamOnSupports(rng: RNG): Scenario | null {
       return parts.join(' ');
     },
     exclusive: [['ra-greater', 'half-each'], ['ra', 'rb']],
+    // a reaction has to be found: which one is bigger can be read off the picture
+    requireAny: ['ra', 'rb', 'sum'],
   };
 }
 
-/** A diver at depth: liquid pressure, total pressure, force on an area. */
-function diver(rng: RNG): Scenario | null {
-  const rho = rng.pick([1000, 1000, 1200, 800]);
-  const h = rng.pick([5, 10, 15, 20, 25, 30, 40]);
+/**
+ * A diver at depth: liquid pressure, total pressure, force on an area. At level 5 the numbers are
+ * deeper and heavier and one more statement is available — the pressure difference between the
+ * diver's head and his feet, which needs ρgh over a second, small depth.
+ */
+function diver(rng: RNG, level: Level): Scenario | null {
+  const hard = level >= 5;
+  const rho = rng.pick(hard ? [1030, 1200, 1500, 2000] : [1000, 1000, 1200, 800]);
+  const h = rng.pick(hard ? [30, 40, 50, 60, 80] : [5, 10, 15, 20, 25, 30, 40]);
   const pw = sig((rho * G * h) / 1000);
   const total = sig(pw + P_ATM);
-  if (!Number.isInteger(pw * 2) || pw < 20) return null;
-  const A = rng.pick([0.001, 0.002, 0.005, 0.01, 0.02]);
+  if (!Number.isInteger(pw * 2) || pw < (hard ? 300 : 20)) return null;
+  const A = rng.pick(hard ? [0.001, 0.002, 0.004, 0.005] : [0.001, 0.002, 0.005, 0.01, 0.02]);
   const force = sig(total * 1000 * A);
   if (!Number.isInteger(force * 10)) return null;
+  const gap = rng.pick([1.5, 2]);
+  const headFeet = sig((rho * G * gap) / 1000);
+  if (hard && !Number.isInteger(headFeet * 100)) return null;
+  const pool: Stmt[] = [
+    numeric(rng, 'water-pressure', pw, [total, sig((rho * h) / 1000), sig(pw / 2)], (c) => `The pressure due to the liquid alone is ${KPA(c)}.`),
+    numeric(rng, 'total-pressure', total, [pw, sig(pw - P_ATM), sig(pw * P_ATM)], (c) => `The total pressure on the diver is ${KPA(c)}.`),
+    bool('double-total', `The total pressure at a depth of ${M(2 * h)} is twice the total pressure at ${M(h)}.`, false),
+    bool('double-liquid', `The pressure due to the liquid alone at a depth of ${M(2 * h)} is twice its value at ${M(h)}.`, true),
+    numeric(rng, 'force', force, [sig(pw * 1000 * A), sig(total * A)], (c) => `The force due to the total pressure on an area of ${num(A)} $\\text{m}^{2}$ of the diver’s mask is ${N(c)}.`),
+    bool('all-directions', 'The pressure at this depth acts equally in all directions.', true),
+    bool('depends-on-area', 'The pressure at this depth would be greater if the tank were wider.', false),
+  ];
+  if (hard) {
+    pool.push(numeric(rng, 'head-feet', headFeet, [sig((rho * gap) / 1000), pw, sig(headFeet * 10)], (c) => `His feet are ${M(gap)} below his head, and the pressure there is ${KPA(c)} greater than at his head.`));
+  }
   return {
     scenario: 'diver',
     intro: `A diver is ${M(h)} below the surface of a liquid of density ${RHO(rho)}. Atmospheric pressure at the surface is ${KPA(P_ATM)}. ${G_NOTE}`,
-    pool: [
-      numeric(rng, 'water-pressure', pw, [total, sig((rho * h) / 1000), sig(pw / 2)], (c) => `The pressure due to the liquid alone is ${KPA(c)}.`),
-      numeric(rng, 'total-pressure', total, [pw, sig(pw - P_ATM), sig(pw * P_ATM)], (c) => `The total pressure on the diver is ${KPA(c)}.`),
-      bool('double-total', `The total pressure at a depth of ${M(2 * h)} is twice the total pressure at ${M(h)}.`, false),
-      bool('double-liquid', `The pressure due to the liquid alone at a depth of ${M(2 * h)} is twice its value at ${M(h)}.`, true),
-      numeric(rng, 'force', force, [sig(pw * 1000 * A), sig(total * A)], (c) => `The force due to the total pressure on an area of ${num(A)} $\\text{m}^{2}$ of the diver’s mask is ${N(c)}.`),
-      bool('all-directions', 'The pressure at this depth acts equally in all directions.', true),
-      bool('depends-on-area', 'The pressure at this depth would be greater if the tank were wider.', false),
-    ],
-    params: { rho, h, A },
+    pool,
+    params: { rho, h, A, gap },
     trap: 'Total pressure is 100 kPa + ρgh, so doubling the depth doubles only the ρgh part — the atmosphere is still there.',
     note: (kinds) => {
       const parts = [`$\\rho g h = ${num(rho)} \\times 10 \\times ${num(h)} = ${num(pw * 1000)}$ Pa $= ${num(pw)}$ kPa.`];
       if (has(kinds, 'total-pressure', 'double-total', 'force')) parts.push(`Total pressure $= ${num(P_ATM)} + ${num(pw)} = ${num(total)}$ kPa.`);
       if (kinds.includes('force')) parts.push(`Force $= pA = ${num(total)} \\times 10^{3} \\times ${num(A)} = ${num(force)}$ N.`);
+      if (kinds.includes('head-feet')) parts.push(`Over the ${M(gap)} from head to feet the extra pressure is $\\rho g \\Delta h = ${num(rho)} \\times 10 \\times ${num(gap)} = ${num(headFeet * 1000)}$ Pa $= ${num(headFeet)}$ kPa.`);
       if (kinds.includes('double-total')) parts.push('Doubling the depth doubles the $\\rho g h$ part only: the $100$ kPa of atmosphere is still there.');
       if (kinds.includes('double-liquid')) parts.push('$\\rho g h$ is proportional to $h$.');
       if (has(kinds, 'all-directions', 'depends-on-area')) parts.push('Pressure in a liquid depends only on the depth (and the density), not on the width of the container, and acts equally in every direction.');
       return parts.join(' ');
     },
     exclusive: [['double-total', 'double-liquid'], ['water-pressure', 'total-pressure']],
+    // "pressure acts in all directions" and "a wider tank makes no difference" are true of every depth
+    requireAny: hard ? ['water-pressure', 'total-pressure', 'force', 'head-feet'] : ['water-pressure', 'total-pressure', 'force'],
   };
 }
 
-/** A hydraulic jack: force multiplication, equal pressure, distances and work. */
-function hydraulicJack(rng: RNG): Scenario | null {
-  const a1 = rng.pick([2, 4, 5, 8, 10, 20]);
-  const k = rng.pick([4, 5, 8, 10, 20, 25]);
+/**
+ * A hydraulic jack: force multiplication, equal pressure, distances and work. At level 5 the area
+ * ratio is larger and the work done at the small piston can be asked for, which needs the force, the
+ * distance and a centimetre-to-metre conversion in one statement.
+ */
+function hydraulicJack(rng: RNG, level: Level): Scenario | null {
+  const hard = level >= 5;
+  const a1 = rng.pick(hard ? [4, 5, 8, 10, 20] : [2, 4, 5, 8, 10, 20]);
+  const k = rng.pick(hard ? [10, 20, 25, 40, 50] : [4, 5, 8, 10, 20, 25]);
   const a2 = a1 * k;
-  if (a2 > 1000) return null;
-  const F1 = rng.pick([10, 20, 25, 40, 50, 60, 80, 100]);
+  if (a2 > (hard ? 2000 : 1000)) return null;
+  const F1 = rng.pick(hard ? [20, 25, 40, 50, 60, 80, 100] : [10, 20, 25, 40, 50, 60, 80, 100]);
   const F2 = sig(F1 * k);
   const p = sig((F1 / (a1 * 1e-4)) / 1000); // kPa
-  if (!Number.isInteger(p * 2) || F2 > 5000) return null;
-  const d1 = rng.pick([2, 4, 5, 8, 10, 20]);
+  if (!Number.isInteger(p * 2) || F2 > (hard ? 10000 : 5000)) return null;
+  const d1 = rng.pick(hard ? [4, 5, 8, 10, 20, 25, 40] : [2, 4, 5, 8, 10, 20]);
   const d2 = sig(d1 / k);
   if (!Number.isInteger(d2 * 100) || d2 < 0.05) return null;
+  const work = sig((F1 * d1) / 100); // J, the same on both pistons
+  if (hard && !Number.isInteger(work * 100)) return null;
+  const pool: Stmt[] = [
+    numeric(rng, 'force2', F2, [F1, sig(F1 / k), sig(F1 * a2)], (c) => `The force on the large piston is ${N(c)}.`),
+    bool('same-pressure', 'The pressure in the liquid is the same at both pistons.', true),
+    bool('small-moves-further', 'The small piston moves further than the large piston.', true),
+    bool('work-multiplied', 'The work done on the large piston is greater than the work done on the small piston.', false),
+    numeric(rng, 'pressure', p, [sig(p / 10), sig(p * 10), sig(F1 / a1)], (c) => `The pressure in the liquid is ${KPA(c)}.`),
+    numeric(rng, 'distance2', d2, [sig(d1 * k), d1, sig(d1 / a2)], (c) => `If the small piston moves ${CM(d1)}, the large piston moves ${CM(c)}.`),
+  ];
+  if (hard) {
+    pool.push(numeric(rng, 'work', work, [sig(F1 * d1), sig(work * k), sig(F2 * d1)], (c) => `If the small piston moves ${CM(d1)}, the work done on the load is ${J(c)}.`));
+  }
   return {
     scenario: 'jack',
     intro: `In a hydraulic jack the small piston has cross-sectional area ${num(a1)} $\\text{cm}^{2}$ and the large piston has cross-sectional area ${num(a2)} $\\text{cm}^{2}$. A force of ${N(F1)} is applied to the small piston and the liquid is incompressible.`,
-    pool: [
-      numeric(rng, 'force2', F2, [F1, sig(F1 / k), sig(F1 * a2)], (c) => `The force on the large piston is ${N(c)}.`),
-      bool('same-pressure', 'The pressure in the liquid is the same at both pistons.', true),
-      bool('small-moves-further', 'The small piston moves further than the large piston.', true),
-      bool('work-multiplied', 'The work done on the large piston is greater than the work done on the small piston.', false),
-      numeric(rng, 'pressure', p, [sig(p / 10), sig(p * 10), sig(F1 / a1)], (c) => `The pressure in the liquid is ${KPA(c)}.`),
-      numeric(rng, 'distance2', d2, [sig(d1 * k), d1, sig(d1 / a2)], (c) => `If the small piston moves ${CM(d1)}, the large piston moves ${CM(c)}.`),
-    ],
+    pool,
     params: { a1, a2, F1, d1 },
     trap: 'A jack multiplies force, never energy: the large piston moves as many times less as its force is times bigger.',
     note: (kinds) => {
       const parts: string[] = [];
       if (kinds.includes('pressure')) parts.push(`Pressure $= \\dfrac{${num(F1)}}{${num(a1)} \\times 10^{-4}} = ${num(p * 1000)}$ Pa $= ${num(p)}$ kPa.`);
-      if (has(kinds, 'force2', 'same-pressure', 'work-multiplied') || parts.length === 0) {
+      if (has(kinds, 'force2', 'same-pressure', 'work-multiplied', 'work') || parts.length === 0) {
         parts.push(`The pressure is the same at both pistons, so $F_2 = ${num(F1)} \\times \\frac{${num(a2)}}{${num(a1)}} = ${num(F2)}$ N.`);
       }
-      if (kinds.includes('distance2')) parts.push(`Equal volumes are swept: $d_2 = ${num(d1)} \\div ${num(k)} = ${num(d2)}$ cm.`);
+      if (has(kinds, 'distance2', 'work')) parts.push(`Equal volumes are swept: $d_2 = ${num(d1)} \\div ${num(k)} = ${num(d2)}$ cm.`);
       else if (has(kinds, 'small-moves-further', 'work-multiplied')) parts.push(`Equal volumes are swept, so the large piston moves $${num(k)}$ times less than the small one.`);
+      if (kinds.includes('work')) parts.push(`Work on the load $= F_2 d_2 = ${num(F2)} \\times ${num(d2 / 100)} = ${num(work)}$ J, the same as $${num(F1)} \\times ${num(d1 / 100)}$ J done on the small piston.`);
       if (has(kinds, 'small-moves-further', 'work-multiplied')) parts.push('The work $Fd$ is therefore the same on both sides.');
       return parts.join(' ');
     },
+    // "the pressure is the same at both pistons" and "the small piston moves further" are true of every jack
+    requireAny: hard ? ['force2', 'pressure', 'distance2', 'work'] : ['force2', 'pressure', 'distance2'],
   };
 }
 
@@ -300,8 +340,8 @@ function pickScenario(rng: RNG, level: Level): Scenario | null {
   const fns: ((rng: RNG) => Scenario | null)[] = level === 1 ? [rodOnPivot]
     : level === 2 ? [floatingBlock, floatingBlock, rodOnPivot]
     : level === 3 ? [beamOnSupports, beamOnSupports, floatingBlock]
-    : level === 4 ? [diver, diver, hydraulicJack]
-    : [hydraulicJack, threeForces, diver];
+    : level === 4 ? [(r) => diver(r, 4), (r) => diver(r, 4), (r) => hydraulicJack(r, 4)]
+    : [(r) => hydraulicJack(r, 5), threeForces, (r) => diver(r, 5)];
   const f = rng.pick(fns);
   for (let i = 0; i < 40; i++) {
     const s = f(rng);
@@ -373,6 +413,8 @@ function truthOf(scenario: string, kind: string, claim: number, p: Record<string
         case 'force': return eq(claim, total * 1000 * p.A);
         case 'all-directions': return true;
         case 'depends-on-area': return false;
+        // the extra column of liquid between head and feet, by the same route
+        case 'head-feet': return eq(claim, (p.rho * A0 * p.gap * G) / A0 / 1000);
       }
       return null;
     }
@@ -387,6 +429,8 @@ function truthOf(scenario: string, kind: string, claim: number, p: Record<string
         case 'work-multiplied': return F2 * d2 > p.F1 * p.d1 + 1e-9;
         case 'pressure': return eq(claim, pressure / 1000);
         case 'distance2': return eq(claim, d2);
+        // the work reached through the big piston: F2 (from the pressure) times the distance it rises
+        case 'work': return eq(claim, (F2 * d2) / 100);
       }
       return null;
     }
@@ -417,7 +461,7 @@ export default defineTemplate({
     2: 'block floating with a stated fraction submerged: upthrust, density, another liquid',
     3: 'uniform beam on two supports: which reaction is bigger, their sum and their values',
     4: 'diver at depth: liquid pressure, total pressure with atmospheric, force on an area',
-    5: 'hydraulic jack (force, pressure, distance, work); equilibrium under three forces',
+    5: 'deep diver (head-to-feet pressure difference); hydraulic jack with a large area ratio and the work done; three forces in equilibrium',
   },
   generate(rng, level: Level) {
     return retry(rng, () => {

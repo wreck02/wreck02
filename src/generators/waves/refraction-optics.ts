@@ -2,21 +2,25 @@ import { defineTemplate, retry, type Generated, type Level } from '../../core/te
 import { E, Exact, frac, surd, surdFrac, type NumberFormat } from '../../core/exact';
 import { buildOptions, buildChoiceOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
-import { exactSin, exactTan, num } from '../../core/gen-utils';
+import { exactSin, exactCos, exactTan, num } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
 
 /**
  * Reflection, refraction, refractive index and total internal reflection.
  * Level 1: n = c/v and v = c/n (n = 1.5 → 2 × 10^8 m s^-1)
  * Level 2: the law of reflection with the angle measured from the mirror rather than the normal;
- *          n = sin i / sin r for the exact pairs 45°/30° (√2), 60°/30° (√3), 60°/45° (√6/2)
+ *          n = sin i / sin r for the exact pairs 45°/30° (√2), 60°/30° (√3), 60°/45° (√6/2),
+ *          air → material and material → air
  * Level 3: the angle of refraction from n and i; the critical angle from sin C = 1/n (n = 2 → 30°, √2 → 45°),
  *          and sin C itself as a fraction
- * Level 4: the wavelength in glass (λ divides by n, f unchanged) and which quantity changes
+ * Level 4: the wavelength inside the medium (λ divides by n, f unchanged), asked as a number and as a
+ *          'choice' of what changes at the boundary
  * Level 5: a parallel-sided block (the emergent angle equals the angle of incidence); total internal
  *          reflection versus refraction at a given angle; a plane-mirror image distance
  *
  * All angles are measured from the normal unless the stem says otherwise — which is exactly the trap.
+ * Every refractive index quoted is one a real transparent material has (water 1.33 … diamond 2.42),
+ * and the material named always matches the index.
  */
 
 const DEG = (d: number): string => `$${num(d)}^{\\circ}$`;
@@ -36,11 +40,18 @@ type Cand = { value: Exact | null; trap: string };
 function usable(v: Exact | null, format: NumberFormat): v is Exact {
   if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0) return false;
   if (!isCleanExact(v).ok) return false;
+  // A 'fraction' list is exact-form throughout, so a fraction bar reads perfectly well there.
   if (format !== 'fraction' && v.isRational() && v.toLatex({ format }).includes('\\frac')) return false;
   return true;
 }
 
+/**
+ * Headline traps first, then the rest chosen towards a randomly drawn number of options *below* the
+ * answer. Most of the mistakes here (multiplying by n instead of dividing, leaving a quantity
+ * unchanged) overshoot, so without this the answer would sit second-from-bottom in every question.
+ */
 function ranked(rng: RNG, answer: Exact, must: Cand[], extra: Cand[], format: NumberFormat, count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Cand) => {
@@ -49,7 +60,15 @@ function ranked(rng: RNG, answer: Exact, must: Cand[], extra: Cand[], format: Nu
     out.push({ value: d.value, trap: d.trap });
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const pool = rng.shuffle(extra).filter((d): d is { value: Exact; trap: string } => usable(d.value, format));
+  const below = pool.filter((d) => d.value.toNumber() < a);
+  const above = pool.filter((d) => d.value.toNumber() > a);
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
@@ -92,28 +111,49 @@ function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generat
   return null;
 }
 
+/**
+ * A material whose name matches its refractive index (water 1.33, glass 1.5–1.6, diamond 2.42 is the
+ * usual ceiling): no "transparent liquid of refractive index 4".
+ */
+function materialFor(rng: RNG, n: number): string {
+  if (n >= 2.3) return 'A diamond';
+  if (n >= 1.9) return rng.pick(['A transparent crystal', 'A transparent material']);
+  if (n >= 1.45) return rng.pick(['A glass block', 'A block of glass']);
+  if (n >= 1.3) return rng.pick(['A transparent liquid', 'A transparent material']);
+  return rng.pick(['A transparent material', 'A transparent block']);
+}
+const lower = (s: string): string => s.replace(/^A /, 'a ');
+/** Half an angle, but only when it is still a whole number of degrees: 22.5 stands out in a list of angles. */
+const halfDeg = (d: number): Exact | null => (d % 2 === 0 ? E(d / 2) : null);
+
 // ------------------------------------------------------------------------------------------ level 1
 
-const INDEX_SPEED: [number, number][] = [[1.2, 2.5e8], [1.25, 2.4e8], [1.5, 2e8], [2, 1.5e8], [2.4, 1.25e8], [2.5, 1.2e8], [3, 1e8], [4, 7.5e7]];
-const MATERIAL = ['A transparent material', 'A glass block', 'A block of transparent plastic', 'A transparent liquid'];
-const material = (rng: RNG): string => rng.pick(MATERIAL).replace(/^A /, 'a ');
+/** [n, c/n]: indices a real transparent material has, and a mental-arithmetic speed. */
+const INDEX_SPEED: [number, number][] = [[1.2, 2.5e8], [1.25, 2.4e8], [1.5, 2e8], [1.6, 1.875e8], [2, 1.5e8], [2.4, 1.25e8]];
 
 function speedInMedium(rng: RNG): Generated | null {
   const [n, v] = rng.pick(INDEX_SPEED);
+  const what = materialFor(rng, n);
   return pack(rng, {
-    stem: `${rng.pick(MATERIAL)} has refractive index ${num(n)}. The speed of light in a vacuum is $${C_TEX}\\ \\text{m s}^{-1}$. Find the speed of light in the material.`,
+    stem: rng.pick([
+      `${what} has refractive index ${num(n)}. The speed of light in a vacuum is $${C_TEX}\\ \\text{m s}^{-1}$. Find the speed of light in the material.`,
+      `${what} has a refractive index of ${num(n)}. Taking the speed of light in a vacuum as $${C_TEX}\\ \\text{m s}^{-1}$, find the speed of light inside it.`,
+      `Light passes from a vacuum, where it travels at $${C_TEX}\\ \\text{m s}^{-1}$, into ${lower(what)} of refractive index ${num(n)}. Find the speed of the light in the material.`,
+    ]),
     answer: X(v),
     unit: U_MS,
     format: 'sf',
     must: [
       { value: X(r12(C * n)), trap: 'multiplied by n instead of dividing: n = c/v' },
       { value: X(C), trap: 'assumed light travels at c in every material' },
-      { value: X(r12(C / (2 * n))), trap: 'halved as well as dividing by n' },
     ],
     extra: [
+      { value: X(r12(C / (2 * n))), trap: 'halved as well as dividing by n' },
       { value: X(r12((2 * C) / n)), trap: 'doubled the answer' },
       { value: X(r12(C / (n * n))), trap: 'divided by n twice' },
       { value: X(r12(C / (10 * n))), trap: 'slipped one power of ten' },
+      { value: X(r12((10 * C) / n)), trap: 'slipped one power of ten the other way' },
+      { value: X(r12(C * (n - 1))), trap: 'multiplied by n − 1' },
     ],
     solution: `$n = \\dfrac{c}{v}$, so $v = \\dfrac{c}{n} = \\dfrac{${C_TEX}}{${num(n)}} = ${X(v).toLatex({ format: 'sf' })}\\ \\text{m s}^{-1}$.`,
     trap: 'Light slows down in a medium: v = c/n, never cn.',
@@ -124,8 +164,14 @@ function speedInMedium(rng: RNG): Generated | null {
 
 function indexFromSpeed(rng: RNG): Generated | null {
   const [n, v] = rng.pick(INDEX_SPEED);
+  const what = materialFor(rng, n);
+  const vTex = X(v).toLatex({ format: 'sf' });
   return pack(rng, {
-    stem: `Light travels through ${material(rng)} at $${X(v).toLatex({ format: 'sf' })}\\ \\text{m s}^{-1}$. The speed of light in a vacuum is $${C_TEX}\\ \\text{m s}^{-1}$. Find the refractive index of the material.`,
+    stem: rng.pick([
+      `Light travels through ${lower(what)} at $${vTex}\\ \\text{m s}^{-1}$. The speed of light in a vacuum is $${C_TEX}\\ \\text{m s}^{-1}$. Find the refractive index of the material.`,
+      `${what} slows light down to $${vTex}\\ \\text{m s}^{-1}$ from its vacuum speed of $${C_TEX}\\ \\text{m s}^{-1}$. Find the refractive index of the material.`,
+      `The speed of light inside ${lower(what)} is $${vTex}\\ \\text{m s}^{-1}$, and in a vacuum it is $${C_TEX}\\ \\text{m s}^{-1}$. Find the refractive index of the material.`,
+    ]),
     answer: X(n),
     must: [
       { value: X(r12(v / C)), trap: 'divided the wrong way round: n = c/v' },
@@ -134,6 +180,7 @@ function indexFromSpeed(rng: RNG): Generated | null {
     extra: [
       { value: X(r12(n / 2)), trap: 'halved the ratio' },
       { value: X(r12(n + 1)), trap: 'added one to the ratio' },
+      { value: X(r12(n - 1)), trap: 'gave n − 1, the fractional change in speed' },
       { value: X(r12(n + 0.5)), trap: 'arithmetic slip in the division' },
       { value: X(r12(10 * n)), trap: 'slipped a power of ten' },
     ],
@@ -148,11 +195,16 @@ function indexFromSpeed(rng: RNG): Generated | null {
 
 function reflection(rng: RNG): Generated | null {
   const form = rng.pick(['to-normal', 'to-mirror', 'between-rays']);
-  const a = rng.pick([20, 25, 30, 35, 40, 50, 55, 60, 65, 70]);
+  const a = rng.pick([15, 20, 25, 30, 35, 40, 50, 55, 60, 65, 70, 75]);
   if (form === 'to-normal') {
     const ans = 90 - a;
+    const stem = rng.pick([
+      `A ray of light strikes a plane mirror. The angle between the incident ray and the surface of the mirror is ${DEG(a)}. Find the angle of reflection, measured from the normal, in degrees.`,
+      `A narrow beam of light meets a plane mirror, making an angle of ${DEG(a)} with the mirror surface. Find the angle between the reflected beam and the normal, in degrees.`,
+      `A ray of light is reflected by a plane mirror. The incident ray makes ${DEG(a)} with the mirror. Find the angle of reflection, in degrees.`,
+    ]);
     return pack(rng, {
-      stem: `A ray of light strikes a plane mirror. The angle between the incident ray and the surface of the mirror is ${DEG(a)}. Find the angle of reflection, measured from the normal, in degrees.`,
+      stem,
       answer: E(ans),
       must: [
         { value: E(a), trap: 'gave the angle to the mirror, not the angle to the normal' },
@@ -162,7 +214,8 @@ function reflection(rng: RNG): Generated | null {
         { value: E(2 * a), trap: 'doubled the angle to the mirror' },
         { value: E(45), trap: 'assumed the ray strikes at 45°' },
         { value: E(90), trap: 'used the whole right angle' },
-        { value: E(ans / 2), trap: 'halved the angle' },
+        { value: halfDeg(ans), trap: 'halved the angle' },
+        { value: ans % 2 === 0 ? E(90 - ans / 2) : null, trap: 'halved the angle to the mirror and took the complement' },
       ],
       solution: `The normal is at ${DEG(90)} to the mirror, so the angle of incidence is $90^{\\circ} - ${a}^{\\circ} = ${ans}^{\\circ}$, and the angle of reflection equals it.`,
       trap: 'Angles of incidence and reflection are measured from the normal, not from the mirror.',
@@ -172,8 +225,13 @@ function reflection(rng: RNG): Generated | null {
   }
   if (form === 'to-mirror') {
     const ans = 90 - a;
+    const stem = rng.pick([
+      `A ray of light strikes a plane mirror at an angle of incidence of ${DEG(a)}. Find the angle between the reflected ray and the surface of the mirror, in degrees.`,
+      `A ray of light meets a plane mirror, making an angle of ${DEG(a)} with the normal. Find the angle between the reflected ray and the mirror itself, in degrees.`,
+      `A narrow beam of light is reflected by a plane mirror. Its angle of incidence is ${DEG(a)}. Find the angle between the reflected beam and the mirror surface, in degrees.`,
+    ]);
     return pack(rng, {
-      stem: `A ray of light strikes a plane mirror at an angle of incidence of ${DEG(a)}. Find the angle between the reflected ray and the surface of the mirror, in degrees.`,
+      stem,
       answer: E(ans),
       must: [
         { value: E(a), trap: 'gave the angle to the normal, not the angle to the mirror' },
@@ -183,7 +241,8 @@ function reflection(rng: RNG): Generated | null {
         { value: E(2 * ans), trap: 'doubled the angle to the mirror' },
         { value: E(45), trap: 'assumed the ray strikes at 45°' },
         { value: E(90), trap: 'used the whole right angle' },
-        { value: E(ans / 2), trap: 'halved the angle' },
+        { value: halfDeg(ans), trap: 'halved the angle' },
+        { value: ans % 2 === 0 ? E(90 - ans / 2) : null, trap: 'halved the angle of incidence and took the complement' },
       ],
       solution: `The reflected ray leaves at ${DEG(a)} to the normal, and the normal is at ${DEG(90)} to the mirror, so the angle to the mirror is $90^{\\circ} - ${a}^{\\circ} = ${ans}^{\\circ}$.`,
       trap: 'Angles of incidence and reflection are measured from the normal, not from the mirror.',
@@ -193,8 +252,13 @@ function reflection(rng: RNG): Generated | null {
   }
   if (a > 60) return null;
   const ans = 2 * a;
+  const stem = rng.pick([
+    `A ray of light strikes a plane mirror at an angle of incidence of ${DEG(a)}. Find the angle between the incident ray and the reflected ray, in degrees.`,
+    `A ray of light meets a plane mirror at ${DEG(a)} to the normal. Find the angle between the incident ray and the reflected ray, in degrees.`,
+    `A narrow beam of light strikes a plane mirror, making an angle of ${DEG(90 - a)} with the mirror surface. Find the angle between the incident beam and the reflected beam, in degrees.`,
+  ]);
   return pack(rng, {
-    stem: `A ray of light strikes a plane mirror at an angle of incidence of ${DEG(a)}. Find the angle between the incident ray and the reflected ray, in degrees.`,
+    stem,
     answer: E(ans),
     must: [
       { value: E(a), trap: 'gave the angle of reflection instead of the angle between the rays' },
@@ -213,32 +277,41 @@ function reflection(rng: RNG): Generated | null {
   });
 }
 
-/** (i, r) pairs whose sine ratio is an exact surd. */
+/** (angle in air, angle in the material) pairs whose sine ratio is an exact surd. */
 const SNELL_PAIRS: [number, number][] = [[45, 30], [60, 30], [60, 45]];
 
 function indexFromAngles(rng: RNG): Generated | null {
   const [i, rr] = rng.pick(SNELL_PAIRS);
+  const fromMaterial = rng.bool(0.4);
   const n = exactSin(i).div(exactSin(rr));
   const tanI = exactTan(i), tanR = exactTan(rr);
+  const stem = fromMaterial
+    ? `A ray of light travelling inside a transparent material meets the boundary with air at an angle of incidence of ${DEG(rr)} and leaves the material at ${DEG(i)} to the normal. Find the refractive index of the material, giving your answer in exact form.`
+    : rng.bool(0.5)
+      ? `A ray of light passes from air into a transparent material. The angle of incidence is ${DEG(i)} and the angle of refraction is ${DEG(rr)}. Find the refractive index of the material, giving your answer in exact form.`
+      : `A ray of light crosses from air into a transparent block. It meets the surface at ${DEG(i)} to the normal and travels on inside the block at ${DEG(rr)} to the normal. Find the refractive index of the block, giving your answer in exact form.`;
   return pack(rng, {
-    stem: `A ray of light passes from air into a transparent material. The angle of incidence is ${DEG(i)} and the angle of refraction is ${DEG(rr)}. Find the refractive index of the material, giving your answer in exact form.`,
+    stem,
     answer: n,
-    format: 'auto',
+    format: 'fraction',
     must: [
-      { value: exactSin(rr).div(exactSin(i)), trap: 'inverted the ratio: n = sin i / sin r' },
+      { value: exactSin(rr).div(exactSin(i)), trap: 'inverted the ratio: the sine of the angle in air goes on top' },
       { value: frac(i, rr), trap: 'used the angles themselves instead of their sines' },
     ],
     extra: [
       { value: frac(rr, i), trap: 'used the angles, and the wrong way round' },
       { value: tanI && tanR ? tanI.div(tanR) : null, trap: 'used tangents instead of sines' },
+      { value: exactCos(i).div(exactCos(rr)), trap: 'used cosines instead of sines' },
       { value: surd(2), trap: 'quoted the 45°/30° value' },
       { value: surd(3), trap: 'quoted the 60°/30° value' },
       { value: surdFrac(1, 2, 6), trap: 'quoted the 60°/45° value' },
     ],
-    solution: `$n = \\dfrac{\\sin ${i}^{\\circ}}{\\sin ${rr}^{\\circ}} = \\dfrac{${exactSin(i).toLatex()}}{${exactSin(rr).toLatex()}} = ${n.toLatex()}$.`,
-    trap: 'Snell\'s law uses the sines of the angles, and n = sin i / sin r for a ray entering the denser medium.',
+    solution: fromMaterial
+      ? `The angle in air is ${DEG(i)} and the angle in the material is ${DEG(rr)}, so $n = \\dfrac{\\sin ${i}^{\\circ}}{\\sin ${rr}^{\\circ}} = \\dfrac{${exactSin(i).toLatex()}}{${exactSin(rr).toLatex()}} = ${n.toLatex({ format: 'fraction' })}$.`
+      : `$n = \\dfrac{\\sin ${i}^{\\circ}}{\\sin ${rr}^{\\circ}} = \\dfrac{${exactSin(i).toLatex()}}{${exactSin(rr).toLatex()}} = ${n.toLatex({ format: 'fraction' })}$.`,
+    trap: 'Snell\'s law uses the sines of the angles, and n is the sine of the angle in air over the sine of the angle in the material, whichever way the ray is going.',
     tags: ['waves', 'refraction', 'snell', 'surds'],
-    params: { variant: 'n-from-angles', i, r: rr },
+    params: { variant: 'n-from-angles', i, r: rr, fromMaterial },
   });
 }
 
@@ -250,57 +323,83 @@ const nTex = (n: number): string => N_TEX[String(Number(n.toPrecision(4)))] ?? n
 function refractionAngle(rng: RNG): Generated | null {
   const [i, rr] = rng.pick(SNELL_PAIRS);
   const n = sinD(i) / sinD(rr);
+  const askAir = rng.bool(0.4);
+  const ans = askAir ? i : rr;
+  const given = askAir ? rr : i;
+  const stem = askAir
+    ? `A ray of light travelling inside a material of refractive index $${nTex(n)}$ meets the boundary with air at an angle of incidence of ${DEG(rr)}. Find the angle of refraction in the air, in degrees.`
+    : rng.bool(0.5)
+      ? `A ray of light passes from air into a material of refractive index $${nTex(n)}$. The angle of incidence is ${DEG(i)}. Find the angle of refraction, in degrees.`
+      : `A ray of light in air strikes the flat surface of a block of refractive index $${nTex(n)}$ at ${DEG(i)} to the normal. Find the angle the ray makes with the normal inside the block, in degrees.`;
   return pack(rng, {
-    stem: `A ray of light passes from air into a material of refractive index $${nTex(n)}$. The angle of incidence is ${DEG(i)}. Find the angle of refraction, in degrees.`,
-    answer: E(rr),
+    stem,
+    answer: E(ans),
     must: [
-      { value: E(i), trap: 'assumed the ray is not bent' },
-      { value: E(90 - rr), trap: 'measured the refracted ray from the surface instead of from the normal' },
+      { value: E(given), trap: 'assumed the ray is not bent at the boundary' },
+      { value: E(90 - ans), trap: 'measured the refracted ray from the surface instead of from the normal' },
     ],
     extra: [
-      { value: E(90), trap: 'used sin r = n sin i, which cannot be solved here' },
-      { value: E(2 * rr), trap: 'doubled the angle' },
-      { value: E(rr / 2), trap: 'halved the angle' },
+      { value: E(90), trap: askAir ? 'assumed the ray grazes along the surface' : 'used sin r = n sin i, which cannot be solved here' },
+      { value: E(2 * ans), trap: 'doubled the angle' },
+      { value: halfDeg(ans), trap: 'halved the angle' },
       { value: E(45), trap: 'guessed 45° without using the sines' },
       { value: E(15), trap: 'over-estimated the bending' },
+      { value: E(90 - given), trap: 'measured the given angle from the surface instead of from the normal' },
     ],
-    solution: `$\\sin r = \\dfrac{\\sin i}{n} = \\dfrac{${exactSin(i).toLatex()}}{${nTex(n)}} = ${exactSin(rr).toLatex()}$, so $r = ${rr}^{\\circ}$.`,
-    trap: 'Entering a denser medium the ray bends towards the normal: divide sin i by n, do not multiply.',
+    solution: askAir
+      ? `Leaving the material the ray bends away from the normal: $\\sin r = n \\sin i = ${nTex(n)} \\times ${exactSin(rr).toLatex()} = ${exactSin(i).toLatex()}$, so $r = ${i}^{\\circ}$.`
+      : `$\\sin r = \\dfrac{\\sin i}{n} = \\dfrac{${exactSin(i).toLatex()}}{${nTex(n)}} = ${exactSin(rr).toLatex()}$, so $r = ${rr}^{\\circ}$.`,
+    trap: 'Entering a denser medium the ray bends towards the normal (divide by n); leaving it the ray bends away (multiply by n).',
     tags: ['waves', 'refraction', 'snell'],
-    params: { variant: 'r-from-n-i', i, r: rr },
+    params: { variant: 'r-from-n-i', i, r: rr, askAir },
   });
 }
 
+/** The only two refractive indices whose critical angle is a round number of degrees. */
 const CRITICAL: [number, number, string][] = [[2, 30, '2'], [Math.SQRT2, 45, '\\sqrt{2}']];
 
 function criticalAngle(rng: RNG): Generated | null {
   const [n, Cdeg, tex] = rng.pick(CRITICAL);
+  const other = Cdeg === 30 ? 45 : 30;
+  const stem = rng.pick([
+    `${materialFor(rng, n)} has refractive index $${tex}$. Find the critical angle for a boundary between this material and air, in degrees.`,
+    `Light travels inside a material of refractive index $${tex}$ and meets the boundary with air. Find the critical angle for that boundary, in degrees.`,
+    `For ${lower(materialFor(rng, n))} of refractive index $${tex}$ in air, find the critical angle, in degrees.`,
+  ]);
   return pack(rng, {
-    stem: `A material has refractive index $${tex}$. Find the critical angle for a boundary between this material and air, in degrees.`,
+    stem,
     answer: E(Cdeg),
     must: [
       { value: E(90 - Cdeg), trap: 'took the complement: sin C = 1/n, not cos C = 1/n' },
-      { value: exactSin(Cdeg), trap: 'gave sin C instead of the angle C' },
+      { value: E(other), trap: 'quoted the critical angle of the other standard refractive index' },
     ],
     extra: [
-      { value: E(Cdeg === 30 ? 45 : 30), trap: 'quoted the critical angle of the other standard material' },
-      { value: E(Cdeg / 2), trap: 'halved the angle' },
+      { value: E(90), trap: 'used sin C = 1 (a ray grazing along the boundary) instead of sin C = 1/n' },
       { value: E(2 * Cdeg), trap: 'doubled the angle' },
-      { value: E(15), trap: 'arithmetic slip' },
+      { value: E(60), trap: 'read the sine table one row out' },
+      { value: E(15), trap: 'halved the smaller standard critical angle' },
+      { value: E(Cdeg - 10), trap: 'arithmetic slip of ten degrees' },
     ],
     solution: `$\\sin C = \\dfrac{1}{n} = \\dfrac{1}{${tex}}${n === 2 ? '' : ` = ${exactSin(Cdeg).toLatex()}`}$, so $C = ${Cdeg}^{\\circ}$.`,
-    trap: 'sin C = 1/n gives the sine of the critical angle; the answer wanted is the angle itself.',
+    trap: 'sin C = 1/n gives the sine of the critical angle; the answer wanted is the angle itself, in degrees.',
     tags: ['waves', 'refraction', 'critical-angle'],
     params: { variant: 'critical-angle', n },
   });
 }
 
-const SIN_C: [number, number, number][] = [[1.5, 2, 3], [1.25, 4, 5], [2.5, 2, 5], [1.2, 5, 6], [2, 1, 2], [1.6, 5, 8], [1.75, 4, 7]];
+/** [n, p, q] with 1/n = p/q in lowest terms; every n is one a real material could have. */
+const SIN_C: [number, number, number][] = [
+  [1.2, 5, 6], [1.25, 4, 5], [1.4, 5, 7], [1.5, 2, 3], [1.6, 5, 8], [1.75, 4, 7],
+  [1.8, 5, 9], [2, 1, 2], [2.2, 5, 11], [2.25, 4, 9], [2.4, 5, 12],
+];
 
 function sinCritical(rng: RNG): Generated | null {
   const [n, p, qd] = rng.pick(SIN_C);
+  const stem = rng.bool(0.5)
+    ? `${materialFor(rng, n)} has refractive index ${num(n)}. The critical angle for a boundary between this material and air is $C$. Find $\\sin C$, giving your answer as a fraction in its lowest terms.`
+    : `Light inside ${lower(materialFor(rng, n))} of refractive index ${num(n)} meets the boundary with air. Find $\\sin C$ for this boundary, where $C$ is the critical angle, giving your answer as a fraction in its lowest terms.`;
   return pack(rng, {
-    stem: `A material has refractive index ${num(n)}. The critical angle for a boundary between this material and air is $C$. Find $\\sin C$, giving your answer as a fraction in its lowest terms.`,
+    stem,
     answer: frac(p, qd),
     format: 'fraction',
     must: [
@@ -312,6 +411,7 @@ function sinCritical(rng: RNG): Generated | null {
       { value: frac(qd, 2 * p), trap: 'halved n instead of inverting it' },
       { value: frac(qd - p, qd), trap: 'took 1 − 1/n' },
       { value: frac(p, qd + p), trap: 'used 1/(n + 1)' },
+      { value: frac(p, qd - p), trap: 'used 1/(n − 1)' },
     ],
     solution: `$\\sin C = \\dfrac{1}{n} = \\dfrac{1}{${num(n)}} = \\dfrac{${p}}{${qd}}$.`,
     trap: 'sin C = 1/n: the fraction is the reciprocal of the refractive index.',
@@ -322,58 +422,106 @@ function sinCritical(rng: RNG): Generated | null {
 
 // ------------------------------------------------------------------------------------------ level 4
 
-const GLASS_LAMBDA: [number, number][] = [[600, 1.5], [750, 1.5], [900, 1.5], [450, 1.5], [600, 2], [400, 2], [480, 1.2], [660, 1.2], [500, 1.25], [750, 1.25]];
+/** [wavelength in air (nm), refractive index, the medium]: λ/n is always a whole number of nm. */
+const MEDIA_LAMBDA: [number, number, string][] = [
+  [450, 1.5, 'glass block'], [600, 1.5, 'glass block'], [750, 1.5, 'glass block'], [900, 1.5, 'glass block'],
+  [480, 1.6, 'glass block'], [640, 1.6, 'glass block'], [800, 1.6, 'glass block'],
+  [400, 2, 'transparent crystal'], [600, 2, 'transparent crystal'], [700, 2, 'transparent crystal'],
+  [480, 2.4, 'diamond'], [600, 2.4, 'diamond'], [720, 2.4, 'diamond'],
+];
 
 function wavelengthInGlass(rng: RNG): Generated | null {
-  const [lam, n] = rng.pick(GLASS_LAMBDA);
-  const inGlass = r12(lam / n);
-  if (!Number.isInteger(inGlass)) return null;
-  return pack(rng, {
-    stem: `Light of wavelength ${lam} nm in air enters a glass block of refractive index ${num(n)}. The frequency of the light does not change. Find the wavelength of the light inside the glass.`,
-    answer: E(inGlass),
-    unit: U_NM,
-    must: [
-      { value: E(r12(lam * n)), trap: 'multiplied by n: the wavelength in glass is λ/n' },
+  const [lam, n, medium] = rng.pick(MEDIA_LAMBDA);
+  const inside = r12(lam / n);
+  if (!Number.isInteger(inside)) return null;
+  // Both directions, so the answer is not always the small wavelength (and not always a low option).
+  const into = rng.bool(0.6);
+  const lamIn = into ? lam : inside;
+  const ans = into ? inside : lam;
+  const stem = into
+    ? rng.bool(0.5)
+      ? `Light of wavelength ${lam} nm in air enters a ${medium} of refractive index ${num(n)}. The frequency of the light does not change. Find the wavelength of the light inside the ${medium}.`
+      : `A ray of light of wavelength ${lam} nm in air passes into a ${medium} of refractive index ${num(n)}. Given that the frequency is unchanged, find the wavelength of the light in the ${medium}.`
+    : `Light inside a ${medium} of refractive index ${num(n)} has wavelength ${inside} nm. The light passes out into the air, and its frequency does not change. Find the wavelength of the light in the air.`;
+  const must: Cand[] = into
+    ? [
+      { value: E(r12(lam * n)), trap: 'multiplied by n: the wavelength inside is λ/n' },
+      rng.bool(0.5)
+        ? { value: E(lam), trap: 'assumed the wavelength does not change' }
+        : { value: E(r12(lam / (2 * n))), trap: 'halved as well as dividing by n' },
+    ]
+    : [
+      { value: E(r12(inside / n)), trap: 'divided by n: leaving the medium the wavelength increases' },
+      { value: E(inside), trap: 'assumed the wavelength does not change' },
+    ];
+  const extra: Cand[] = into
+    ? [
       { value: E(lam), trap: 'assumed the wavelength does not change' },
       { value: E(r12(lam / (2 * n))), trap: 'halved as well as dividing by n' },
-    ],
-    extra: [
+      { value: E(r12(lam - lam / n)), trap: 'gave the decrease in wavelength, not the wavelength inside' },
+      { value: E(r12(lam / 2)), trap: 'halved the wavelength instead of dividing by n' },
       { value: E(r12((2 * lam) / n)), trap: 'doubled the answer' },
       { value: E(r12(lam / (n * n))), trap: 'divided by n twice' },
       { value: E(r12(lam - 100)), trap: 'subtracted a round number instead of dividing' },
-    ],
-    solution: `The frequency is unchanged and $v = c/n$, so the wavelength divides by $n$: $\\lambda_{\\text{glass}} = \\dfrac{${lam}}{${num(n)}} = ${inGlass}\\ \\text{nm}$.`,
-    trap: 'Entering glass the speed and the wavelength both fall by a factor n; the frequency is fixed by the source.',
+    ]
+    : [
+      { value: E(r12(inside * n * n)), trap: 'multiplied by n twice' },
+      { value: E(r12(2 * inside)), trap: 'doubled the wavelength instead of multiplying by n' },
+      { value: E(r12(lam - inside)), trap: 'gave the increase in wavelength, not the wavelength in air' },
+      { value: E(r12(lam / 2)), trap: 'halved the answer' },
+      { value: E(r12(2 * lam)), trap: 'doubled the answer' },
+      { value: E(r12(inside + 100)), trap: 'added a round number instead of multiplying' },
+    ];
+  return pack(rng, {
+    stem,
+    answer: E(ans),
+    unit: U_NM,
+    must,
+    extra,
+    solution: into
+      ? `The frequency is unchanged and $v = c/n$, so the wavelength divides by $n$: $\\lambda_{\\text{inside}} = \\dfrac{${lam}}{${num(n)}} = ${inside}\\ \\text{nm}$.`
+      : `The frequency is unchanged and the speed rises by a factor $n$ on leaving, so the wavelength does too: $\\lambda_{\\text{air}} = ${inside} \\times ${num(n)} = ${lam}\\ \\text{nm}$.`,
+    trap: 'Entering a denser medium the speed and the wavelength both fall by a factor n, and both rise again on leaving; the frequency is fixed by the source.',
     tags: ['waves', 'refraction', 'wavelength'],
-    params: { variant: 'lambda-in-glass', lam, n },
+    params: { variant: 'lambda-in-glass', lamIn, n, into },
   });
 }
 
 function changeChoice(rng: RNG): Generated | null {
+  const [lam, n, medium] = rng.pick(MEDIA_LAMBDA);
+  const short = r12(lam / n);
+  if (!Number.isInteger(short)) return null;
   const into = rng.bool(0.5);
-  const n = rng.pick([1.5, 2, 1.25]);
-  const dir = into
-    ? `from air into a glass block of refractive index ${num(n)}`
-    : `from inside a glass block of refractive index ${num(n)} out into the air`;
+  const lamIn = into ? lam : short;   // the wavelength quoted in the stem
+  const lamOut = into ? short : lam;  // the wavelength after the boundary
   const word = into ? 'decreases' : 'increases';
-  const other = into ? 'increases' : 'decreases';
-  const correct = `The frequency is unchanged and the wavelength ${word}.`;
-  const wrong = [
-    { display: `The frequency is unchanged and the wavelength ${other}.`, trap: 'got the direction of the wavelength change the wrong way round' },
-    { display: `The frequency ${word} and the wavelength is unchanged.`, trap: 'thought the frequency changes at a boundary' },
-    { display: `Both the frequency and the wavelength ${word.replace(/s$/, '')}.`, trap: 'changed the frequency as well as the wavelength' },
-    { display: `Both the frequency and the wavelength are unchanged.`, trap: 'forgot that the speed, and so the wavelength, changes' },
-    { display: `The frequency ${other} and the wavelength ${word}.`, trap: 'changed the frequency as well' },
-    { display: `The speed is unchanged and the frequency ${word}.`, trap: 'kept the speed fixed instead of the frequency' },
-  ];
+  const verb = into ? 'fall' : 'rise';
+  const dir = into
+    ? `from air into a ${medium} of refractive index ${num(n)}`
+    : `from inside a ${medium} of refractive index ${num(n)} out into the air`;
+  const correct = `The frequency is unchanged and the wavelength ${word} to ${lamOut} nm.`;
+  const swapped = into ? r12(lam * n) : r12(short / n);
+  // a fifth numeric option: too small the wrong way going in, too big the wrong way coming out
+  const extraWrong = into ? r12(short / 2) : r12(short * n * n);
+  const wrong: { display: string; trap: string }[] = [];
+  if (Number.isInteger(swapped)) {
+    wrong.push({ display: `The frequency is unchanged and the wavelength ${into ? 'increases' : 'decreases'} to ${swapped} nm.`, trap: into ? 'multiplied the wavelength by n instead of dividing' : 'divided by n instead of multiplying' });
+  }
+  wrong.push(
+    { display: `The frequency is unchanged and the wavelength stays at ${lamIn} nm.`, trap: 'forgot that the speed, and so the wavelength, changes at the boundary' },
+    { display: `The wavelength stays at ${lamIn} nm and the frequency ${word} by a factor of ${num(n)}.`, trap: 'changed the frequency instead of the wavelength' },
+    { display: `Both the frequency and the wavelength ${verb} by a factor of ${num(n)}.`, trap: 'changed the frequency as well as the wavelength' },
+    { display: `The frequency is unchanged and the wavelength ${word} to ${num(extraWrong)} nm.`, trap: into ? 'halved the wavelength as well as dividing by n' : 'multiplied by n twice' },
+    { display: `The speed of the light is unchanged and the wavelength ${word} to ${lamOut} nm.`, trap: 'kept the speed fixed instead of the frequency' },
+  );
   return {
-    stem: `A ray of light of frequency $5 \\times 10^{14}\\ \\text{Hz}$ passes ${dir}. Which of the following statements about the light after it crosses the boundary is correct?`,
+    stem: `A ray of light of wavelength ${lamIn} nm passes ${dir}. The speed of light in air is $${C_TEX}\\ \\text{m s}^{-1}$. Which of the following describes the light after it has crossed the boundary?`,
     answer: { kind: 'choice', value: correct },
     options: buildChoiceOptions(rng, correct, wrong),
-    solution: `The frequency is set by the source and never changes at a boundary. The speed ${word} by a factor of ${num(n)}, and since $v = f\\lambda$ with $f$ fixed, the wavelength ${word} in the same ratio.`,
-    trap: 'At a boundary the frequency is fixed; the speed and the wavelength change together.',
-    tags: ['waves', 'refraction', 'statements'],
-    params: { variant: 'change-choice', into, n },
+    solution: `The frequency is set by the source and never changes at a boundary. The speed ${word} by a factor of ${num(n)}, and with $f$ fixed in $v = f\\lambda$ the wavelength ${word} in the same ratio: $${lamIn} ${into ? '\\div' : '\\times'} ${num(n)} = ${lamOut}$ nm.`,
+    trap: 'At a boundary the frequency is fixed; the speed and the wavelength change together, in the ratio of the refractive indices.',
+    tags: ['waves', 'refraction', 'statements', 'wavelength'],
+    params: { variant: 'change-choice', into, n, lamIn },
     typedAllowed: false,
   };
 }
@@ -395,8 +543,9 @@ function parallelBlock(rng: RNG): Generated | null {
       { value: E(90 - i), trap: 'measured from the surface instead of from the normal' },
       { value: E(90 - rr), trap: 'measured the angle inside the block from the surface' },
       { value: E(2 * rr), trap: 'doubled the angle inside the block' },
-      { value: E(i / 2), trap: 'halved the angle of incidence' },
+      { value: halfDeg(i), trap: 'halved the angle of incidence' },
       { value: E(i + rr), trap: 'added the two angles' },
+      { value: E(i - 2 * rr > 0 ? i - 2 * rr : 5), trap: 'deviated the ray twice, instead of undoing the first deviation' },
     ],
     solution: `The two faces are parallel, so the ray refracts by the same amount on the way out as on the way in: it emerges at ${DEG(i)}, parallel to the original ray.`,
     trap: 'A parallel-sided block shifts the ray sideways but does not change its direction.',
@@ -405,37 +554,69 @@ function parallelBlock(rng: RNG): Generated | null {
   });
 }
 
-/** [n, angle of incidence inside the material, refraction angle out (null = total internal reflection), n as LaTeX, C as LaTeX] */
-const TIR_CASES: [number, number, number | null, string, string][] = [
-  [2, 45, null, '2', 'C = 30^{\\circ}'],
-  [2, 60, null, '2', 'C = 30^{\\circ}'],
-  [Math.SQRT2, 60, null, '\\sqrt{2}', 'C = 45^{\\circ}'],
-  [Math.SQRT2, 30, 45, '\\sqrt{2}', 'C = 45^{\\circ}'],
-  [Math.sqrt(3), 45, null, '\\sqrt{3}', 'C \\approx 34^{\\circ}'],
-  [Math.sqrt(3), 30, 60, '\\sqrt{3}', 'C \\approx 34^{\\circ}'],
+const TIR_TEXT = 'The ray is totally internally reflected at the boundary.';
+const UNDEVIATED = 'The ray passes out of the material without changing direction.';
+const ABSORBED = 'The light is absorbed at the boundary and does not continue.';
+
+/**
+ * [n, the angle of incidence inside the material, the angle of refraction out (null = total internal
+ *  reflection), n as LaTeX, the critical angle when it is a round number of degrees].
+ * With n = √3 the critical angle is 35.3°, so that case is settled by comparing sines, never by
+ * printing an approximate angle.
+ */
+const TIR_CASES: [number, number, number | null, string, number | null][] = [
+  [2, 40, null, '2', 30],
+  [2, 45, null, '2', 30],
+  [2, 50, null, '2', 30],
+  [2, 60, null, '2', 30],
+  [2, 70, null, '2', 30],
+  [Math.SQRT2, 50, null, '\\sqrt{2}', 45],
+  [Math.SQRT2, 60, null, '\\sqrt{2}', 45],
+  [Math.SQRT2, 70, null, '\\sqrt{2}', 45],
+  [Math.SQRT2, 30, 45, '\\sqrt{2}', 45],
+  [Math.sqrt(3), 30, 60, '\\sqrt{3}', null],
 ];
 
 function tirChoice(rng: RNG): Generated | null {
-  const [n, i, out, tex, cTex] = rng.pick(TIR_CASES);
-  const TIR = 'The ray is totally internally reflected at the boundary.';
-  const refr = (d: number) => `The ray refracts out of the material at ${DEG(d)} to the normal.`;
-  const correct = out === null ? TIR : refr(out);
-  const wrong: { display: string; trap: string }[] = [];
-  if (out === null) {
-    wrong.push({ display: refr(i), trap: 'assumed the ray always passes through, undeviated' });
-    for (const d of [30, 45, 60, 90]) if (d !== i) wrong.push({ display: refr(d), trap: 'used sin r = sin i / n instead of n sin i, so missed that sin r would exceed 1' });
-  } else {
-    wrong.push({ display: TIR, trap: 'thought any ray meeting the boundary from inside is totally internally reflected' });
-    for (const d of [30, 45, 60, 90]) if (d !== out) wrong.push({ display: refr(d), trap: 'divided by n instead of multiplying: leaving the material the ray bends away from the normal' });
+  const [n, i, out, tex, Cdeg] = rng.pick(TIR_CASES);
+  const refr = (d: number) => `The ray refracts out of the material into the air at ${DEG(d)} to the normal.`;
+  const correct = out === null ? TIR_TEXT : refr(out);
+  const wrong: { display: string; trap: string; key?: string }[] = [];
+  /** An angle offered as the emergent angle; `undeviated` ones share a key so only one can appear. */
+  const addRefr = (d: number, trap: string) => {
+    if (d === out || d <= 0 || d >= 90) return;
+    wrong.push({ display: refr(d), trap, key: d === i ? 'undeviated' : undefined });
+  };
+  addRefr(i, 'assumed the ray crosses the boundary undeviated');
+  addRefr(90 - i, 'measured the angle of incidence from the surface instead of from the normal');
+  if (Cdeg !== null) addRefr(Cdeg, 'quoted the critical angle as the angle of refraction');
+  if (out !== null) addRefr(90 - out, 'measured the emerging ray from the surface instead of from the normal');
+  if (out !== null) wrong.push({ display: TIR_TEXT, trap: 'thought any ray meeting the boundary from inside is totally internally reflected' });
+  wrong.push({ display: UNDEVIATED, trap: 'forgot that a ray changes direction at a boundary between two media', key: 'undeviated' });
+  wrong.push({
+    display: `The ray refracts out of the material along the boundary, at ${DEG(90)} to the normal.`,
+    trap: 'a ray emerges along the boundary only at exactly the critical angle',
+  });
+  if (90 - i !== i) {
+    wrong.push({
+      display: `The ray is totally internally reflected, leaving the boundary at ${DEG(90 - i)} to the normal.`,
+      trap: 'a reflected ray makes the angle of incidence with the normal, not with the surface',
+    });
   }
-  wrong.push({ display: 'The ray passes out of the material without changing direction.', trap: 'forgot that the ray refracts at a boundary between two media' });
+  wrong.push({ display: ABSORBED, trap: 'at a boundary light is reflected or refracted, not absorbed' });
+  // The critical angle is only ever quoted when it is a round number of degrees; otherwise the
+  // comparison is made exactly, between sin^2 i and 1/n^2 (arcsin(1/√3) = 35.3° is not a quotable angle).
+  const sinI = out !== null || Cdeg === null ? exactSin(i) : null;
+  const compare = Cdeg !== null
+    ? `$\\sin C = \\dfrac{1}{${tex}}$, so $C = ${Cdeg}^{\\circ}$, and ${DEG(i)} is ${out === null ? 'greater' : 'less'} than $C$`
+    : `$\\sin^2 C = \\dfrac{1}{${Math.round(n * n)}}$ and $\\sin^2 ${i}^{\\circ} = ${sinI!.mul(sinI!).toLatex({ format: 'fraction' })}$, so $\\sin i$ is ${out === null ? 'greater' : 'less'} than $\\sin C$`;
   return {
     stem: `A ray of light travelling inside a material of refractive index $${tex}$ meets the boundary with air at an angle of incidence of ${DEG(i)} to the normal. Which of the following describes what happens to the ray?`,
     answer: { kind: 'choice', value: correct },
     options: buildChoiceOptions(rng, correct, wrong),
     solution: out === null
-      ? `$\\sin C = \\dfrac{1}{${tex}}$, so $${cTex}$. The angle of incidence ${DEG(i)} is greater than $C$, so the ray is totally internally reflected.`
-      : `$\\sin C = \\dfrac{1}{${tex}}$, so $${cTex}$; ${DEG(i)} is less than $C$, so the ray refracts out. Then $\\sin r = n \\sin i = ${tex} \\times ${exactSin(i).toLatex()} = ${exactSin(out).toLatex()}$, giving $r = ${out}^{\\circ}$.`,
+      ? `${compare}, so the ray is totally internally reflected.`
+      : `${compare}, so the ray refracts out. Leaving the material it bends away from the normal: $\\sin r = n \\sin i = ${tex} \\times ${sinI!.toLatex()} = ${exactSin(out).toLatex()}$, giving $r = ${out}^{\\circ}$.`,
     trap: 'Compare the angle with the critical angle first; leaving the material the ray bends away from the normal (sin r = n sin i).',
     tags: ['waves', 'refraction', 'total-internal-reflection'],
     params: { variant: 'tir-choice', n, i, out },
@@ -458,6 +639,7 @@ function mirrorImage(rng: RNG): Generated | null {
         { value: E(r12(4 * d)), trap: 'doubled twice' },
         { value: E(r12(d + 1)), trap: 'added a metre instead of doubling' },
         { value: E(r12(3 * d)), trap: 'counted the object distance twice as well as the image distance' },
+        { value: E(r12((3 * d) / 2)), trap: 'added half the object distance instead of doubling' },
       ],
       solution: `A plane mirror forms an image as far behind the mirror as the object is in front, so the separation is $2 \\times ${num(d)} = ${num(2 * d)}\\ \\text{m}$.`,
       trap: 'The image is the same distance behind the mirror: the object–image distance is twice the object distance.',
@@ -512,40 +694,83 @@ export default defineTemplate({
     return retry(rng, () => pickVariant(rng, BY_LEVEL[level]));
   },
   verify(q) {
-    // Independent check: floating-point Snell's law / n = c/v straight from the parameters.
-    const p = q.params as Record<string, number> & { variant: string; into?: boolean; out?: number | null };
+    // Independent checks: floating-point Snell's law, n = c/v, and — for the mirrors and the law of
+    // reflection — plane geometry done with vectors rather than the generator's arithmetic.
+    const p = q.params as Record<string, number> & { variant: string; into?: boolean; askAir?: boolean; out?: number | null };
     const close = (x: number, y: number) => Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(y));
     const exact = q.answer.kind === 'exact' ? q.answer.value.toNumber() : NaN;
+    const rad = (d: number) => (d * Math.PI) / 180;
+    /** Angle in degrees between two plane vectors. */
+    const between = (u: [number, number], v: [number, number]) =>
+      (Math.acos((u[0] * v[0] + u[1] * v[1]) / (Math.hypot(u[0], u[1]) * Math.hypot(v[0], v[1]))) * 180) / Math.PI;
+    /** Reflect a direction in a mirror lying along the x-axis. */
+    const bounce = (u: [number, number]): [number, number] => [u[0], -u[1]];
     switch (p.variant) {
       case 'v-from-n': return close(exact * p.n, C);
       case 'n-from-v': return close(exact * p.v, C);
-      case 'reflect-to-normal':
-      case 'reflect-to-mirror': return close(exact + p.a, 90);
-      case 'reflect-between': return close(exact, 2 * p.a) && close(sinD(p.a), sinD(exact / 2));
-      case 'n-from-angles': return close(exact * sinD(p.r), sinD(p.i));
-      case 'r-from-n-i': return close((sinD(p.i) / sinD(p.r)) * sinD(exact), sinD(p.i));
+      case 'reflect-to-normal': {
+        // the incident ray makes p.a with the mirror; reflect it and measure against the normal
+        const out = bounce([Math.cos(rad(p.a)), -Math.sin(rad(p.a))]);
+        return close(exact, between(out, [0, 1]));
+      }
+      case 'reflect-to-mirror': {
+        // the incident ray makes p.a with the normal; reflect it and measure against the mirror
+        const out = bounce([Math.sin(rad(p.a)), -Math.cos(rad(p.a))]);
+        return close(exact, between(out, [1, 0]));
+      }
+      case 'reflect-between': {
+        const inc: [number, number] = [Math.sin(rad(p.a)), -Math.cos(rad(p.a))];
+        const out = bounce(inc);
+        return close(exact, between([-inc[0], -inc[1]], out));
+      }
+      case 'n-from-angles': return close(exact * sinD(p.r), sinD(p.i)) && exact > 1;
+      case 'r-from-n-i': {
+        const n = sinD(p.i) / sinD(p.r);
+        const air = p.askAir ? exact : p.i;
+        const mat = p.askAir ? p.r : exact;
+        return n > 1 && air > mat && close(n * sinD(mat), sinD(air));
+      }
       case 'critical-angle': return close(p.n * sinD(exact), 1);
       case 'sin-critical': return close(exact * p.n, 1);
-      case 'lambda-in-glass': return close(exact * p.n, p.lam);
-      case 'parallel-block': return close(exact, p.i) && p.r < p.i;
-      case 'mirror-separation': return close(exact, 2 * p.d);
-      case 'mirror-walk': return close(exact, 2 * p.x);
+      case 'lambda-in-glass': {
+        // the frequency is the same on both sides of the boundary: f = v/λ must agree
+        const lamInside = (p.into ? exact : p.lamIn) * 1e-9;
+        const lamAir = (p.into ? p.lamIn : exact) * 1e-9;
+        return lamAir > lamInside && close((C / p.n) / lamInside, C / lamAir);
+      }
+      case 'parallel-block': {
+        // Snell at the entry face fixes n; the exit face must send the ray back out at the answer
+        const n = sinD(p.i) / sinD(p.r);
+        return n > 1 && close(n * sinD(p.r), sinD(exact)) && exact > p.r;
+      }
+      case 'mirror-separation': {
+        // the mirror is the line x = 0; the image is the object reflected in it
+        const object = -p.d;
+        const image = -object;
+        return close(exact, Math.abs(image - object));
+      }
+      case 'mirror-walk': {
+        const before = Math.abs(p.d - -p.d);
+        const after = Math.abs(p.d - p.x - -(p.d - p.x));
+        return close(exact, before - after);
+      }
       case 'change-choice': {
         if (q.answer.kind !== 'choice') return false;
-        // λ = v/f with f fixed: work both wavelengths out and compare them
-        const f = 5e14;
-        const lamBefore = (p.into ? C : C / p.n) / f;
-        const lamAfter = (p.into ? C / p.n : C) / f;
-        const word = lamAfter < lamBefore ? 'decreases' : 'increases';
-        return q.answer.value === `The frequency is unchanged and the wavelength ${word}.`;
+        // λ = v/f with f fixed: get f from the first medium, then the wavelength in the second
+        const vBefore = p.into ? C : C / p.n;
+        const vAfter = p.into ? C / p.n : C;
+        const f = vBefore / (p.lamIn * 1e-9);
+        const lamAfter = Number(((vAfter / f) * 1e9).toPrecision(12));
+        const word = lamAfter < p.lamIn ? 'decreases' : 'increases';
+        return q.answer.value === `The frequency is unchanged and the wavelength ${word} to ${num(lamAfter)} nm.`;
       }
       case 'tir-choice': {
         if (q.answer.kind !== 'choice') return false;
         const s = p.n * sinD(p.i);
-        if (s > 1) return q.answer.value === 'The ray is totally internally reflected at the boundary.';
+        if (s > 1) return q.answer.value === TIR_TEXT;
         const outDeg = (Math.asin(s) * 180) / Math.PI;
         const m = /at \$(\d+(?:\.\d+)?)\^/.exec(q.answer.value);
-        return m !== null && close(Math.round(outDeg), Number(m[1])) && Math.abs(outDeg - Number(m[1])) < 1e-6;
+        return m !== null && Math.abs(outDeg - Number(m[1])) < 1e-6;
       }
       default: return false;
     }

@@ -22,10 +22,28 @@ const G = 10;
 const U_W = '\\text{W}', U_KW = '\\text{kW}', U_J = '\\text{J}', U_KJ = '\\text{kJ}', U_N = '\\text{N}', U_MS = '\\text{m s}^{-1}';
 const SIN30 = 0.5;
 
-type Candidate = { value: Exact | null; trap: string };
+/**
+ * A candidate distractor. `wide` marks a mistake that is a whole factor out — a J/kJ or W/kW slip, or
+ * forgetting to divide by the time — which may sit up to 1000x from the answer; everything else must stay
+ * within a factor of 20, because 0.6 J beside 6000 J is not an option list the exam would print.
+ */
+type Candidate = { value: Exact | null; trap: string; wide?: boolean };
+type Ranked = Distractor & { wide?: boolean };
 
 /** Plain number for a stem: 1200, 0.05, 22.5. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
+/** Round away floating-point noise (0.1 x 3 -> 0.3). */
+const r = (x: number): number => Number(x.toPrecision(12));
+
+/**
+ * A mistake value that is not exact (the cos 30 slip): printed the way the exam prints a power, as a
+ * one-decimal-place number, or to three significant figures when it is large. Never a surd: no exam
+ * offers "12 + 90 root 3 kW" beside four decimals, so that option is discarded without any physics.
+ */
+function approx(x: number): Exact | null {
+  if (!Number.isFinite(x) || x <= 0) return null;
+  return E(Math.abs(x) >= 1000 ? Number(x.toPrecision(3)) : Number(x.toFixed(1)));
+}
 
 function tryE(f: () => Exact): Exact | null {
   try {
@@ -36,30 +54,73 @@ function tryE(f: () => Exact): Exact | null {
   }
 }
 
-/** Positive, finite, clean and exam-sized candidates (percentages: whole numbers or halves). */
-function cleanOnly(ds: Candidate[], pct = false): Distractor[] {
-  return ds.filter((d): d is { value: Exact; trap: string } => {
+/**
+ * Positive, finite, clean candidates that sit close enough to the answer to be weighed against it.
+ * Percentages are whole numbers or halves no greater than 100: an efficiency of 400% is impossible, so
+ * a candidate deletes it without doing the question (the only exception is the "forgot to multiply by
+ * 100" decimal, which is the mistake the question is testing).
+ */
+function cleanOnly(ds: Candidate[], answer: Exact, pct = false): Ranked[] {
+  const a = answer.toNumber();
+  const out: Ranked[] = [];
+  for (const d of ds) {
     const v = d.value;
-    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) return false;
+    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) continue;
     const x = v.toNumber();
-    if (x < 0.001 || x > 2e6) return false;
-    if (pct) return v.isRational() && v.toRat().d <= 2n;
-    return !v.isRational() || Number.isInteger(Number((x * 1000).toPrecision(12))); // decimals must terminate
-  });
+    if (x < 0.001 || x > 2e6) continue;
+    if (pct) {
+      if (x >= 100 || !v.isRational()) continue;
+      const den = v.toRat().d;
+      if (!(den <= 2n || (x < 1 && Number.isInteger(r(x * 100))))) continue;
+    } else {
+      const span = d.wide ? 1000 : 12;
+      if (x > span * a || x < a / span) continue;
+      if (v.isRational() && !Number.isInteger(r(x * 1000))) continue; // decimals must terminate
+    }
+    out.push({ value: v, trap: d.trap, wide: d.wide });
+  }
+  return out;
 }
 
-/** Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never
+ * shuffled out. The remaining slots are filled towards a randomly chosen number of options *below* the
+ * answer, so where the correct option lands in the sorted list is a property of the draw and not of the
+ * sub-variant. A unit slip (J read as kJ, W as kW) is 1000x out: it is the classic mistake of the topic,
+ * but a list that holds one cannot hold anything else far away, so it is offered alone and in a minority
+ * of draws — the rest of the time every option sits within a factor of 20 of the answer.
+ */
+function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
+  const out: Ranked[] = [];
+  const nums: number[] = [a];
+  let wideSlots = rng.bool(0.4) ? 1 : 0;
+  let shiftSlots = 1; // one power-of-ten option at most: an option list that is a decimal ladder tests only the decimal point
+  const take = (d: Ranked) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    const x = d.value.toNumber();
+    const k = Math.log10(x / a);
+    const isShift = Math.abs(k) >= 0.999 && Math.abs(k - Math.round(k)) < 1e-6;
+    if (d.wide && wideSlots <= 0) return;
+    if (isShift && shiftSlots <= 0) return;
+    if (out.length > 0 && Math.max(...nums, x) / Math.min(...nums, x) > 1000) return;
+    if (d.wide) wideSlots--;
+    if (isShift) shiftSlots--;
     seen.push(d.value);
+    nums.push(x);
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  return out;
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && below.length + above.length > 0) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
+  return out.map((d) => ({ value: d.value, trap: d.trap }));
 }
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix of variants. */
@@ -87,7 +148,7 @@ interface Pack {
 
 function pack(rng: RNG, p: Pack): Generated | null {
   if (!isCleanExact(p.answer).ok || p.answer.sign() <= 0) return null;
-  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.pct), cleanOnly(p.extra, p.pct));
+  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer, p.pct), cleanOnly(p.extra, p.answer, p.pct));
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -123,9 +184,11 @@ function workQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: F % d === 0 ? E(F / d) : d % F === 0 ? E(d / F) : null, trap: 'divided instead of multiplying' },
+      { value: F - d > 0 ? E(F - d) : null, trap: 'subtracted the distance from the force' },
       { value: E(2 * W), trap: 'doubled the product' },
-      { value: E(W / 1000), trap: 'gave the answer in kJ' },
+      { value: E(W / 1000), trap: 'gave the answer in kJ', wide: true },
       { value: E(W * 10), trap: 'slipped a decimal place' },
+      { value: E(W / 10), trap: 'slipped a decimal place the other way' },
     ],
     solution: `Work done $= Fd = ${F} \\times ${d} = ${W}\\ \\text{J}$.`,
     trap: 'Work is force × distance moved in the direction of the force, with no factor of ½ (that belongs to ½mv² and ½kx²).',
@@ -154,15 +217,18 @@ function powerFromWorkQ(rng: RNG): Generated | null {
     answer: E(P),
     unit: U_W,
     must: [
-      { value: E(W * t), trap: 'multiplied energy by time: P = W × t' },
-      { value: minutes ? E(W / tMin) : inKJ ? E(W / 1000 / t) : E(W), trap: minutes ? 'used the time in minutes, not seconds' : inKJ ? 'forgot to convert kJ to J' : 'forgot to divide by the time' },
+      { value: E(W * t), trap: 'multiplied energy by time: P = W × t', wide: true },
+      { value: minutes ? E(W / tMin) : inKJ ? E(W / 1000 / t) : E(W), trap: minutes ? 'used the time in minutes, not seconds' : inKJ ? 'forgot to convert kJ to J' : 'forgot to divide by the time', wide: true },
     ],
     extra: [
-      { value: E(W), trap: 'gave the energy rather than the power' },
-      { value: E(P / 1000), trap: 'gave the answer in kW' },
+      { value: E(W), trap: 'gave the energy rather than the power', wide: true },
+      { value: E(P / 1000), trap: 'gave the answer in kW', wide: true },
       { value: E(P * 10), trap: 'slipped a decimal place' },
-      { value: E(P / 10), trap: 'slipped a decimal place' },
+      { value: E(P / 10), trap: 'slipped a decimal place the other way' },
       { value: E(P * 2), trap: 'doubled the power' },
+      { value: E(P / 2), trap: 'halved the power, as if the work were ½Fd' },
+      { value: !minutes && t % 60 !== 0 ? E(W / (60 * t)) : null, trap: 'divided by 60 as well, although the time was already in seconds' },
+      { value: t !== 1 ? E(W / (t * t)) : null, trap: 'divided by the time twice' },
     ],
     solution: `Power $= \\dfrac{\\text{energy}}{\\text{time}} = \\dfrac{${W}}{${t}} = ${P}\\ \\text{W}$${minutes ? ` (${tMin} min $= ${t}$ s)` : inKJ ? ` (${n(W / 1000)} kJ $= ${W}$ J)` : ''}.`,
     trap: 'Power is energy divided by time in seconds; watts need joules and seconds, so convert kJ and minutes first.',
@@ -188,14 +254,18 @@ function powerFdtQ(rng: RNG): Generated | null {
     answer: E(P),
     unit: U_W,
     must: [
-      { value: E(W), trap: 'found the work done and forgot to divide by the time' },
-      { value: E(W * t), trap: 'multiplied the work by the time: P = W × t' },
+      { value: E(W), trap: 'found the work done and forgot to divide by the time', wide: true },
+      { value: E(W * t), trap: 'multiplied the work by the time: P = W × t', wide: true },
     ],
     extra: [
       { value: (F * t) % d === 0 ? E((F * t) / d) : null, trap: 'divided by the distance instead of the time' },
+      { value: E(F / t), trap: 'forgot the distance: used F/t' },
+      { value: E(d / t), trap: 'gave the speed d/t, not the power' },
       { value: E(P / 2), trap: 'halved the work as if it were ½Fd' },
-      { value: E(P / 1000), trap: 'gave the answer in kW' },
+      { value: E(2 * P), trap: 'doubled the power' },
+      { value: E(P / 1000), trap: 'gave the answer in kW', wide: true },
       { value: E(P * 10), trap: 'slipped a decimal place' },
+      { value: E(P / 10), trap: 'slipped a decimal place the other way' },
     ],
     solution: `Work done $= Fd = ${F} \\times ${d} = ${W}\\ \\text{J}$, so $P = \\dfrac{${W}}{${t}} = ${P}\\ \\text{W}$ (equivalently $P = Fv = ${F} \\times ${n(d / t)}$).`,
     trap: 'Power is work ÷ time (or F × v), not the work itself and not work × time.',
@@ -225,13 +295,15 @@ function carPowerQ(rng: RNG): Generated | null {
     answer,
     unit: inKW ? U_KW : U_W,
     must: [
-      { value: inKW ? E(P) : E(P / 1000), trap: inKW ? 'left the answer in watts' : 'gave the answer in kW' },
+      { value: inKW ? E(P) : E(P / 1000), trap: inKW ? 'left the answer in watts' : 'gave the answer in kW', wide: true },
       { value: m ? E(m * G * v * scale) : E(R * v * v * scale), trap: m ? 'used the weight of the car as the driving force' : 'multiplied by v² instead of v' },
     ],
     extra: [
       { value: m ? E((R + m * G) * v * scale) : null, trap: 'added the weight to the resistance' },
       { value: E((R * v * scale) / 2), trap: 'put in a spurious factor of ½' },
+      { value: E(R * scale), trap: 'gave the driving force, not the power (forgot to multiply by the speed)' },
       { value: inKW ? E(P / 100) : E(P * 10), trap: 'slipped a decimal place' },
+      { value: E((R * v * scale) / 10), trap: 'slipped a decimal place the other way' },
       { value: R % v === 0 ? E((R / v) * scale) : null, trap: 'divided the force by the speed' },
       { value: E(R * v * scale * 2), trap: 'doubled the power' },
     ],
@@ -256,14 +328,15 @@ function resistanceQ(rng: RNG): Generated | null {
       answer: E(v),
       unit: U_MS,
       must: [
-        { value: E(PkW / R), trap: 'forgot to convert kW to W' },
-        { value: E(P * R), trap: 'multiplied the power by the force' },
+        { value: E(PkW / R), trap: 'forgot to convert kW to W', wide: true },
+        { value: E(P * R), trap: 'multiplied the power by the force', wide: true },
       ],
       extra: [
         { value: E(2 * v), trap: 'doubled the speed' },
         { value: E(v / 2), trap: 'halved the speed' },
         { value: E(v * 10), trap: 'slipped a decimal place' },
-        { value: E(v / 10), trap: 'slipped a decimal place' },
+        { value: E(v / 10), trap: 'slipped a decimal place the other way' },
+        { value: R % PkW === 0 ? E(R / PkW) : null, trap: 'divided the resistance by the power in kW' },
       ],
       solution: `At constant speed the driving force equals the resistance, so $v = \\dfrac{P}{F} = \\dfrac{${P}}{${R}} = ${v}\\ ${U_MS}$.`,
       trap: 'Convert kW to W before dividing: P = Fv with P in watts.',
@@ -276,13 +349,14 @@ function resistanceQ(rng: RNG): Generated | null {
     answer: E(R),
     unit: U_N,
     must: [
-      { value: E(PkW / v), trap: 'forgot to convert kW to W' },
-      { value: E(PkW * v), trap: 'multiplied the power (in kW) by the speed' },
+      { value: E(PkW / v), trap: 'forgot to convert kW to W', wide: true },
+      { value: E(PkW * v), trap: 'multiplied the power (in kW) by the speed', wide: true },
     ],
     extra: [
-      { value: E(P * v), trap: 'multiplied the power by the speed' },
+      { value: E(P * v), trap: 'multiplied the power by the speed', wide: true },
+      { value: E(R / v), trap: 'divided by the speed twice' },
       { value: E(R * 10), trap: 'slipped a decimal place' },
-      { value: E(R / 10), trap: 'slipped a decimal place' },
+      { value: E(R / 10), trap: 'slipped a decimal place the other way' },
       { value: E(R / 2), trap: 'halved the force' },
       { value: E(2 * R), trap: 'doubled the force' },
     ],
@@ -319,16 +393,21 @@ function efficiencyPctQ(rng: RNG): Generated | null {
     stem,
     answer: E(e),
     pct: true,
+    // Every option is a possible efficiency: an option above 100% is impossible, so a candidate deletes
+    // it on sight (the template's own trap line tells them to). The inverted ratio total ÷ useful is
+    // always above 100%, so it is replaced by mistakes that land in range.
     must: [
-      { value: tryE(() => E(100 * total).div(E(useful))), trap: 'inverted the ratio (total ÷ useful), giving an efficiency above 100%' },
       { value: E(100 - e), trap: 'found the percentage wasted' },
+      { value: E(e / 10), trap: 'multiplied the ratio by 10 instead of 100' },
     ],
     extra: [
-      { value: E(e / 100), trap: 'gave the efficiency as a decimal, not a percentage' },
+      { value: E(e / 100), trap: 'gave the efficiency as a decimal, not a percentage', wide: true },
       { value: E((total - useful) * scale), trap: 'gave the wasted power/energy as if it were a percentage' },
-      { value: e < 50 ? E(2 * e) : E(e / 2), trap: e < 50 ? 'doubled the ratio' : 'halved the ratio' },
-      { value: E(e + 10), trap: 'arithmetic slip in the ratio' },
-      { value: E(e - 10), trap: 'arithmetic slip in the ratio' },
+      { value: tryE(() => E(100 * useful).div(E(total - useful))), trap: 'divided the useful output by the wasted output instead of by the total' },
+      { value: E(2 * e), trap: 'doubled the ratio' },
+      { value: E(e / 2), trap: 'halved the ratio' },
+      { value: E(100 - 2 * e), trap: 'doubled the ratio and then took the wasted percentage' },
+      { value: E((100 - e) / 2), trap: 'halved the wasted percentage' },
     ],
     solution: `Efficiency $= \\dfrac{\\text{useful}}{\\text{total}} \\times 100\\% = \\dfrac{${use}}{${tot}} \\times 100\\% = ${e}\\%$.`,
     trap: 'Efficiency is useful ÷ total (never above 100%), and the question asks for the useful fraction, not the wasted one.',
@@ -393,7 +472,7 @@ function wastedQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: E(total * scale), trap: 'gave the total energy supplied' },
-      { value: inKJ ? E(wasted) : E(wasted / 1000), trap: inKJ ? 'left the answer in joules' : 'gave the answer in kJ' },
+      { value: inKJ ? E(wasted) : E(wasted / 1000), trap: inKJ ? 'left the answer in joules' : 'gave the answer in kJ', wide: true },
       { value: E(wasted * scale * 10), trap: 'slipped a decimal place' },
       { value: E((pin * e) / 100 * scale), trap: 'gave the useful power' },
     ],
@@ -443,12 +522,15 @@ function liftPowerQ(rng: RNG): Generated | null {
     unit: inKW ? U_KW : U_W,
     must: [
       { value: E((m * h * scale) / t), trap: 'forgot g: used mass instead of weight' },
-      { value: E(W * scale), trap: 'found the energy (mgh) and forgot to divide by the time' },
+      { value: E(W * scale), trap: 'found the energy (mgh) and forgot to divide by the time', wide: true },
     ],
     extra: [
-      { value: inKW ? E(P) : E(P / 1000), trap: inKW ? 'left the answer in watts' : 'gave the answer in kW' },
-      { value: E(W * t * scale), trap: 'multiplied by the time: P = W × t' },
+      { value: inKW ? E(P) : E(P / 1000), trap: inKW ? 'left the answer in watts' : 'gave the answer in kW', wide: true },
+      { value: E(W * t * scale), trap: 'multiplied by the time: P = W × t', wide: true },
       { value: E((P * scale) / 2), trap: 'put in a spurious factor of ½' },
+      { value: E((m * G * scale) / t), trap: 'forgot the height: used mg/t' },
+      { value: E((h / t) * scale), trap: 'gave the speed h/t, not the power' },
+      { value: E(2 * P * scale), trap: 'doubled the power' },
       { value: scenario === 'pump' ? E(W * scale) : E(P * scale * 10), trap: scenario === 'pump' ? 'used the time in minutes, not seconds' : 'slipped a decimal place' },
     ],
     solution: `Work done $= mgh = ${m} \\times 10 \\times ${h} = ${W}\\ \\text{J}$, so $P = \\dfrac{${W}}{${t}} = ${P}\\ \\text{W}${inKW ? ` = ${n(P / 1000)}\\ \\text{kW}` : ''}$${scenario === 'pump' ? ' (one minute is 60 s)' : ''}.`,
@@ -536,14 +618,16 @@ function inclineQ(rng: RNG): Generated | null {
     must: [
       { value: E((R + m * G) * v * scale), trap: 'used the whole weight instead of its component mg sin 30° along the slope' },
       // a + b√3 only reads like an exam option when both parts are whole numbers
-      { value: Number.isInteger(R * v * scale) && Number.isInteger((m * G * v * scale) / 2) ? tryE(() => E(R * v * scale).add(surd(3, (m * G * v * scale) / 2))) : null, trap: 'used cos 30° instead of sin 30° for the component of the weight' },
+      { value: approx((R + m * G * Math.cos(Math.PI / 6)) * v * scale), trap: 'used cos 30° instead of sin 30° for the component of the weight' },
       { value: E(R * v * scale), trap: 'ignored the slope: forgot the component of the weight' },
     ],
     extra: [
       { value: E(slope * v * scale), trap: 'forgot the resistance' },
       { value: slope > R ? E((slope - R) * v * scale) : null, trap: 'subtracted the resistance instead of adding it' },
-      { value: inKW ? E(P) : E(P / 1000), trap: inKW ? 'left the answer in watts' : 'gave the answer in kW' },
+      { value: inKW ? E(P) : E(P / 1000), trap: inKW ? 'left the answer in watts' : 'gave the answer in kW', wide: true },
       { value: E(P * scale * 10), trap: 'slipped a decimal place' },
+      { value: E((P * scale) / 10), trap: 'slipped a decimal place the other way' },
+      { value: approx((R + m * G * SIN30 / 2) * v * scale), trap: 'halved the component of the weight again' },
     ],
     solution: `At constant speed the driving force balances the resistance plus the weight component down the slope: $F = ${R} + ${m} \\times 10 \\times \\sin 30^{\\circ} = ${R} + ${slope} = ${F}\\ \\text{N}$. Then $P = Fv = ${F} \\times ${v} = ${P}\\ \\text{W}${inKW ? ` = ${n(P / 1000)}\\ \\text{kW}` : ''}$.`,
     trap: 'The component of the weight along a slope is mg sin θ (sin 30° = ½), and it adds to the resistance when climbing; P = Fv.',
@@ -581,9 +665,10 @@ function chainQ(rng: RNG): Generated | null {
       ],
       extra: [
         { value: E(Math.min(e1, e2)), trap: 'took the lower efficiency as the overall value' },
+        { value: E(Math.max(e1, e2)), trap: 'took the higher efficiency as the overall value' },
         { value: E(100 - overall), trap: 'found the overall percentage wasted' },
         { value: E(overall / 100), trap: 'gave the efficiency as a decimal, not a percentage' },
-        { value: E(overall + 10), trap: 'arithmetic slip in the product' },
+        { value: E(100 - (100 - e1) * (100 - e2) / 100), trap: 'multiplied the two losses instead of the two efficiencies' },
       ],
       solution: `Efficiencies in series multiply: $${n(e1 / 100)} \\times ${n(e2 / 100)} = ${n(overall / 100)}$, i.e. $${overall}\\%$.`,
       trap: 'Efficiencies of stages in series multiply as fractions; they are not averaged and the losses are not simply added.',

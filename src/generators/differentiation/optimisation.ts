@@ -136,16 +136,27 @@ function rectanglePerimeterQ(rng: RNG): Generated | null {
   const ask: Ask = rng.bool(0.7) ? 'value' : 'x';
   const side = P / 4;
   const answer = ask === 'value' ? E(side * side) : E(side);
+  // Areas are only ever offered against areas: a "side" of 900 cm for a 60 cm perimeter is
+  // impossible on sight, so an area among the length options would hand over three eliminations.
   const must: Cand[] = ask === 'value'
     ? [{ value: E(side), trap: 'gave the side length instead of the area' }, { value: frac(P * P, 8), trap: 'used the three-sided (wall) result L²/8' }]
-    : [{ value: E(side * side), trap: 'gave the area instead of the side' }, { value: E(P / 2), trap: 'used half the perimeter as the side' }];
-  const extra: Cand[] = [
-    { value: frac(P * P, 4), trap: 'used half the perimeter as the side length' },
-    { value: E(P), trap: 'gave the perimeter' },
-    { value: frac(P * P, 2), trap: 'multiplied half-perimeter by itself twice over' },
-    { value: E(P / 8), trap: 'halved the side' },
-    { value: frac(P * P, 12), trap: 'divided by 12' },
-  ];
+    : [{ value: E(P / 2), trap: 'used half the perimeter as the side' }, { value: frac(P, 3), trap: 'assumed three equal sides' }];
+  const extra: Cand[] = ask === 'value'
+    ? [
+      { value: frac(P * P, 4), trap: 'used half the perimeter as the side length' },
+      { value: E(P), trap: 'gave the perimeter' },
+      { value: frac(P * P, 2), trap: 'multiplied half-perimeter by itself twice over' },
+      { value: frac(P * P, 12), trap: 'used sides P/2 and P/6' },
+      { value: frac(P * P, 32), trap: 'halved the side before squaring' },
+    ]
+    : [
+      { value: E(P), trap: 'gave the perimeter' },
+      { value: frac(P, 6), trap: 'divided the perimeter by 6' },
+      { value: frac(P, 8), trap: 'halved the side' },
+      { value: frac(3 * P, 8), trap: 'took three quarters of the half-perimeter' },
+      { value: E(side - 1), trap: 'the shorter side of a neighbouring rectangle, not the square' },
+      { value: E(side + 1), trap: 'the longer side of a neighbouring rectangle, not the square' },
+    ];
   const opts = options(rng, answer, must, extra);
   if (!opts) return null;
   return {
@@ -164,9 +175,9 @@ function rectanglePerimeterQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 2
 
-/** Any even sum in 6…50, plus the occasional round hundred: the level is no longer a 12-item list. */
+/** Any even sum in 6…60, plus the occasional round hundred: the level is no longer a 12-item list. */
 function drawSum(rng: RNG): number {
-  return rng.bool(0.15) ? rng.pick([60, 70, 80, 90, 100]) : 2 * rng.int(3, 25);
+  return rng.bool(0.15) ? rng.pick([70, 80, 90, 100, 120, 140, 160, 200]) : 2 * rng.int(3, 30);
 }
 
 function sumProductQ(rng: RNG): Generated | null {
@@ -179,7 +190,8 @@ function sumProductQ(rng: RNG): Generated | null {
     : [{ value: E(half * half), trap: 'gave the product instead of one of the numbers' }, { value: E(S), trap: 'gave the sum' }];
   const extra: Cand[] = ask === 'value'
     ? [
-      { value: E(half * half - 1), trap: 'a neighbouring pair (S/2 ± 1), not the maximum' },
+      // only while it is visibly different from the answer: 9999 beside 10000 is a near-duplicate
+      { value: half * half <= 999 ? E(half * half - 1) : null, trap: 'a neighbouring pair (S/2 ± 1), not the maximum' },
       { value: E(S * S), trap: 'squared the sum' },
       { value: E(S), trap: 'gave the sum' },
       { value: E(2 * S), trap: 'doubled the sum' },
@@ -236,7 +248,7 @@ function sumSquaresQ(rng: RNG): Generated | null {
 
 /** The dual of sumProduct: a fixed product, least sum — the same mental route (x + P/x). */
 function productSumQ(rng: RNG): Generated | null {
-  const p = rng.int(2, 15);
+  const p = rng.int(2, 22);
   const P = p * p;
   const ask: Ask = rng.bool(0.7) ? 'value' : 'x';
   const answer = ask === 'value' ? E(2 * p) : E(p);
@@ -269,7 +281,7 @@ function productSumQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 3: fencing against a wall
 
 function wallQ(rng: RNG): Generated | null {
-  const L = 4 * rng.int(3, 30); // any multiple of 4 from 12 m to 120 m
+  const L = 4 * rng.int(3, 50); // any multiple of 4 from 12 m to 200 m
   const ask = rng.weighted(['area', 'perp', 'parallel'] as const, [6, 2, 2]);
   const perp = L / 4, par = L / 2, area = (L * L) / 8;
   const answer = ask === 'area' ? E(area) : ask === 'perp' ? E(perp) : E(par);
@@ -320,11 +332,12 @@ type BoxAsk = 'x' | 'value' | 'base';
  */
 const RECT_SHEETS: [number, number, number][] = [
   [5, 8, 1], [7, 15, 1.5], [10, 16, 2], [9, 24, 2], [16, 21, 3], [15, 24, 3], [14, 30, 3], [20, 32, 4],
+  [18, 48, 4], [21, 45, 4.5], [24, 45, 5], [25, 40, 5], [28, 60, 6], [30, 48, 6], [32, 42, 6], [35, 56, 7],
 ];
 
 function squareBoxSheetQ(rng: RNG): Generated | null {
   // a = 3m: x = a/6 = m/2 (a half-integer cut is fine), base = 2m, V = 2m³.
-  const m = rng.int(1, 12);
+  const m = rng.int(1, 18);
   const a = 3 * m;
   const x = a / 6;
   const base = a - 2 * x;
@@ -418,7 +431,14 @@ function rectBoxQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 5
 
 /** (a, b) pairs for ax + b/x with ab a perfect square or a clean surd. */
-const AX_B: [number, number][] = [[1, 4], [1, 9], [1, 16], [1, 25], [1, 36], [1, 49], [1, 64], [1, 100], [1, 2], [1, 3], [1, 5], [1, 8], [1, 12], [1, 18], [4, 9], [2, 8], [3, 12], [9, 4], [2, 18], [4, 25], [3, 27]];
+const AX_B: [number, number][] = [
+  [1, 4], [1, 9], [1, 16], [1, 25], [1, 36], [1, 49], [1, 64], [1, 81], [1, 100], [1, 121], [1, 144],
+  [1, 2], [1, 3], [1, 5], [1, 6], [1, 7], [1, 8], [1, 10], [1, 11], [1, 12], [1, 13], [1, 15], [1, 18],
+  [1, 20], [1, 24], [1, 27], [1, 32], [1, 40], [1, 45], [1, 48], [1, 50],
+  [4, 1], [9, 1], [16, 1], [25, 1], [2, 2], [3, 3], [4, 4], [5, 5], [8, 2], [9, 4], [4, 9], [16, 9], [9, 16], [25, 4], [4, 25],
+  [2, 8], [3, 12], [2, 18], [2, 32], [2, 50], [3, 27], [3, 48], [5, 20], [5, 45], [4, 49], [9, 25], [8, 18],
+  [2, 3], [3, 2], [2, 5], [5, 2], [3, 5], [5, 3],
+];
 
 function axPlusBOverXQ(rng: RNG): Generated | null {
   const [a, b] = rng.pick(AX_B);
@@ -457,26 +477,27 @@ function axPlusBOverXQ(rng: RNG): Generated | null {
 
 function cylinderQ(rng: RNG): Generated | null {
   const closed = rng.bool(0.6);
-  const r0 = rng.pick([1, 2, 3, 4]);
+  const r0 = rng.int(1, 7);
   const S = closed ? 6 * r0 * r0 : 3 * r0 * r0; // coefficient of π in the surface area
   const ask: Ask = rng.bool(0.5) ? 'x' : 'value';
   const Vcoef = closed ? 2 * r0 ** 3 : r0 ** 3; // V = Vcoef·π
   const answer = ask === 'x' ? E(r0) : Exact.pi(Vcoef);
   const h = closed ? 2 * r0 : r0;
   // Every candidate for the radius is a positive length: a negative radius is never offered.
+  // The radius ask offers lengths only: S is a surface-area coefficient (48 for a 96π cm²
+  // cylinder), not a radius, and r² is only plausible while it stays within a few radii.
   const must: Cand[] = ask === 'x'
-    ? [{ value: closed ? E(h) : E(r0 * r0), trap: closed ? 'gave the height instead of the radius' : 'forgot to square-root r² = S/(3π)' },
+    ? [{ value: closed ? E(h) : (r0 <= 4 ? E(r0 * r0) : null), trap: closed ? 'gave the height instead of the radius' : 'forgot to square-root r² = S/(3π)' },
       { value: attempt(() => Exact.sqrtRat(frac(3 * r0 * r0, closed ? 1 : 2).toRat())), trap: 'ignored the curved surface (set S = 2πr² or πr²)' }]
     : [{ value: Exact.pi(closed ? r0 ** 3 : 2 * r0 ** 3), trap: closed ? 'took the height equal to the radius' : 'took the height equal to twice the radius' },
       { value: Exact.pi(closed ? 4 * r0 ** 3 : 2 * r0 ** 3), trap: 'doubled the volume' }];
   const extra: Cand[] = ask === 'x'
     ? [
-      { value: E(r0 * r0), trap: `forgot to square-root r² = S/(${closed ? 6 : 3}π)` },
+      { value: r0 <= 4 ? E(r0 * r0) : null, trap: `forgot to square-root r² = S/(${closed ? 6 : 3}π)` },
       { value: frac(r0, 2), trap: 'halved the radius' },
       { value: E(2 * r0), trap: 'gave the diameter' },
-      { value: E(3 * r0 * r0), trap: 'used r² = S/(2π), forgetting that dV/dr brings down a 3' },
-      { value: E(S), trap: 'gave the surface-area coefficient S/π' },
-      { value: frac(S, 2), trap: 'halved the surface-area coefficient' },
+      { value: frac(S, 2 * r0), trap: 'divided the surface-area coefficient by 2r instead of square-rooting' },
+      { value: attempt(() => Exact.sqrtRat(frac(closed ? 2 * r0 * r0 : r0 * r0, closed ? 1 : 2).toRat())), trap: `used the ${closed ? 'open-cylinder condition r² = S/(3π)' : 'closed-cylinder condition r² = S/(6π)'}` },
     ]
     : [
       { value: Exact.pi(closed ? 3 * r0 ** 3 : 3 * r0 ** 3 / 2), trap: 'took V = Sr/2 and forgot the −πr³ term' },
@@ -505,35 +526,48 @@ function cylinderQ(rng: RNG): Generated | null {
 function squareBoxQ(rng: RNG): Generated | null {
   const closed = rng.bool(0.5);
   // closed: x³ = V, S = 6x²; open: x³ = 2V, S = 3x²
-  const x = rng.pick(closed ? [2, 3, 4, 5, 10] : [2, 4, 6, 8, 10]);
+  const x = rng.pick(closed ? [2, 3, 4, 5, 6, 8, 10, 12] : [2, 4, 6, 8, 10, 12, 14, 16]);
   const V = closed ? x ** 3 : x ** 3 / 2;
   const ask: Ask = rng.bool(0.6) ? 'value' : 'x';
   const Smin = closed ? 6 * x * x : 3 * x * x;
   const answer = ask === 'value' ? E(Smin) : E(x);
   const h = V / (x * x);
-  // For the side ask every candidate is a positive length built from a named slip.
+  // Face-counting traps must match the box they are counted on: adding a top to the open box's
+  // 3x² gives 4x², while 6x² is the closed-box formula, not "one face too many".
   const must: Cand[] = ask === 'value'
-    ? [{ value: E(closed ? 5 * x * x : 6 * x * x), trap: closed ? 'forgot the top face (5 faces)' : 'counted a top face that the open box does not have' }, { value: E(closed ? 4 * x * x : 4 * x * x), trap: closed ? 'sides only (4 faces)' : 'counted four faces' }]
-    : [{ value: E(Smin), trap: 'gave the least surface area instead of the side' }, { value: E(x * x), trap: 'gave the area of the base instead of its side' }];
+    ? (closed
+      ? [{ value: E(5 * x * x), trap: 'forgot the top face (5 faces)' }, { value: E(4 * x * x), trap: 'counted the four sides only' }]
+      : [{ value: E(4 * x * x), trap: 'counted a top face the open box does not have' }, { value: E(2 * x * x), trap: 'counted the base and a top only' }])
+    : [{ value: E(closed ? 6 * x : 3 * x), trap: 'divided the surface area by the side instead of taking the cube root' },
+      { value: h !== x ? E(h) : E(2 * x), trap: h !== x ? 'gave the height instead of the side of the base' : 'doubled the side' }];
   const extra: Cand[] = ask === 'value'
-    ? [
-      { value: E(closed ? 8 * x * x : 5 * x * x), trap: closed ? 'counted eight faces' : 'counted five equal faces' },
-      { value: E(closed ? 6 * x : 3 * x), trap: 'did not square the side' },
-      { value: E(2 * x * x), trap: 'counted the base and top only' },
-      { value: E(V), trap: 'gave the volume' },
-      { value: E(closed ? 12 * x * x : 6 * x * x), trap: 'doubled the surface area' },
-    ]
+    ? (closed
+      ? [
+        { value: E(8 * x * x), trap: 'counted eight faces' },
+        { value: E(3 * x * x), trap: 'counted three faces' },
+        { value: E(6 * x), trap: 'did not square the side' },
+        { value: E(2 * x * x), trap: 'counted the base and top only' },
+        { value: E(V), trap: 'gave the volume' },
+        { value: E(12 * x * x), trap: 'doubled the surface area' },
+      ]
+      : [
+        { value: E(6 * x * x), trap: 'used the closed-box formula 6x²' },
+        { value: E(5 * x * x), trap: 'counted five faces' },
+        { value: E(3 * x), trap: 'did not square the side' },
+        { value: E(x * x), trap: 'counted the base only' },
+        { value: E(V), trap: 'gave the volume' },
+      ])
     : [
-      { value: E(V), trap: 'gave the volume instead of the side' },
-      { value: h !== x ? E(h) : null, trap: 'gave the height instead of the side of the base' },
+      // lengths only: the volume and the surface area are both impossible as a side of this box
       { value: E(2 * x), trap: 'doubled the side' },
       { value: frac(x, 2), trap: 'halved the side' },
-      { value: E(closed ? 6 * x : 3 * x), trap: 'divided the surface area by the side instead of taking the cube root' },
+      { value: frac(closed ? 6 * x : 3 * x, 4), trap: 'divided the surface area by the perimeter of the base, 4x' },
+      { value: E(x + 1), trap: 'slipped when taking the cube root' },
     ];
   const opts = options(rng, answer, must, extra);
   if (!opts) return null;
   return {
-    stem: `A ${closed ? 'closed' : 'open-topped'} box has a square base of side $x$ cm and a volume of $${V}$ cm$^3$. ` +
+    stem: `${closed ? 'A closed' : 'An open-topped'} box has a square base of side $x$ cm and a volume of $${V}$ cm$^3$. ` +
       (ask === 'value' ? 'Find the least possible total surface area of the box, in cm$^2$.' : 'Find the value of $x$ for which the total surface area of the box is least.'),
     answer: { kind: 'exact', value: answer, format: 'fraction' },
     options: opts,

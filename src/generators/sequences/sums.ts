@@ -14,6 +14,12 @@ import type { RNG } from '../../core/rng';
  * Level 5: the 5th to the 15th term, Σ notation, or n from S_n (1 + 2 + … + n = 1275 → n = 50)
  */
 
+interface Cand {
+  value: Exact | null;
+  trap: string;
+  must?: boolean;
+}
+
 /** "2 + 5 + 8 + \dots" — signs handled, so a negative term reads "8 - 3 - 14". */
 function series(terms: number[], ending = ' + \\dots'): string {
   let out = '';
@@ -38,6 +44,42 @@ function clean(x: Exact): boolean {
   return isCleanExact(x).ok && Number.isFinite(x.toNumber());
 }
 
+/**
+ * Turn the candidate mistakes into four options worth offering.
+ *
+ *  - `wholeOnly` is set everywhere except the sum to infinity: every other question here adds up
+ *    whole numbers, so an option like 9801/2 or 6939/2 is crossed out on sight and the candidate
+ *    is really choosing between four (at level 3 two of the five could be fractions at once).
+ *  - two options that agree to three significant figures make the list unreadable and turn a
+ *    method question into an exact-arithmetic one: S_(n−1) sitting next to ar^(n−1) gave 765 and
+ *    768, and S_n next to ar^n gave 6138 and 6144. Candidates within 1% of one already taken are
+ *    dropped, keeping the earlier (more instructive) one.
+ *  - the answer's place in the sorted list is randomised, so "pick the middle option" is worth no
+ *    more than a guess.
+ */
+function usable(rng: RNG, answer: Exact, cands: Cand[], wholeOnly = true, need = 4): Distractor[] | null {
+  const a = answer.toNumber();
+  const taken: number[] = [a];
+  const pool: Distractor[] = [];
+  const apart = (x: number) => taken.every((y) => Math.abs(x - y) > 0.01 * Math.max(Math.abs(x), Math.abs(y), 1));
+  for (const c of cands) {
+    const v = c.value;
+    if (v === null || !clean(v)) continue;
+    if (wholeOnly && !v.isInteger()) continue;
+    const x = v.toNumber();
+    if (!apart(x)) continue;
+    taken.push(x);
+    pool.push({ value: v, trap: c.trap, must: c.must });
+  }
+  if (pool.length < need) return null;
+  const order = (arr: Distractor[]) => [...arr.filter((d) => d.must), ...rng.shuffle(arr.filter((d) => !d.must))];
+  const hi = order(pool.filter((d) => d.value.toNumber() > a));
+  const lo = order(pool.filter((d) => d.value.toNumber() < a));
+  if (hi.length + lo.length < need) return pool.slice(0, need);
+  const j = rng.int(Math.max(0, need - lo.length), Math.min(hi.length, need));
+  return [...hi.slice(0, j), ...lo.slice(0, need - j)];
+}
+
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
   const f = rng.pick(fns);
   for (let i = 0; i < 40; i++) {
@@ -56,19 +98,21 @@ function countingQ(rng: RNG): Generated | null {
   let answer: Exact;
   let shown: number[];
   let last: number;
-  let distractors: Distractor[];
+  let cands: Cand[];
   let solution: string;
   let trap: string;
   if (kind === 'integers') {
     last = n;
     shown = [1, 2, 3];
     answer = E((n * (n + 1)) / 2);
-    distractors = [
-      { value: E((n * (n - 1)) / 2), trap: 'used n(n − 1)/2: the sum to n − 1' },
+    cands = [
+      { value: E((n * (n - 1)) / 2), trap: 'used n(n − 1)/2: the sum to n − 1', must: true },
       { value: E(n * (n + 1)), trap: 'forgot to halve: n(n + 1) counts every pair twice' },
       { value: E(((n + 1) * (n + 2)) / 2), trap: 'one term too many' },
+      // n²/2 is only offered for even n: against a whole-number answer a half is crossed out on sight
       { value: E((n * n) / 2), trap: 'used n²/2 instead of n(n + 1)/2' },
       { value: E(n * n), trap: 'confused with the sum of the first n odd numbers' },
+      { value: E((n * (n + 1)) / 2 + n), trap: 'counted the last term twice' },
     ];
     solution = `Pair the ends: $\\frac{${n}(${n} + 1)}{2} = ${(n * (n + 1)) / 2}$.`;
     trap = 'Sum of 1 to n is n(n + 1)/2 — the half is easy to drop, and n(n − 1)/2 stops one term short.';
@@ -76,12 +120,13 @@ function countingQ(rng: RNG): Generated | null {
     last = 2 * n - 1;
     shown = [1, 3, 5];
     answer = E(n * n);
-    distractors = [
-      { value: E((n + 1) * (n + 1)), trap: 'counted one odd number too many' },
+    cands = [
+      { value: E((n + 1) * (n + 1)), trap: 'counted one odd number too many', must: true },
       { value: E((n - 1) * (n - 1)), trap: 'counted one odd number too few' },
       { value: E((last * (last + 1)) / 2), trap: 'summed every whole number up to the last term, not just the odd ones' },
       { value: E(n * (n + 1)), trap: 'used the even-number sum n(n + 1)' },
       { value: E(n * last), trap: 'multiplied the number of terms by the last term (no halving)' },
+      { value: E(last), trap: 'gave the last term instead of the sum' },
     ];
     solution = `There are $${n}$ odd numbers up to $${last}$, and the first $n$ odd numbers add to $n^{2}$: $${n}^{2} = ${n * n}$.`;
     trap = 'Count the odd numbers first: up to 2n − 1 there are n of them, and their sum is n², not the sum of 1 to 2n − 1.';
@@ -89,17 +134,20 @@ function countingQ(rng: RNG): Generated | null {
     last = 2 * n;
     shown = [2, 4, 6];
     answer = E(n * (n + 1));
-    distractors = [
-      { value: E(n * n), trap: 'used the odd-number sum n²' },
+    cands = [
+      { value: E(n * n), trap: 'used the odd-number sum n²', must: true },
       { value: E((n * (n + 1)) / 2), trap: 'halved once too often: each term is twice a whole number' },
       { value: E((n + 1) * (n + 2)), trap: 'counted one term too many' },
       { value: E(n * last), trap: 'multiplied the number of terms by the last term (no halving)' },
       { value: E((n - 1) * n), trap: 'counted one term too few' },
+      { value: E(last), trap: 'gave the last term instead of the sum' },
     ];
     solution = `$2 + 4 + \\dots + ${last} = 2(1 + 2 + \\dots + ${n}) = 2 \\times \\frac{${n} \\times ${n + 1}}{2} = ${n * (n + 1)}$.`;
     trap = 'The first n even numbers add to n(n + 1): take the factor 2 out first, and do not halve twice.';
   }
   if (!clean(answer)) return null;
+  const distractors = usable(rng, answer, cands);
+  if (!distractors) return null;
   return {
     stem: `Find the value of $${series(shown, ` + \\dots + ${last}`)}$.`,
     answer: { kind: 'exact', value: answer },
@@ -123,14 +171,17 @@ function apSumQ(rng: RNG): Generated | null {
   const last = a + (n - 1) * d;
   const answer = E(S);
   if (!clean(answer) || Math.abs(S) > 4000 || Math.abs(last) > 200) return null;
-  const distractors: Distractor[] = [
-    { value: E((n * (2 * a + n * d)) / 2), trap: 'used nd instead of (n − 1)d for the last term' },
+  const cands: Cand[] = [
+    { value: E((n * (2 * a + n * d)) / 2), trap: 'used nd instead of (n − 1)d for the last term', must: true },
     { value: E(((n - 1) * (2 * a + (n - 2) * d)) / 2), trap: 'summed only n − 1 terms' },
     { value: E(n * (2 * a + (n - 1) * d)), trap: 'forgot to halve' },
     { value: E((n * (a + (n - 1) * d)) / 2), trap: 'used a + (n − 1)d instead of 2a + (n − 1)d' },
     { value: E(last), trap: 'gave the last term instead of the sum' },
     { value: E(((n + 1) * (2 * a + n * d)) / 2), trap: 'counted one term too many' },
+    { value: E(n * a), trap: 'multiplied the first term by the number of terms, forgetting d' },
   ];
+  const distractors = usable(rng, answer, cands);
+  if (!distractors) return null;
   const showTerms = rng.bool(0.6);
   const terms = [0, 1, 2].map((i) => a + i * d);
   const stem = showTerms
@@ -159,14 +210,20 @@ function gpSumQ(rng: RNG): Generated | null {
   const answer = E(S);
   if (!clean(answer) || S > 9999) return null;
   const last = a * r ** (n - 1);
-  const distractors: Distractor[] = [
+  const cands: Cand[] = [
+    { value: E(last), trap: 'gave the last term ar^(n−1) instead of the sum', must: true },
+    { value: E(a * r ** n), trap: 'gave ar^n: one power too far' },
     { value: E((a * (r ** (n - 1) - 1)) / (r - 1)), trap: 'summed only n − 1 terms' },
     { value: E((a * (r ** (n + 1) - 1)) / (r - 1)), trap: 'summed one term too many' },
-    { value: E(last), trap: 'gave the last term ar^(n−1) instead of the sum' },
-    { value: E(a * r ** n), trap: 'gave ar^n: one power too far' },
+    // only offered when it comes out whole: the series adds integers, so a fraction is no option
     { value: frac(a * (r ** n - 1), r + 1), trap: 'divided by r + 1 instead of r − 1' },
     { value: E((n * (a + last)) / 2), trap: 'used the arithmetic sum formula n(a + l)/2' },
+    { value: E(n * last), trap: 'multiplied the number of terms by the last term' },
+    { value: E(S + last), trap: 'counted the last term twice' },
+    { value: E(a * (r ** n - 1)), trap: 'forgot to divide by r − 1' },
   ];
+  const distractors = usable(rng, answer, cands);
+  if (!distractors) return null;
   const terms = [0, 1, 2].map((i) => a * r ** i);
   const stem = rng.bool(0.6)
     ? `Find the sum of the first $${n}$ terms of the geometric series $${series(terms, tail(a * r ** 3))}$.`
@@ -175,7 +232,9 @@ function gpSumQ(rng: RNG): Generated | null {
     stem,
     answer: { kind: 'exact', value: answer },
     options: buildOptions(rng, answer, distractors),
-    solution: `$S_{${n}} = \\frac{${a}(${r}^{${n}} - 1)}{${r} - 1} = \\frac{${a} \\times ${r ** n - 1}}{${r - 1}} = ${S}$.`,
+    solution: r === 2
+      ? `$S_{${n}} = \\frac{${a}(2^{${n}} - 1)}{2 - 1} = ${a} \\times ${r ** n - 1} = ${S}$.`
+      : `$S_{${n}} = \\frac{${a}(${r}^{${n}} - 1)}{${r} - 1} = \\frac{${a} \\times ${r ** n - 1}}{${r - 1}} = ${S}$.`,
     trap: 'The denominator is r − 1 (or 1 − r if you write 1 − r^n on top) — and the power is n, not n − 1.',
     tags: ['series', 'sums', 'geometric'],
     params: { variant: 'gp', a, r, n, S },
@@ -196,14 +255,18 @@ function infiniteQ(rng: RNG): Generated | null {
   if (terms.some((t) => !Number.isInteger(t) || Math.abs(t) > 250)) return null;
   const answer = frac(a * q, q - p);
   if (!clean(answer)) return null;
-  const distractors: Distractor[] = [
-    { value: frac(a * q, q + p), trap: 'used a/(1 + r) instead of a/(1 − r)' },
+  // the answers of this variant are routinely fractions (9 − 3 + 1 − … = 27/4), so a fractional
+  // option is not a give-away here and the whole-number filter stays off
+  const distractors = usable(rng, answer, [
+    { value: frac(a * q, q + p), trap: 'used a/(1 + r) instead of a/(1 − r)', must: true },
     { value: frac(a * q, p - q), trap: 'sign error: a/(r − 1)' },
     { value: frac(a * q, p), trap: 'divided by r instead of by 1 − r' },
     { value: frac(a * (q - p), q), trap: 'multiplied by 1 − r instead of dividing' },
     { value: E(terms[0] + terms[1] + terms[2]), trap: 'added only the terms printed' },
     { value: frac(a * q * q, q * q - p * p), trap: 'used a/(1 − r²)' },
-  ];
+    { value: E(a), trap: 'gave the first term' },
+  ], false);
+  if (!distractors) return null;
   return {
     stem: `Find the sum to infinity of the geometric series $${series(terms, tail(terms[2] * p))}$.`,
     answer: { kind: 'exact', value: answer },
@@ -230,14 +293,16 @@ function rangeQ(rng: RNG): Generated | null {
   const S = Sk - Sm1;
   const answer = E(S);
   if (!clean(answer) || Math.abs(S) > 4000 || Math.abs(a + (k - 1) * d) > 200) return null;
-  const distractors: Distractor[] = [
-    { value: E(Sk - (m * (2 * a + (m - 1) * d)) / 2), trap: 'subtracted S_m, which removes the mth term as well' },
+  const distractors = usable(rng, answer, [
+    { value: E(Sk - (m * (2 * a + (m - 1) * d)) / 2), trap: 'subtracted S_m, which removes the mth term as well', must: true },
     { value: E(((count - 1) * (2 * (a + (m - 1) * d) + (count - 2) * d)) / 2), trap: 'counted k − m terms instead of k − m + 1' },
     { value: E(Sk), trap: 'gave the sum of all k terms' },
     { value: E(Sm1), trap: 'gave the sum of the first m − 1 terms' },
     { value: E((count * (2 * a + (count - 1) * d)) / 2), trap: 'started the block at the first term of the series' },
     { value: E(count * (a + (m - 1) * d)), trap: 'multiplied the number of terms by the first term of the block' },
-  ];
+    { value: E(count * (a + (k - 1) * d)), trap: 'multiplied the number of terms by the last term of the block' },
+  ]);
+  if (!distractors) return null;
   return {
     stem: `An arithmetic series has first term $${a}$ and common difference $${d}$. Find the sum of the ${ordinal(m)} to the ${ordinal(k)} terms inclusive.`,
     answer: { kind: 'exact', value: answer },
@@ -259,14 +324,16 @@ function sigmaQ(rng: RNG): Generated | null {
   const answer = E(S);
   if (!clean(answer) || Math.abs(S) > 4000) return null;
   const tex = `${p === 1 ? '' : p === -1 ? '-' : p}r ${c >= 0 ? '+' : '-'} ${Math.abs(c)}`;
-  const distractors: Distractor[] = [
-    { value: E((p * n * (n + 1)) / 2), trap: 'forgot the constant term, which contributes cn' },
+  const distractors = usable(rng, answer, [
+    { value: E((p * n * (n + 1)) / 2), trap: 'forgot the constant term, which contributes cn', must: true },
     { value: E((p * n * (n + 1)) / 2 + c), trap: 'added the constant once instead of n times' },
     { value: E((p * n * (n - 1)) / 2 + c * n), trap: 'used n(n − 1)/2 for the sum of 1 to n' },
     { value: E(p * n + c), trap: 'gave the last term instead of the sum' },
     { value: E(p * n * (n + 1) + c * n), trap: 'forgot to halve n(n + 1)' },
     { value: E((p * n * (n + 1)) / 2 + c * (n + 1)), trap: 'counted n + 1 terms' },
-  ];
+    { value: E((p * (n + 1) * (n + 2)) / 2 + c * (n + 1)), trap: 'summed from r = 0 as well' },
+  ]);
+  if (!distractors) return null;
   return {
     stem: `Find the value of $\\displaystyle\\sum_{r=1}^{${n}} (${tex})$.`,
     answer: { kind: 'exact', value: answer },
@@ -286,14 +353,29 @@ function findNQ(rng: RNG): Generated | null {
   const S = kind === 'integers' ? (n * (n + 1)) / 2 : n * n;
   if (S > 4000) return null;
   const answer = E(n);
-  const distractors: Distractor[] = [
-    { value: E(n + 1), trap: 'off by one' },
-    { value: E(n - 1), trap: 'off by one' },
-    { value: E(n + 2), trap: 'off by two' },
-    { value: E(n - 2), trap: 'off by two' },
-    { value: E(Math.round(S / n)), trap: 'divided the sum by the number of terms' },
-    { value: E(2 * n), trap: 'forgot the factor of a half' },
-  ];
+  // lopsided "off by one or two" offsets, so the answer is not the middle of a symmetric spread
+  const offsets = rng.pick([[1, 2], [-1, 1], [-2, -1], [-1, 2], [1, 3], [-3, -1], [-1, 1, 2], [-2, -1, 1]]);
+  const offCands: Cand[] = offsets.map((o) => ({
+    value: n + o > 0 ? E(n + o) : null,
+    trap: o > 0 ? `counted ${o} term${o > 1 ? 's' : ''} too many` : `stopped ${-o} term${o < -1 ? 's' : ''} short`,
+  }));
+  const cands: Cand[] = kind === 'integers'
+    ? [
+        { value: E(n + 1), trap: 'read off n + 1, the other factor of the doubled sum', must: true },
+        { value: E(Math.round(Math.sqrt(S))), trap: 'solved n(n + 1) = S without doubling the sum first' },
+        { value: E(2 * n), trap: 'forgot the factor of a half' },
+        { value: E(Math.round(S / n)), trap: 'divided the sum by n instead of solving for n' },
+        ...offCands,
+      ]
+    : [
+        { value: E(2 * n - 1), trap: 'gave the last odd number instead of how many there are', must: true },
+        { value: E(Math.round(Math.sqrt(2 * S))), trap: 'used 1 + 2 + … + n instead of the odd numbers' },
+        { value: E(2 * n), trap: 'doubled n' },
+        { value: E(Math.round(n / 2)), trap: 'halved n, as if only every other number counted' },
+        ...offCands,
+      ];
+  const distractors = usable(rng, answer, cands);
+  if (!distractors) return null;
   const stem = kind === 'integers'
     ? `Given that $1 + 2 + 3 + \\dots + n = ${S}$, find the value of $n$.`
     : `The first $n$ odd numbers add up to $${S}$. Find the value of $n$.`;

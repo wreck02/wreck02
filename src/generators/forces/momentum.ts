@@ -46,25 +46,52 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
   return out;
 }
 
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Headline traps first (in a shuffled order), then the rest chosen towards a randomly drawn number
+ * of options *below* the answer. Without that, a variant whose named mistakes all overshoot (or all
+ * undershoot) puts the correct option at the same rank in every instance, and "pick the smallest"
+ * answers it without any arithmetic. A candidate that would stretch the option list beyond
+ * `maxSpread` is skipped: 1.875 N next to 225 N is implausible on sight.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 60): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
+  const mags: number[] = Math.abs(a) > 0 ? [Math.abs(a)] : [];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    const x = Math.abs(d.value.toNumber());
+    if (x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread) return;
     seen.push(d.value);
+    if (x > 0) mags.push(x);
     out.push(d);
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  // One headline trap always survives; the others are preferred within their own side of the answer,
+  // so which mistakes are offered still varies with the draw and the answer's rank moves with it.
+  const heads = rng.shuffle(must);
+  if (heads.length > 0) take(heads[0]);
+  const rest = heads.slice(1);
+  const side = (lo: boolean) => [...rest, ...rng.shuffle(extra)].filter((d) => (lo ? d.value.toNumber() < a : d.value.toNumber() > a));
+  const below = side(true);
+  const above = side(false);
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
 const fallback = (answer: Exact): Exact[] =>
   [2, 0.5, 3, 4, 1.5, 0.25, 10, 0.1].map((k) => answer.mulRat(X(k).toRat())).filter((v) => isCleanExact(v).ok && !v.isZero());
 
-function physOptions(rng: RNG, answer: Exact, unit: string | undefined, must: Cand[], extra: Cand[], format: 'decimal' | 'fraction' = 'decimal') {
+/** Padding for "what fraction …?": nice fractions strictly between 0 and 1, never a multiple of the answer. */
+const FRACTION_PAD: Exact[] = [[1, 3], [2, 3], [1, 4], [3, 4], [1, 5], [2, 5], [3, 5], [4, 5], [1, 6], [5, 6], [1, 8], [3, 8], [5, 8], [7, 8], [1, 2]].map(([n, d]) => frac(n, d));
+
+function physOptions(rng: RNG, answer: Exact, unit: string | undefined, must: Cand[], extra: Cand[], format: 'decimal' | 'fraction' = 'decimal', pad?: Exact[]) {
   const a = answer.toNumber();
-  return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must, a), cleanOnly(extra, a)), { format, unit, fallback: fallback(answer) });
+  return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must, a), cleanOnly(extra, a)), { format, unit, fallback: pad ?? fallback(answer) });
 }
 
 function finish(stem: string, answer: Exact, unit: string | undefined, options: ReturnType<typeof buildOptions>, solution: string, trap: string, tags: string[], params: Record<string, unknown>, format: 'decimal' | 'fraction' = 'decimal'): Generated {
@@ -101,12 +128,15 @@ function momentumMV(rng: RNG): Generated | null {
   const stem = `${cap} of mass ${q(m, U.kg)} moves at ${q(v, U.v)}. Find its momentum, in $\\text{kg m s}^{-1}$.`;
   return finish(stem, X(p), undefined, physOptions(rng, X(p), undefined, [
     { value: 0.5 * m * v * v, trap: 'found the kinetic energy ½mv² instead of the momentum mv' },
-    { value: m * v * v, trap: 'squared the velocity' },
   ], [
-    { value: 0.5 * m * v, trap: 'a stray ½ crept in' },
+    { value: m * v * v, trap: 'squared the velocity' },
+    { value: 0.5 * m * v, trap: 'used ½mv: the ½ belongs to the kinetic energy, not the momentum' },
     { value: v / m, trap: 'divided instead of multiplying' },
-    { value: m + v, trap: 'added mass and velocity' },
+    { value: 2 * m * v, trap: 'used 2mv, the change of momentum in a rebound, instead of the momentum' },
     { value: m * v * 10, trap: 'multiplied by g as if momentum were weight × velocity' },
+    { value: (m * v) / 10, trap: 'treated the given mass as a weight and divided by g' },
+    { value: m, trap: 'quoted the mass instead of the momentum' },
+    { value: v, trap: 'quoted the speed instead of the momentum' },
   ]),
   `$p = mv = ${num(m)} \\times ${v} = ${num(p)}$ kg m s$^{-1}$.`,
   'Momentum is mv (no ½ and no square); ½mv² is the kinetic energy.',
@@ -114,7 +144,32 @@ function momentumMV(rng: RNG): Generated | null {
 }
 
 function impulseFromVelocities(rng: RNG): Generated | null {
-  const b = rng.pick(BODIES.filter((x) => x.name !== 'a bullet'));
+  // Two shapes with opposite distractor families, drawn equally often: a speed change in one direction,
+  // where the named mistakes (mv, mu, m(u + v)) all overshoot, and a rebound, where they all undershoot.
+  // Mixing them keeps "find the impulse" from being answerable by the size of the options alone.
+  if (rng.bool(0.5)) {
+    const m = rng.pick([0.1, 0.15, 0.2, 0.4, 0.5, 0.6, 2, 3]);
+    const u = rng.pick([4, 5, 6, 8, 10, 12, 15, 20, 25]);
+    const v = rng.pick([2, 3, 4, 5, 6, 8, 10].filter((x) => x < u));
+    const J = sig(m * (u + v));
+    const stem = `A ball of mass ${q(m, U.kg)} moving at ${q(u, U.v)} strikes a wall at right angles and rebounds along the same line at ${q(v, U.v)}. Find the magnitude of the impulse of the wall on the ball, in $\\text{kg m s}^{-1}$.`;
+    return finish(stem, X(J), undefined, physOptions(rng, X(J), undefined, [
+      { value: m * (u - v), trap: 'subtracted the speeds: the ball reverses direction, so the change in velocity is u + v' },
+    ], [
+      { value: m * u, trap: 'used the initial momentum only' },
+      { value: m * v, trap: 'used the final momentum only' },
+      { value: u + v, trap: 'forgot the mass' },
+      { value: 0.5 * m * (u + v), trap: 'slipped in the ½ from ½mv²: the impulse mΔv has no ½' },
+      { value: 0.5 * m * (u * u - v * v), trap: 'found the change in kinetic energy instead' },
+      { value: 2 * m * (u + v), trap: 'doubled for the rebound after already adding the two speeds' },
+    ]),
+    `Take the rebound direction as positive: $\\Delta p = m v - m(-u) = ${num(m)} \\times (${v} + ${u}) = ${num(J)}$ kg m s$^{-1}$ (equivalently N s).`,
+    'A rebound reverses the velocity, so the change in momentum is m(u + v), not m(u − v).',
+    ['momentum', 'impulse', 'rebound', 'signs'], { ask: 'impulse', m, u, v: -v });
+  }
+  // Masses of at least 1 kg, so that "forgot the mass" and "divided by the mass" land *below* the answer:
+  // with a 0.2 kg ball every named mistake overshoots and the answer is the smallest option every time.
+  const b = rng.pick(BODIES.filter((x) => x.masses.every((mm) => mm >= 1)));
   const m = rng.pick(b.masses);
   const [u, v] = rng.pickDistinct(b.speeds, 2);
   const J = sig(m * Math.abs(v - u));
@@ -122,11 +177,13 @@ function impulseFromVelocities(rng: RNG): Generated | null {
   const stem = `${cap} of mass ${q(m, U.kg)} is moving in a straight line at ${q(u, U.v)}. A force acts along the line of motion and its speed changes to ${q(v, U.v)} in the same direction. Find the magnitude of the impulse, in $\\text{kg m s}^{-1}$.`;
   return finish(stem, X(J), undefined, physOptions(rng, X(J), undefined, [
     { value: m * v, trap: 'used mv (the final momentum) instead of the change in momentum mΔv' },
-    { value: m * (u + v), trap: 'added the velocities instead of subtracting' },
   ], [
+    { value: m * (u + v), trap: 'added the velocities instead of subtracting' },
     { value: Math.abs(v - u), trap: 'forgot the mass' },
     { value: 0.5 * m * Math.abs(v * v - u * u), trap: 'found the change in kinetic energy instead' },
     { value: m * u, trap: 'used the initial momentum' },
+    { value: 0.5 * m * Math.abs(v - u), trap: 'slipped in the ½ from ½mv²: the impulse mΔv has no ½' },
+    { value: Math.abs(v - u) / m, trap: 'divided by the mass instead of multiplying' },
   ]),
   `Impulse $= \\Delta p = m(v - u) = ${num(m)} \\times (${v} - ${u}) = ${num(m * (v - u))}$, magnitude $${num(J)}$ kg m s$^{-1}$ (equivalently N s).`,
   'Impulse is the change in momentum m(v − u), not the final momentum mv.',
@@ -138,7 +195,7 @@ function impulseFromVelocities(rng: RNG): Generated | null {
 function forceFromImpulse(rng: RNG): Generated | null {
   const m = rng.pick([0.1, 0.2, 0.4, 0.5, 2, 5, 60, 1000]);
   const dv = rng.pick([5, 10, 12, 15, 20, 25, 30, 40]);
-  const t = rng.pick(m >= 60 ? [2, 4, 5, 10] : [0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5]);
+  const t = rng.pick(m >= 60 ? [2, 4, 5, 10] : [0.1, 0.2, 0.25, 0.4, 0.5]);
   const F = sig((m * dv) / t);
   if (!Number.isInteger(F * 2) || F > 100000) return null;
   const J = sig(m * dv);
@@ -156,11 +213,12 @@ function forceFromImpulse(rng: RNG): Generated | null {
   const stem = `${context} Find the magnitude of the average force.`;
   return finish(stem, X(F), U.N, physOptions(rng, X(F), U.N, [
     { value: J, trap: 'found the impulse mΔv but did not divide by the time' },
-    { value: J * t, trap: 'multiplied by the time instead of dividing' },
   ], [
+    { value: J * t, trap: 'multiplied by the time instead of dividing' },
     { value: dv / t, trap: 'forgot the mass (found the acceleration)' },
-    { value: F / 2, trap: 'a stray ½ crept in' },
+    { value: (0.5 * m * dv) / t, trap: 'slipped in the ½ from ½mv²: the impulse mΔv has no ½' },
     { value: (0.5 * m * dv * dv) / t, trap: 'divided the kinetic energy by the time (that is a power, not a force)' },
+    { value: (m * dv) / (t * t), trap: 'divided by the time twice' },
   ]),
   `$F = \\frac{\\Delta p}{\\Delta t} = \\frac{${num(m)} \\times ${dv}}{${num(t)}} = \\frac{${num(J)}}{${num(t)}} = ${num(F)}$ N.`,
   'Average force is the change in momentum divided by the contact time; mΔv on its own is the impulse.',
@@ -185,6 +243,9 @@ function velocityFromForce(rng: RNG): Generated | null {
       { value: dv / F, trap: 'forgot the mass' },
       { value: (m * dv * F), trap: 'multiplied by F instead of dividing' },
       { value: (m * (u + v)) / F, trap: 'added the velocities instead of subtracting' },
+      { value: (m * (u + v)) / (2 * F), trap: 'used the average velocity ½(u + v) instead of the change in velocity' },
+      { value: m / F, trap: 'forgot the change in velocity: the impulse is mΔv, not m' },
+      { value: (m * u) / F, trap: 'used the initial momentum instead of the change in momentum' },
     ]),
     `$Ft = m(v - u)$, so $t = \\frac{${m} \\times (${v} - ${u})}{${F}} = \\frac{${m * dv}}{${F}} = ${t}$ s.`,
     'Impulse Ft equals the change in momentum m(v − u); solve for t.',
@@ -200,6 +261,8 @@ function velocityFromForce(rng: RNG): Generated | null {
     { value: u + F * t, trap: 'found the impulse Ft but did not divide by the mass' },
     { value: u + (F * t) / (m * 10), trap: 'divided by the weight instead of the mass' },
     { value: u + (F * t * m), trap: 'multiplied by the mass instead of dividing' },
+    { value: u + (F * t) / (m * m), trap: 'divided by the mass twice' },
+    { value: (F * t) / m - u, trap: 'subtracted the initial velocity instead of adding it' },
   ]),
   `Impulse $Ft = ${F} \\times ${t} = ${F * t}$ N s $= m\\Delta v$, so $\\Delta v = \\frac{${F * t}}{${m}} = ${num(dv)}$ m s$^{-1}$ and $v = ${u} + ${num(dv)} = ${num(v)}$ m s$^{-1}$.`,
   'Ft = mΔv gives the change in velocity; add it to the initial velocity.',
@@ -228,7 +291,8 @@ function coalesceStationary(rng: RNG): Generated | null {
     { value: u1, trap: 'assumed the speed is unchanged' },
     { value: (m2 * u1) / (m1 + m2), trap: 'used the wrong mass in the initial momentum' },
     { value: m1 * u1, trap: 'found the total momentum, not the speed' },
-    { value: (m1 * u1) / (m1 + m2) / 2, trap: 'halved the answer' },
+    { value: u1 - v, trap: 'found the speed the first body loses, not their common speed' },
+    { value: (m1 * u1) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
   ]),
   `Momentum: $${m1} \\times ${u1} = (${m1} + ${m2})v$, so $v = \\frac{${m1 * u1}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$.`,
   'After a perfectly inelastic collision the combined mass m₁ + m₂ carries all the momentum.',
@@ -252,6 +316,8 @@ function coalesceSameDirection(rng: RNG): Generated | null {
     { value: (m1 * u1 + m2 * u2) / m1, trap: 'divided by the first mass only' },
     { value: m1 * u1 + m2 * u2, trap: 'found the total momentum, not the speed' },
     { value: (m1 * u1 + m2 * u2) / m2, trap: 'divided by the second mass only' },
+    { value: (m1 * u1 + m2 * u2) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
+    { value: (m2 * u2) / (m1 + m2), trap: 'used the second body\'s momentum only' },
   ]),
   `Momentum: $${m1} \\times ${u1} + ${m2} \\times ${u2} = (${m1} + ${m2})v$, so $v = \\frac{${m1 * u1 + m2 * u2}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$.`,
   'Add the momenta (same direction), then divide by the combined mass; a plain average of the speeds ignores the masses.',
@@ -284,8 +350,10 @@ function recoil(rng: RNG): Generated | null {
   ], [
     { value: v, trap: 'assumed both move at the same speed' },
     { value: m * v, trap: 'found the momentum, not the speed' },
-    { value: (m * v) / M / 2, trap: 'halved the speed' },
-    { value: v / 2, trap: 'halved the given speed' },
+    { value: (m * v) / (M * 10), trap: 'divided by the weight Mg instead of the mass M' },
+    { value: (m * v) / (M * m), trap: 'divided by the product of the masses instead of by M' },
+    { value: (m * v) / (M - m), trap: 'used the difference of the masses instead of M' },
+    { value: (m * v * 10) / M, trap: 'multiplied by g as if momentum were weight × velocity' },
   ]),
   `${solutionIntro}: $${num(M)}V = ${num(m)} \\times ${v}$, so $V = \\frac{${num(m * v)}}{${num(M)}} = ${num(V)}$ m s$^{-1}$ (in the opposite direction).`,
   'In an explosion from rest the momenta are equal and opposite: MV = mv; each body keeps its own mass.',
@@ -307,6 +375,8 @@ function rebound(rng: RNG): Generated | null {
     { value: u1 + w, trap: 'forgot the masses' },
     { value: (m1 * (u1 + w)) / (m1 + m2), trap: 'divided by the total mass as if they had coalesced' },
     { value: (m1 * u1) / (m1 + m2), trap: 'treated it as a coalescing collision' },
+    { value: (m2 * (u1 + w)) / m1, trap: 'inverted the mass ratio' },
+    { value: u1, trap: 'assumed the second ball moves off at the first ball\'s original speed' },
   ]),
   `Taking the original direction as positive: $${m1} \\times ${u1} = ${m1} \\times (-${w}) + ${m2}v$, so $${m2}v = ${m1 * u1} + ${m1 * w} = ${m1 * (u1 + w)}$ and $v = ${num(v2)}$ m s$^{-1}$.`,
   'A rebound is a negative velocity: moving it to the other side adds m₁w to the momentum the second ball must carry.',
@@ -331,6 +401,9 @@ function headOn(rng: RNG): Generated | null {
     { value: net / m1, trap: 'divided by the first mass only' },
     { value: net, trap: 'found the total momentum, not the speed' },
     { value: (u1 + u2) / 2, trap: 'averaged the speeds and ignored the directions' },
+    { value: net / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
+    { value: (m2 * u2) / (m1 + m2), trap: 'used the second body\'s momentum only' },
+    { value: u1 - u2, trap: 'used the relative speed of approach' },
   ]),
   `Taking the first ${one}'s direction as positive: $${m1} \\times ${u1} - ${m2} \\times ${u2} = (${m1} + ${m2})v$, so $v = \\frac{${net}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$ in the direction of the first ${one}.`,
   'Opposite directions mean opposite signs: subtract the second momentum before dividing by the total mass.',
@@ -355,15 +428,24 @@ function keLost(rng: RNG): Generated | null {
   const intro = `A ${one} of mass ${q(m1, U.kg)} moving at ${q(u1, U.v)} collides with a stationary ${one} of mass ${q(m2, U.kg)} and the two move off together.`;
   if (askFraction) {
     const fr = frac(m2, m1 + m2);
-    const stem = `${intro} What fraction of the initial kinetic energy is lost in the collision?`;
-    return finish(stem, fr, undefined, physOptions(rng, fr, undefined, [
+    // A fraction of the initial energy must lie strictly between 0 and 1: m₁/m₂, m₂/m₁ and any padding
+    // above 1 would be eliminated on sight, and "all of it" is impossible when the pair moves off together.
+    const proper = (c: { value: Exact; trap: string }): Cand => ({ value: c.value.toNumber() < 1 ? c.value : null, trap: c.trap });
+    const must = [
       { value: frac(m1, m1 + m2), trap: 'found the fraction that remains, not the fraction lost' },
       { value: frac(1, 2), trap: 'assumed half the energy is always lost' },
-    ], [
-      { value: frac(m2, m1), trap: 'used m₂/m₁' },
-      { value: frac(m1, m2), trap: 'used m₁/m₂' },
+    ].map(proper);
+    const extra = [
+      proper({ value: frac(m2, m1), trap: 'used m₂/m₁' }),
+      proper({ value: frac(m1, m2), trap: 'used m₁/m₂' }),
+      // KE after computed as ½m₁v² instead of ½(m₁ + m₂)v²: the fraction lost becomes 1 − (v/u₁)²
+      proper({ value: Exact.ONE.sub(frac(m1, m1 + m2).pow(2)), trap: 'used ½m₁v² for the energy after: the combined mass m₁ + m₂ moves off' }),
+      proper({ value: frac(m1, m1 + m2).pow(2), trap: 'used (v/u₁)² for the fraction that remains: the mass changes too' }),
       { value: Exact.ZERO, trap: 'assumed kinetic energy is conserved (only momentum is)' },
-    ], 'fraction'),
+    ];
+    if (cleanOnly([...must, ...extra], fr.toNumber()).length < 4) return null;
+    const stem = `${intro} What fraction of the initial kinetic energy is lost in the collision?`;
+    return finish(stem, fr, undefined, physOptions(rng, fr, undefined, must, extra, 'fraction', FRACTION_PAD),
     `$v = \\frac{${m1 * u1}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$. KE before $= \\tfrac{1}{2} \\times ${m1} \\times ${u1}^2 = ${num(before)}$ J; after $= \\tfrac{1}{2} \\times ${m1 + m2} \\times ${num(v)}^2 = ${num(after)}$ J. Fraction lost $= \\frac{${num(lost)}}{${num(before)}} = ${fr.toLatex()}$ (in general $\\frac{m_2}{m_1 + m_2}$).`,
     'Momentum is conserved but kinetic energy is not; the fraction lost when a moving mass sticks to a stationary one is m₂/(m₁ + m₂).',
     ['momentum', 'kinetic energy', 'inelastic', 'fraction'], { ask: 'ke-fraction', m1, u1, m2 }, 'fraction');
@@ -376,7 +458,8 @@ function keLost(rng: RNG): Generated | null {
     { value: before, trap: 'quoted the kinetic energy before the collision' },
     { value: before - 0.5 * m1 * v * v, trap: 'forgot the second mass when finding the energy after' },
     { value: 0.5 * (m1 + m2) * (u1 - v) * (u1 - v), trap: 'used ½(m₁ + m₂)(u − v)²' },
-    { value: before / 2, trap: 'halved the initial energy' },
+    { value: 0.5 * m2 * v * v, trap: 'found only the energy carried off by the second body' },
+    { value: before + after, trap: 'added the two kinetic energies instead of subtracting' },
   ]),
   `Momentum: $v = \\frac{${m1} \\times ${u1}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$. KE before $= \\tfrac{1}{2} \\times ${m1} \\times ${u1}^2 = ${num(before)}$ J; after $= \\tfrac{1}{2} \\times ${m1 + m2} \\times ${num(v)}^2 = ${num(after)}$ J. Lost: $${num(before)} - ${num(after)} = ${num(lost)}$ J.`,
   'Find v from momentum first, then compute the two kinetic energies separately; in a perfectly inelastic collision some KE is always lost.',
@@ -399,6 +482,8 @@ function findMass(rng: RNG): Generated | null {
     { value: m1 * (u1 - v), trap: 'forgot to divide by v' },
     { value: m1, trap: 'assumed equal masses' },
     { value: (m1 * u1) / v - v, trap: 'subtracted v instead of m₁' },
+    { value: (m1 * (u1 - v)) / u1, trap: 'divided by the initial speed instead of the common speed' },
+    { value: (u1 - v) / v, trap: 'forgot to multiply by m₁' },
   ]),
   `$${m1} \\times ${u1} = (${m1} + m)\\times ${v}$, so $${m1} + m = \\frac{${m1 * u1}}{${v}} = ${m1 + m2}$ and $m = ${num(m2)}$ kg.`,
   'Conservation of momentum gives the total mass m₁ + m₂ = m₁u₁/v; remember to subtract m₁.',

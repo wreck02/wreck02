@@ -94,20 +94,31 @@ function cleanOnly(ds: { value: number | null; trap: string }[], answer: number)
 }
 
 /**
- * Choose the distractors that go to buildOptions: every distinct `must` candidate (the spec-named traps)
- * is used before any `extra` one, so the headline mistakes are never shuffled out by weaker ones.
+ * Choose the distractors that go to buildOptions.
+ *
+ * Two jobs. The spec-named `must` candidates come first inside each side of the answer, so the headline
+ * mistakes are never shuffled out by weaker ones. And the number of options that sit *below* the answer
+ * is drawn at random, so the correct option is not pinned to one slot. Almost every counting mistake
+ * overshoots — $n!$ instead of $(n-1)!$, every pair of vertices instead of the diagonals, sharing that
+ * lets a child get nothing — so taking the musts blindly puts the answer second from the bottom in
+ * every question, and "pick the second smallest" scores 100%. Each variant therefore also supplies
+ * undercounts, and this picks from both sides.
  */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const fresh: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (seen.some((s) => s.equals(d.value))) continue;
     seen.push(d.value);
-    out.push(d);
-  };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  return out;
+    fresh.push(d);
+  }
+  const below = fresh.filter((d) => d.value.toNumber() < a);
+  const above = fresh.filter((d) => d.value.toNumber() > a);
+  const lo = Math.max(0, count - above.length);
+  const hi = Math.min(count, below.length);
+  const nBelow = lo <= hi ? rng.int(lo, hi) : hi;
+  return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
 }
 
 /** Padding that still looks like a count. */
@@ -162,6 +173,8 @@ function arrangeQ(rng: RNG): Generated | null {
       { value: factorial(n) / 2, trap: 'halved, as if two of the objects were identical' },
       { value: 2 * n, trap: 'doubled n' },
       { value: factorial(n + 1), trap: 'used $(n+1)!$' },
+      { value: 2 * factorial(n), trap: 'counted each order and its reverse as different arrangements' },
+      { value: n ** n, trap: 'allowed every place to be filled by any of the n objects, repeats included' },
     ]),
     solution: `$${n}$ choices for the first place, $${n - 1}$ for the second, and so on: $${n}! = ${Array.from({ length: n }, (_, i) => n - i).join(' \\times ')} = ${answer}$.`,
     trap: 'n distinct objects in a row: n!, not n² and not (n − 1)!.',
@@ -194,9 +207,10 @@ function chooseQ(rng: RNG): Generated | null {
       { value: factorial(n) / factorial(n - r), trap: 'counted the orders as different: $^{n}P_{r}$ instead of $^{n}C_{r}$' },
       { value: n * r, trap: 'multiplied n by r' },
     ], [
-      { value: nCr(n, r - 1), trap: 'off by one in r' },
-      { value: nCr(n, r + 1), trap: 'off by one in r' },
+      { value: nCr(n, r - 1), trap: `chose ${r - 1} of them instead of ${r}` },
+      { value: nCr(n, r + 1), trap: `chose ${r + 1} of them instead of ${r}` },
       { value: nCr(n - 1, r), trap: 'off by one in n' },
+      { value: nCr(n + 1, r), trap: 'used one object too many' },
       { value: factorial(n) / factorial(n - r) / r, trap: 'divided by r instead of r!' },
       { value: n + r, trap: 'added instead of choosing' },
     ]),
@@ -228,8 +242,11 @@ function committeeQ(rng: RNG): Generated | null {
     ], [
       { value: (factorial(nb) / factorial(nb - rb)) * nCr(ng, rg), trap: 'counted the boys in order ($^{n}P_{r}$)' },
       { value: nCr(nb, rb) * ng, trap: 'forgot that the girls are also chosen from a group' },
-      { value: nCr(nb, rb + 1) * nCr(ng, rg), trap: 'off by one in the number of boys' },
+      { value: nCr(nb, rb + 1) * nCr(ng, rg), trap: 'off by one in the number of boys chosen' },
       { value: nCr(nb + ng, rb) * nCr(ng, rg), trap: 'chose the boys from everybody' },
+      { value: nCr(nb - 1, rb) * nCr(ng, rg), trap: 'used one boy too few in the group' },
+      { value: nCr(nb, rb) * nCr(ng - 1, rg), trap: 'used one girl too few in the group' },
+      { value: nCr(nb, rb - 1) * nCr(ng, rg), trap: 'off by one in the number of boys chosen, the other way' },
     ]),
     solution: `Choose the boys and the girls independently, then multiply: $^{${nb}}C_{${rb}} \\times {}^{${ng}}C_{${rg}} = ${nCr(nb, rb)} \\times ${nCr(ng, rg)} = ${answer}$.`,
     trap: 'Independent choices multiply; adding them counts committees that are not complete.',
@@ -389,6 +406,8 @@ function atLeastOneQ(rng: RNG): Generated | null {
       { value: total - nCr(ng, r), trap: 'subtracted the all-girl teams instead of the all-boy ones' },
       { value: total - nb, trap: 'subtracted the number of boys' },
       { value: nCr(nb + ng - 1, r - 1), trap: 'fixed one girl and forgot how many girls there are' },
+      { value: nCr(nb, r - 1), trap: 'put one girl in the team but forgot there is a choice of girls' },
+      { value: ng * nCr(nb + ng, r - 1), trap: 'picked a girl first and the rest from everybody, counting some teams twice over' },
     ]),
     solution: `Use the complement: all teams minus the all-boy teams, $^{${nb + ng}}C_{${r}} - {}^{${nb}}C_{${r}} = ${total} - ${nCr(nb, r)} = ${answer}$.`,
     trap: '"At least one" is total − none; choosing a girl first and the rest freely double-counts.',
@@ -407,34 +426,48 @@ function fixedPositionQ(rng: RNG): Generated | null {
   const n = letters.length;
   const vowels = letters.filter((ch) => 'AEIOU'.includes(ch));
   const mode = rng.pick(['first-letter', 'vowel-first', 'ends']);
+  const f = factorial;
   let answer: number;
   let ask: string;
   let how: string;
+  // Every mode needs undercounts as well as overcounts: n! and "the rest arrange freely" both
+  // overshoot, so without these the answer is always the second-smallest option.
+  const under: { value: number | null; trap: string }[] = [
+    { value: f(n - 2), trap: 'fixed two places instead of one' },
+    { value: (n - 1) * (n - 2), trap: 'filled only the first two free places' },
+  ];
   if (mode === 'first-letter') {
-    answer = factorial(n - 1);
+    answer = f(n - 1);
     ask = `begin with the letter $\\text{${letters[0]}}$`;
     how = `Fix $\\text{${letters[0]}}$ in the first place; the other $${n - 1}$ letters arrange in $${n - 1}! = ${answer}$ ways.`;
+    under.push({ value: f(n - 1) / 2, trap: 'halved the arrangements of the remaining letters' });
   } else if (mode === 'vowel-first') {
-    answer = vowels.length * factorial(n - 1);
+    answer = vowels.length * f(n - 1);
     ask = 'begin with a vowel';
-    how = `There are $${vowels.length}$ choices for the first letter, then $${n - 1}! = ${factorial(n - 1)}$ arrangements of the rest: $${vowels.length} \\times ${factorial(n - 1)} = ${answer}$.`;
+    how = `There are $${vowels.length}$ choices for the first letter, then $${n - 1}! = ${f(n - 1)}$ arrangements of the rest: $${vowels.length} \\times ${f(n - 1)} = ${answer}$.`;
+    under.push(
+      { value: f(n - 1), trap: 'forgot that any of the vowels can come first' },
+      { value: vowels.length * f(n - 2), trap: 'fixed the second letter as well as the first' },
+    );
   } else {
-    answer = 2 * factorial(n - 1);
+    answer = 2 * f(n - 1);
     ask = `have the letter $\\text{${letters[0]}}$ at one of the two ends`;
-    how = `$2$ choices of end for $\\text{${letters[0]}}$ and $${n - 1}! = ${factorial(n - 1)}$ for the rest: $2 \\times ${factorial(n - 1)} = ${answer}$.`;
+    how = `$2$ choices of end for $\\text{${letters[0]}}$ and $${n - 1}! = ${f(n - 1)}$ for the rest: $2 \\times ${f(n - 1)} = ${answer}$.`;
+    under.push({ value: 2 * f(n - 2), trap: 'fixed a letter at each end instead of only one' });
   }
   return {
     stem: `How many arrangements of the letters of the word ${word} ${ask}?`,
     answer: { kind: 'exact', value: E(answer) },
     options: countOptions(rng, answer, [
-      { value: factorial(n), trap: 'counted every arrangement, ignoring the restriction' },
-      { value: mode === 'first-letter' ? factorial(n - 2) : factorial(n - 1), trap: 'forgot how many ways the fixed place can be filled' },
-      { value: mode === 'vowel-first' ? vowels.length * factorial(n) : factorial(n) / 2, trap: mode === 'vowel-first' ? 'used n! for the remaining letters' : 'halved n! instead of fixing a place' },
+      { value: f(n), trap: 'counted every arrangement, ignoring the restriction' },
+      { value: mode === 'first-letter' ? f(n - 2) : f(n - 1), trap: 'forgot how many ways the fixed place can be filled' },
+      { value: mode === 'vowel-first' ? vowels.length * f(n) : f(n) / 2, trap: mode === 'vowel-first' ? 'used n! for the remaining letters' : 'halved n! instead of fixing a place' },
     ], [
-      { value: factorial(n - 1) * (n - 1), trap: 'used the wrong number of free choices' },
-      { value: factorial(n) - factorial(n - 1), trap: 'found the arrangements that do not satisfy the condition' },
+      ...under,
+      { value: f(n - 1) * (n - 1), trap: 'used the wrong number of free choices' },
+      { value: f(n) - f(n - 1), trap: 'found the arrangements that do not satisfy the condition' },
       { value: (n - 1) * (n - 1), trap: 'multiplied instead of using a factorial' },
-      { value: 3 * factorial(n - 1), trap: 'miscounted the choices for the fixed place' },
+      { value: 3 * f(n - 1), trap: 'miscounted the choices for the fixed place' },
     ]),
     solution: how,
     trap: 'Fill the restricted place first, then arrange the remaining letters freely.',
@@ -464,6 +497,9 @@ function gridQ(rng: RNG): Generated | null {
       { value: nCr(a + b, a) * 2, trap: 'doubled for "right or up"' },
       { value: nCr(a + b + 1, a), trap: 'used one grid line too many' },
       { value: factorial(a) * factorial(b), trap: 'arranged the two kinds of move separately' },
+      { value: nCr(a + b - 1, a), trap: 'used one move too few' },
+      { value: a * b, trap: 'counted the small squares of the grid, not the routes' },
+      { value: (a + 1) * (b + 1), trap: 'counted the corners of the grid, not the routes' },
     ]),
     solution: `Every route is $${a}$ rights and $${b}$ ups in some order: choose which $${a}$ of the $${a + b}$ moves are rights, $^{${a + b}}C_{${a}} = ${answer}$.`,
     trap: 'A route is a word made of R and U — count the arrangements, not the squares.',
@@ -473,22 +509,33 @@ function gridQ(rng: RNG): Generated | null {
   };
 }
 
-const POLYGONS: Record<number, string> = { 5: 'pentagon', 6: 'hexagon', 7: 'heptagon', 8: 'octagon', 9: 'nonagon', 10: 'decagon', 12: 'regular 12-sided polygon' };
+/** The article travels with the noun, so the eight-sided case reads "an octagon", not "a octagon". */
+const POLYGONS: Record<number, string> = {
+  5: 'a pentagon', 6: 'a hexagon', 7: 'a heptagon', 8: 'an octagon', 9: 'a nonagon', 10: 'a decagon',
+  11: 'a regular 11-sided polygon', 12: 'a regular 12-sided polygon', 14: 'a regular 14-sided polygon',
+  15: 'a regular 15-sided polygon', 16: 'a regular 16-sided polygon', 18: 'a regular 18-sided polygon',
+  20: 'a regular 20-sided polygon',
+};
 
 function diagonalsQ(rng: RNG): Generated | null {
-  const n = rng.pick([5, 6, 7, 8, 9, 10, 12]);
+  const n = rng.pick([5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 20]);
   const answer = (n * (n - 3)) / 2;
   return {
-    stem: `How many diagonals does a ${POLYGONS[n]} have?`,
+    stem: `How many diagonals does ${POLYGONS[n]} have?`,
     answer: { kind: 'exact', value: E(answer) },
+    // Every overcount here (pairs of vertices, not halving, one side too few) sits above the answer,
+    // so the undercounts below are what stop "the second smallest option" from being a winning strategy.
     options: countOptions(rng, answer, [
       { value: nCr(n, 2), trap: 'counted every pair of vertices, including the n sides' },
       { value: n * (n - 3), trap: 'forgot that each diagonal is counted from both ends' },
-      { value: n, trap: 'confused diagonals with sides' },
-      { value: (n * (n - 1)) / 2 - n + 1, trap: 'subtracted one side too many' },
+      { value: n - 3, trap: 'counted only the diagonals drawn from one vertex' },
+      { value: (n * (n - 1)) / 2 - n - 1, trap: 'subtracted one side too many' },
     ], [
+      { value: n, trap: 'confused diagonals with sides' },
       { value: nCr(n, 2) - 1, trap: 'subtracted a single side' },
       { value: (n * (n - 2)) / 2, trap: 'used n − 2 instead of n − 3' },
+      { value: ((n - 1) * (n - 4)) / 2, trap: 'used one vertex too few' },
+      { value: ((n + 1) * (n - 2)) / 2, trap: 'used one vertex too many' },
       { value: 2 * n, trap: 'guessed two per vertex' },
     ]),
     solution: `Each pair of vertices gives a line: $^{${n}}C_{2} = ${nCr(n, 2)}$; $${n}$ of those are sides, leaving $${nCr(n, 2)} - ${n} = ${answer}$ diagonals.`,
@@ -516,6 +563,9 @@ function sharingQ(rng: RNG): Generated | null {
     ], [
       { value: b ** (k - b), trap: 'gave each remaining sweet a free choice of child' },
       { value: nCr(k - 1, b), trap: 'off by one in the number of dividers' },
+      { value: nCr(k - 1, b - 2), trap: 'used one divider too few' },
+      { value: nCr(k - 2, b - 1), trap: 'off by one in the number of objects' },
+      { value: (k - 1) * (b - 1), trap: 'multiplied the gaps by the dividers instead of choosing' },
       { value: k * b, trap: 'multiplied the two numbers' },
     ]),
     solution: `Lay the ${WORDS[k]} ${item} out in a row and cut the line of $${k - 1}$ gaps in $${b - 1}$ places: $^{${k - 1}}C_{${b - 1}} = ${answer}$.`,

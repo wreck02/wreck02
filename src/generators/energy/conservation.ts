@@ -23,10 +23,18 @@ const G = 10;
 const U_J = '\\text{J}', U_KJ = '\\text{kJ}', U_M = '\\text{m}', U_MS = '\\text{m s}^{-1}', U_KG = '\\text{kg}';
 const TAKE_G = 'Take $g = 10\\ \\text{m s}^{-2}$.';
 
-type Candidate = { value: Exact | null; trap: string };
+/**
+ * A candidate distractor. `wide` marks a unit slip (joules read as kilojoules): that is 1000x out, so it is
+ * offered alone and only in a minority of draws; every other candidate must sit within a factor of 12 of
+ * the answer, because 400 m s^-1 beside 20 m s^-1 is eliminated on sight and gives the answer away.
+ */
+type Candidate = { value: Exact | null; trap: string; wide?: boolean };
+type Ranked = Distractor & { wide?: boolean };
 
 /** Plain number for a stem: 1200, 0.05, 22.5. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
+/** Round away floating-point noise (0.1 x 3 -> 0.3). */
+const r = (x: number): number => Number(x.toPrecision(12));
 
 function tryE(f: () => Exact): Exact | null {
   try {
@@ -37,38 +45,88 @@ function tryE(f: () => Exact): Exact | null {
   }
 }
 
-/** √x as an exact value (integer, decimal or a surd with a whole-number coefficient such as 10√2), or null if it is not clean. */
+/**
+ * A speed or height that is not exact, printed the way the exam prints one: a whole number when it is
+ * one, otherwise a single decimal place. Never a surd — the answer to a physics question here is always
+ * a whole number, so an option such as 10 root 5 is discarded without any physics and "pick the only
+ * whole number that is a plausible speed" would score without knowing any energy.
+ */
 function root(x: number): Exact | null {
   if (!(x > 0)) return null;
-  const v = tryE(() => E(x).sqrt());
-  if (!v || !isCleanExact(v).ok) return null;
-  if (v.hasSurd() && v.terms[0].c.d !== 1n) return null;
-  return v;
+  const v = Math.sqrt(x);
+  const whole = Math.round(v);
+  return E(Math.abs(whole - v) < 1e-9 ? whole : Number(v.toFixed(1)));
 }
 
-/** Positive, finite, clean and exam-sized candidates. */
-function cleanOnly(ds: Candidate[]): Distractor[] {
-  return ds.filter((d): d is { value: Exact; trap: string } => {
+/** √x when it is a whole number (answers must stay exact), else null. */
+function exactRoot(x: number): Exact | null {
+  if (!(x > 0)) return null;
+  const v = Math.sqrt(x);
+  const whole = Math.round(v);
+  return Math.abs(whole - v) < 1e-9 ? E(whole) : null;
+}
+
+/** A value that is not exact, printed to one decimal place (or 3 s.f. when large). */
+function approx(x: number): Exact | null {
+  if (!Number.isFinite(x) || x <= 0) return null;
+  return E(Math.abs(x) >= 1000 ? Number(x.toPrecision(3)) : Number(x.toFixed(1)));
+}
+
+/** Positive, finite, clean candidates that sit close enough to the answer to be weighed against it. */
+function cleanOnly(ds: Candidate[], answer: Exact): Ranked[] {
+  const a = answer.toNumber();
+  const out: Ranked[] = [];
+  for (const d of ds) {
     const v = d.value;
-    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) return false;
+    if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) continue;
     const x = v.toNumber();
-    if (x < 0.01 || x > 2e6) return false;
-    return !v.isRational() || Number.isInteger(Number((x * 1000).toPrecision(12))); // decimals must terminate
-  });
+    if (x < 0.01 || x > 2e6) continue;
+    const span = d.wide ? 1000 : 12;
+    if (x > span * a || x < a / span) continue;
+    if (v.isRational() && !Number.isInteger(r(x * 1000))) continue; // decimals must terminate
+    out.push({ value: v, trap: d.trap, wide: d.wide });
+  }
+  return out;
 }
 
-/** Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never
+ * shuffled out. The remaining slots are filled towards a randomly chosen number of options *below* the
+ * answer, so where the correct option lands in the sorted list is a property of the draw and not of the
+ * sub-variant. At most one power-of-ten option, and the 1000x J/kJ slip only in a minority of draws: an
+ * option list that is a decimal ladder tests nothing but the decimal point.
+ */
+function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count = 4): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
+  const out: Ranked[] = [];
+  const nums: number[] = [a];
+  let wideSlots = rng.bool(0.4) ? 1 : 0;
+  let shiftSlots = 1;
+  const take = (d: Ranked) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    const x = d.value.toNumber();
+    const k = Math.log10(x / a);
+    const isShift = Math.abs(k) >= 0.999 && Math.abs(k - Math.round(k)) < 1e-6;
+    if (d.wide && wideSlots <= 0) return;
+    if (isShift && shiftSlots <= 0) return;
+    if (out.length > 0 && Math.max(...nums, x) / Math.min(...nums, x) > 1000) return;
+    if (d.wide) wideSlots--;
+    if (isShift) shiftSlots--;
     seen.push(d.value);
+    nums.push(x);
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  return out;
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && below.length + above.length > 0) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
+  return out.map((d) => ({ value: d.value, trap: d.trap }));
 }
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix of variants. */
@@ -95,7 +153,7 @@ interface Pack {
 
 function pack(rng: RNG, p: Pack): Generated | null {
   if (!p.answer || !isCleanExact(p.answer).ok || p.answer.sign() <= 0) return null;
-  const ds = ranked(rng, p.answer, cleanOnly(p.must), cleanOnly(p.extra));
+  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer), cleanOnly(p.extra, p.answer));
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -114,28 +172,38 @@ const tidyEnergy = (x: number) => Number.isInteger(x * 100) && x >= 0.1;
 
 // ----------------------------------------------------------------------------- level 1
 
-const KE_OBJECTS: [string, number[], number[]][] = [
-  ['ball', [0.2, 0.4, 0.5, 1, 2], [2, 3, 4, 5, 6, 8, 10, 12, 15, 20]],
-  ['cyclist and bicycle', [80, 90, 100], [4, 5, 6, 8, 10, 12]],
-  ['car', [800, 1000, 1200, 1500, 2000], [5, 10, 12, 15, 20, 25, 30]],
-  ['runner', [50, 60, 70, 80], [2, 3, 4, 5, 6, 8, 10]],
-  ['trolley', [2, 4, 5, 8, 10, 20], [2, 3, 4, 5, 6, 8, 10]],
-  ['lorry', [4000, 5000, 8000, 10000], [5, 10, 15, 20]],
+/** A body for a level-1 stem: `plural` subjects ("a cyclist and bicycle") take have/are/their. */
+interface Body { name: string; masses: number[]; speeds: number[]; plural?: boolean }
+
+const KE_OBJECTS: Body[] = [
+  { name: 'ball', masses: [0.2, 0.4, 0.5, 1, 2], speeds: [2, 3, 4, 5, 6, 8, 10, 12, 15, 20] },
+  { name: 'cyclist and bicycle', masses: [80, 90, 100], speeds: [4, 5, 6, 8, 10, 12], plural: true },
+  { name: 'car', masses: [800, 1000, 1200, 1500, 2000], speeds: [5, 10, 12, 15, 20, 25, 30] },
+  { name: 'runner', masses: [50, 60, 70, 80], speeds: [2, 3, 4, 5, 6, 8, 10] },
+  { name: 'trolley', masses: [2, 4, 5, 8, 10, 20], speeds: [2, 3, 4, 5, 6, 8, 10] },
+  { name: 'lorry', masses: [4000, 5000, 8000, 10000], speeds: [5, 10, 15, 20] },
+  { name: 'sledge and rider', masses: [60, 80, 100], speeds: [2, 3, 4, 5, 6, 8], plural: true },
+  { name: 'arrow', masses: [0.02, 0.05, 0.1], speeds: [10, 20, 30, 40, 50] },
 ];
 
+/** "An arrow of mass 0.05 kg" / "A cyclist and bicycle of total mass 90 kg". */
+const article = (name: string): string => (/^[aeiou]/.test(name) ? 'An' : 'A');
+
 function keQ(rng: RNG): Generated | null {
-  const [name, masses, speeds] = rng.pick(KE_OBJECTS);
-  const m = rng.pick(masses), v = rng.pick(speeds);
+  const b = rng.pick(KE_OBJECTS);
+  const m = rng.pick(b.masses), v = rng.pick(b.speeds);
   const KE = 0.5 * m * v * v;
   if (!tidyEnergy(KE)) return null;
   const inKJ = KE >= 10000 && KE % 100 === 0;
   const scale = inKJ ? 1 / 1000 : 1;
-  const article = /^[aeiou]/.test(name) ? 'An' : 'A';
+  const name = b.name;
   const reverse = rng.bool(0.3);
   if (reverse) {
     // solve ½mv² = KE for the speed
     return pack(rng, {
-      stem: `${article} ${name} of mass ${n(m)} kg has kinetic energy ${n(KE * scale)} ${inKJ ? 'kJ' : 'J'}. Find its speed.`,
+      stem: b.plural
+        ? `A ${name} of total mass ${n(m)} kg have kinetic energy ${n(KE * scale)} ${inKJ ? 'kJ' : 'J'}. Find their speed.`
+        : `${article(name)} ${name} of mass ${n(m)} kg has kinetic energy ${n(KE * scale)} ${inKJ ? 'kJ' : 'J'}. Find its speed.`,
       answer: E(v),
       unit: U_MS,
       must: [
@@ -144,9 +212,11 @@ function keQ(rng: RNG): Generated | null {
       ],
       extra: [
         { value: E(KE / m), trap: 'forgot the ½ and the square root' },
-        { value: inKJ ? root((2 * KE * scale) / m) : null, trap: 'forgot to convert kJ to J' },
+        { value: inKJ ? root((2 * KE * scale) / m) : null, trap: 'forgot to convert kJ to J', wide: true },
         { value: E(2 * v), trap: 'doubled the speed' },
         { value: E(v / 2), trap: 'halved the speed' },
+        { value: root(KE / (2 * m)), trap: 'divided by 2 instead of multiplying by 2' },
+        { value: approx(v * Math.SQRT2), trap: 'doubled the energy twice: used v = √(4KE/m)' },
       ],
       solution: `$\\tfrac12 m v^2 = ${n(KE)}$, so $v^2 = \\dfrac{2 \\times ${n(KE)}}{${n(m)}} = ${v * v}$ and $v = ${v}\\ ${U_MS}$.`,
       trap: 'Double the energy before dividing by the mass, then square-root: v = √(2KE/m).',
@@ -155,7 +225,9 @@ function keQ(rng: RNG): Generated | null {
     });
   }
   return pack(rng, {
-    stem: `${article} ${name} of mass ${n(m)} kg is moving at $${v}\\ ${U_MS}$. Find its kinetic energy${inKJ ? ', in kJ' : ''}.`,
+    stem: b.plural
+      ? `A ${name} have a total mass of ${n(m)} kg and are moving at $${v}\\ ${U_MS}$. Find their total kinetic energy${inKJ ? ', in kJ' : ''}.`
+      : `${article(name)} ${name} of mass ${n(m)} kg is moving at $${v}\\ ${U_MS}$. Find its kinetic energy${inKJ ? ', in kJ' : ''}.`,
     answer: E(KE * scale),
     unit: inKJ ? U_KJ : U_J,
     must: [
@@ -165,8 +237,10 @@ function keQ(rng: RNG): Generated | null {
     extra: [
       { value: E(m * v * scale), trap: 'forgot the ½ and the square: gave the momentum' },
       { value: E(0.5 * m * m * v * v * scale), trap: 'squared the mass as well as the speed' },
-      { value: inKJ ? E(KE) : E(KE / 1000), trap: inKJ ? 'left the answer in joules' : 'gave the answer in kJ' },
+      { value: inKJ ? E(KE) : null, trap: 'left the answer in joules', wide: true },
       { value: E(KE * scale * 10), trap: 'slipped a decimal place' },
+      { value: E(0.25 * m * v * v * scale), trap: 'halved twice' },
+      { value: E(r(m * v * v * scale * 2)), trap: 'used 2mv² instead of ½mv²' },
     ],
     solution: `$KE = \\tfrac12 m v^2 = \\tfrac12 \\times ${n(m)} \\times ${v}^2 = \\tfrac12 \\times ${n(m)} \\times ${v * v} = ${n(KE)}\\ \\text{J}${inKJ ? ` = ${n(KE * scale)}\\ \\text{kJ}` : ''}$.`,
     trap: 'Square the speed and halve: KE = ½mv², not mv² or ½mv.',
@@ -175,26 +249,32 @@ function keQ(rng: RNG): Generated | null {
   });
 }
 
-const GPE_OBJECTS: [string, number[], number[]][] = [
-  ['book', [0.5, 1, 2], [1, 1.5, 2, 3]],
-  ['brick', [2, 3, 5], [1.5, 2, 3, 4, 5, 6, 8, 10]],
-  ['climber', [50, 60, 70, 80], [5, 8, 10, 12, 15, 20, 25, 30, 50, 100]],
-  ['load', [100, 200, 250, 500, 1000], [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30]],
-  ['ball', [0.2, 0.4, 0.5, 2], [2, 3, 4, 5, 8, 10, 12, 15, 20]],
+/** A body that is raised: `climbs` marks a person, who climbs rather than "is lifted". */
+interface Raised { name: string; masses: number[]; heights: number[]; climbs?: boolean }
+
+const GPE_OBJECTS: Raised[] = [
+  { name: 'book', masses: [0.5, 1, 2], heights: [1, 1.5, 2, 3] },
+  { name: 'brick', masses: [2, 3, 5], heights: [1.5, 2, 3, 4, 5, 6, 8, 10] },
+  { name: 'climber', masses: [50, 60, 70, 80], heights: [5, 8, 10, 12, 15, 20, 25, 30, 50, 100], climbs: true },
+  { name: 'load', masses: [100, 200, 250, 500, 1000], heights: [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30] },
+  { name: 'ball', masses: [0.2, 0.4, 0.5, 2], heights: [2, 3, 4, 5, 8, 10, 12, 15, 20] },
+  { name: 'crate', masses: [5, 10, 20, 25, 40, 50], heights: [2, 3, 4, 5, 6, 8, 10, 12] },
 ];
 
 function gpeQ(rng: RNG): Generated | null {
-  const [name, masses, heights] = rng.pick(GPE_OBJECTS);
-  const m = rng.pick(masses), h = rng.pick(heights);
+  const b = rng.pick(GPE_OBJECTS);
+  const name = b.name;
+  const m = rng.pick(b.masses), h = rng.pick(b.heights);
   const PE = m * G * h;
   if (!tidyEnergy(PE)) return null;
   const inKJ = PE >= 10000 && PE % 100 === 0;
   const scale = inKJ ? 1 / 1000 : 1;
-  const article = /^[aeiou]/.test(name) ? 'An' : 'A';
   const ask = rng.weighted(['energy', 'height', 'mass'], [7, 2, 1]);
   if (ask === 'height') {
     return pack(rng, {
-      stem: `${article} ${name} of mass ${n(m)} kg gains ${n(PE * scale)} ${inKJ ? 'kJ' : 'J'} of gravitational potential energy when it is lifted vertically. ${TAKE_G} Find the height through which it is lifted.`,
+      stem: b.climbs
+        ? `${article(name)} ${name} of mass ${n(m)} kg gains ${n(PE * scale)} ${inKJ ? 'kJ' : 'J'} of gravitational potential energy on climbing vertically. ${TAKE_G} Find the height climbed.`
+        : `${article(name)} ${name} of mass ${n(m)} kg gains ${n(PE * scale)} ${inKJ ? 'kJ' : 'J'} of gravitational potential energy when it is lifted vertically. ${TAKE_G} Find the height through which it is lifted.`,
       answer: E(h),
       unit: U_M,
       must: [
@@ -202,10 +282,12 @@ function gpeQ(rng: RNG): Generated | null {
         { value: E((2 * PE) / (m * G)), trap: 'put in a spurious factor of ½ (as in ½mv²)' },
       ],
       extra: [
-        { value: inKJ ? E((PE * scale) / (m * G)) : null, trap: 'forgot to convert kJ to J' },
+        { value: inKJ ? E((PE * scale) / (m * G)) : null, trap: 'forgot to convert kJ to J', wide: true },
         { value: E(h * 10), trap: 'slipped a decimal place' },
-        { value: E(h / 10), trap: 'slipped a decimal place' },
+        { value: E(h / 10), trap: 'slipped a decimal place the other way' },
         { value: E(2 * h), trap: 'doubled the height' },
+        { value: E(r(h / 2)), trap: 'halved the height' },
+        { value: E(r(PE / (m * G * G))), trap: 'divided by g twice' },
       ],
       solution: `$mgh = ${n(PE)}$, so $h = \\dfrac{${n(PE)}}{${n(m)} \\times 10} = ${n(h)}\\ \\text{m}$.`,
       trap: 'Divide by the weight mg, not by the mass alone.',
@@ -223,10 +305,12 @@ function gpeQ(rng: RNG): Generated | null {
         { value: E((2 * PE) / (G * h)), trap: 'put in a spurious factor of ½ (as in ½mv²)' },
       ],
       extra: [
-        { value: inKJ ? E((PE * scale) / (G * h)) : null, trap: 'forgot to convert kJ to J' },
+        { value: inKJ ? E((PE * scale) / (G * h)) : null, trap: 'forgot to convert kJ to J', wide: true },
         { value: E(m * 10), trap: 'slipped a decimal place' },
-        { value: E(m / 10), trap: 'slipped a decimal place' },
+        { value: E(m / 10), trap: 'slipped a decimal place the other way' },
         { value: E(2 * m), trap: 'doubled the mass' },
+        { value: E(r(m / 2)), trap: 'halved the mass' },
+        { value: E(r(PE / (G * G * h))), trap: 'divided by g twice' },
       ],
       solution: `$mgh = ${n(PE)}$, so $m = \\dfrac{${n(PE)}}{10 \\times ${n(h)}} = ${n(m)}\\ \\text{kg}$.`,
       trap: 'Divide by g × h, not by the height alone.',
@@ -235,7 +319,9 @@ function gpeQ(rng: RNG): Generated | null {
     });
   }
   return pack(rng, {
-    stem: `${article} ${name} of mass ${n(m)} kg is lifted vertically through ${n(h)} m. ${TAKE_G} Find the gain in gravitational potential energy${inKJ ? ', in kJ' : ''}.`,
+    stem: b.climbs
+      ? `${article(name)} ${name} of mass ${n(m)} kg climbs vertically through ${n(h)} m. ${TAKE_G} Find the gain in gravitational potential energy${inKJ ? ', in kJ' : ''}.`
+      : `${article(name)} ${name} of mass ${n(m)} kg is lifted vertically through ${n(h)} m. ${TAKE_G} Find the gain in gravitational potential energy${inKJ ? ', in kJ' : ''}.`,
     answer: E(PE * scale),
     unit: inKJ ? U_KJ : U_J,
     must: [
@@ -244,9 +330,11 @@ function gpeQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: E(m * G * h * h * scale), trap: 'squared the height (as if it were a speed)' },
-      { value: inKJ ? E(PE) : E(PE / 1000), trap: inKJ ? 'left the answer in joules' : 'gave the answer in kJ' },
+      { value: inKJ ? E(PE) : null, trap: 'left the answer in joules', wide: true },
       { value: E(PE * scale * 10), trap: 'slipped a decimal place' },
       { value: E(2 * PE * scale), trap: 'doubled the energy' },
+      { value: E(r((m * G * h * scale) / 4)), trap: 'quartered the energy' },
+      { value: E(r(G * h * scale)), trap: 'forgot the mass: used gh' },
     ],
     solution: `$\\Delta PE = mgh = ${n(m)} \\times 10 \\times ${n(h)} = ${n(PE)}\\ \\text{J}${inKJ ? ` = ${n(PE * scale)}\\ \\text{kJ}` : ''}$.`,
     trap: 'GPE = mgh: weight (mg) times height, with no ½ and nothing squared.',
@@ -257,27 +345,38 @@ function gpeQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 2
 
+/** Drop heights with 2gh a perfect square, so the speed at the bottom is a whole number. */
+const DROP_HEIGHTS = [0.8, 1.8, 3.2, 5, 7.2, 12.8, 16.2, 20, 28.8, 45, 80, 125];
+const DROPPED = ['stone', 'ball', 'coconut', 'apple', 'brick', 'egg'];
+
 function dropQ(rng: RNG): Generated | null {
-  const h = rng.pick([5, 20, 45, 80, 125]);
+  const h = rng.pick(DROP_HEIGHTS);
   const m = rng.bool(0.6) ? rng.pick([0.2, 0.5, 1, 2, 5]) : 0;
-  const v = Math.sqrt(2 * G * h);
-  const object = rng.pick(['stone', 'ball', 'coconut', 'apple']);
-  const stem = `A ${object}${m ? ` of mass ${n(m)} kg` : ''} is dropped from rest from a height of ${h} m. Air resistance is negligible. ${TAKE_G} Find the speed of the ${object} just before it hits the ground.`;
+  const answer = exactRoot(2 * G * h);
+  if (!answer) return null;
+  const v = answer.toNumber();
+  const object = rng.pick(DROPPED);
+  const stem = `${article(object)} ${object}${m ? ` of mass ${n(m)} kg` : ''} is dropped from rest from a height of ${n(h)} m. Air resistance is negligible. ${TAKE_G} Find the speed of the ${object} just before it hits the ground.`;
   return pack(rng, {
     stem,
-    answer: E(v),
+    answer,
     unit: U_MS,
+    // v/√2 below and √2 v above: the two ways of mislaying the factor 2, one on each side of the answer
     must: [
       { value: root(G * h), trap: 'forgot the 2: used v = √(gh)' },
-      { value: E(2 * G * h), trap: 'forgot to take the square root: gave v²' },
+      { value: root(4 * G * h), trap: 'doubled g as well as using the 2: used v = √(4gh)' },
     ],
     extra: [
       { value: root(2 * h), trap: 'forgot g' },
+      { value: E(2 * G * h), trap: 'forgot to take the square root: gave v²' },
       { value: E(G * h), trap: 'forgot the 2 and the square root' },
       { value: m ? E(m * G * h) : null, trap: 'gave the kinetic energy in joules instead of the speed' },
       { value: E(2 * v), trap: 'doubled the speed' },
+      { value: E(r(v / 2)), trap: 'halved the speed' },
+      { value: root(G * h / 2), trap: 'used v = √(gh/2): halved instead of doubling' },
+      { value: E(r(v * 1.5)), trap: 'used v = 1.5√(2gh)' },
     ],
-    solution: `$mgh = \\tfrac12 m v^2$ (the mass cancels), so $v = \\sqrt{2gh} = \\sqrt{2 \\times 10 \\times ${h}} = \\sqrt{${2 * G * h}} = ${n(v)}\\ ${U_MS}$.`,
+    solution: `$mgh = \\tfrac12 m v^2$ (the mass cancels), so $v = \\sqrt{2gh} = \\sqrt{2 \\times 10 \\times ${n(h)}} = \\sqrt{${n(2 * G * h)}} = ${n(v)}\\ ${U_MS}$.`,
     trap: 'v = √(2gh): keep the 2 and take the square root; the mass cancels, so it is not needed.',
     tags: ['conservation', 'free-fall', 'speed'],
     params: { variant: 'drop', h },
@@ -368,9 +467,11 @@ function pendulumQ(rng: RNG): Generated | null {
 function fractionLostQ(rng: RNG): Generated | null {
   const k = rng.int(1, 6);
   const h = 5 * k * k; // √(2gh) = 10k
-  const f = rng.pick([10, 20, 25, 36, 50, 64, 75]); // percentage of the energy lost
+  // the fraction remaining is a perfect square, so the speed at the bottom is a whole number
+  const f = rng.pick([19, 36, 51, 64, 75, 84]);
   const v0 = 10 * k;
-  const answer = root(2 * G * h * (1 - f / 100));
+  const answer = exactRoot(2 * G * h * (1 - f / 100));
+  if (!answer) return null;
   const who = rng.pick([
     `A skier of mass 60 kg starts from rest and descends a slope of vertical height ${h} m.`,
     `A sledge and rider of total mass 80 kg start from rest at the top of a slope ${h} m high.`,
@@ -388,8 +489,11 @@ function fractionLostQ(rng: RNG): Generated | null {
       { value: root(2 * G * h * (f / 100)), trap: 'used the fraction lost instead of the fraction remaining' },
       { value: E(2 * G * h * (1 - f / 100)), trap: 'forgot to take the square root: gave v²' },
       { value: root(G * h * (1 - f / 100)), trap: 'forgot the 2' },
+      { value: root(4 * G * h * (1 - f / 100)), trap: 'doubled g as well as using the 2' },
+      { value: E(r(answer.toNumber() / 2)), trap: 'halved the speed' },
+      { value: approx(v0 * Math.sqrt(1 - f / 100) * 1.5), trap: 'took the square root of the fraction twice over' },
     ],
-    solution: `$\\tfrac12 m v^2 = ${n(1 - f / 100)}\\,mgh$, so $v^2 = ${n(1 - f / 100)} \\times 2 \\times 10 \\times ${h} = ${n(2 * G * h * (1 - f / 100))}$ and $v = ${answer!.toLatex()}\\ ${U_MS}$.`,
+    solution: `$\\tfrac12 m v^2 = ${n(1 - f / 100)}\\,mgh$, so $v^2 = ${n(1 - f / 100)} \\times 2 \\times 10 \\times ${h} = ${n(2 * G * h * (1 - f / 100))}$ and $v = ${n(answer.toNumber())}\\ ${U_MS}$.`,
     trap: 'A percentage of the energy is lost, not of the speed: KE ∝ v², so the speed scales by the square root of the fraction remaining.',
     tags: ['conservation', 'friction', 'percentage-loss'],
     params: { variant: 'fraction-lost', h, f },
@@ -433,15 +537,27 @@ function frictionWorkQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 5
 
+/**
+ * Rollercoaster: the speed at B given the speed at A, the drop and the energy lost to friction.
+ * Both the answer and the frictionless speed are whole numbers, so "pick the only whole number that
+ * could be a speed" is not a strategy; the other mistakes are printed as one-decimal-place speeds and
+ * every one of them is a speed a rollercoaster could have.
+ */
 function coasterQ(rng: RNG): Generated | null {
   const m = rng.pick([200, 400, 500, 800, 1000]);
   const u = rng.pick([0, 5, 10, 12, 15, 20]);
-  const hA = rng.pick([20, 25, 30, 40, 45, 50, 60]);
+  // v0 is the speed at B with no friction: choose it so the drop A→B is a whole number of metres
+  const v0 = rng.pick([15, 18, 20, 22, 25, 28, 30, 32, 35, 40]);
+  if (v0 <= u + 4) return null;
+  if ((v0 * v0 - u * u) % 20 !== 0) return null;
+  const drop = (v0 * v0 - u * u) / 20;
+  if (drop < 10 || drop > 60) return null;
   const hB = rng.pick([0, 5, 8, 10, 12, 15, 20, 25]);
-  const drop = hA - hB;
-  if (drop < 10) return null;
+  const hA = hB + drop;
+  if (hA > 90) return null;
   const v = rng.pick([10, 12, 15, 16, 18, 20, 24, 25, 30]);
-  const W = (m * (u * u + 2 * G * drop - v * v)) / 2; // energy lost to friction
+  if (v >= v0 || v <= u) return null;
+  const W = (m * (v0 * v0 - v * v)) / 2; // energy lost to friction
   if (W <= 0 || W % 1000 !== 0) return null;
   const WkJ = W / 1000;
   // a round number of kJ (at most two significant figures) that divides by the mass to whole joules per kg
@@ -454,14 +570,18 @@ function coasterQ(rng: RNG): Generated | null {
     answer: E(v),
     unit: U_MS,
     must: [
-      { value: root(u * u + 2 * G * drop), trap: 'ignored the energy lost to friction' },
+      { value: E(v0), trap: 'ignored the energy lost to friction' },
       { value: root(u * u + 2 * G * drop - W / m), trap: 'lost the factor 2 when converting the energy lost into v²' },
     ],
     extra: [
       { value: u ? root(2 * G * drop - (2 * W) / m) : null, trap: 'ignored the speed at A' },
-      { value: hB ? root(u * u + 2 * G * hA - (2 * W) / m) : null, trap: 'used the height of A above the ground instead of the drop from A to B' },
-      { value: E(u * u + 2 * G * drop - (2 * W) / m), trap: 'forgot to take the square root: gave v²' },
+      { value: hB ? root(v * v + 2 * G * hB) : null, trap: 'used the height of A above the ground instead of the drop from A to B' },
+      { value: hB && u * u + 2 * G * hB > (2 * W) / m ? root(u * u + 2 * G * hB - (2 * W) / m) : null, trap: 'used the height of B above the ground as the drop' },
+      { value: root(u * u + 2 * G * drop - (4 * W) / m), trap: 'subtracted the energy lost twice' },
+      { value: root(u * u + 2 * G * drop + (2 * W) / m), trap: 'added the energy lost instead of subtracting it' },
       { value: root(u * u + 2 * G * drop - (2 * WkJ) / m), trap: 'forgot to convert kJ to J' },
+      { value: v * v <= 12 * v ? E(v * v) : null, trap: 'forgot to take the square root: gave v²' },
+      { value: E(r(v / 2)), trap: 'halved the speed' },
     ],
     solution: `Energy per kilogram: $\\tfrac12 v^2 = \\tfrac12 u^2 + g\\,\\Delta h - \\dfrac{W}{m} = ${n((u * u) / 2)} + ${G * drop} - ${n(W / m)} = ${n((v * v) / 2)}$, so $v^2 = ${v * v}$ and $v = ${v}\\ ${U_MS}$.`,
     trap: 'Divide the energy lost by the mass and double it before subtracting from v²; use the drop A→B, not the height above the ground.',
@@ -523,8 +643,9 @@ function keRatioQ(rng: RNG): Generated | null {
     });
   }
   // speed when KE = GPE for a ball dropped from H: ½v² = gH/2 → v = √(gH)
-  const H = rng.pick([2.5, 3.6, 5, 6.4, 10, 20, 40, 90]);
-  const answer = root(G * H);
+  const H = rng.pick([2.5, 3.6, 4.9, 6.4, 8.1, 10, 12.1, 14.4, 40, 90]);
+  const answer = exactRoot(G * H);
+  if (!answer) return null;
   return pack(rng, {
     stem: `A ball is dropped from rest from a height of ${n(H)} m above the ground. Air resistance is negligible. Taking the ground as the zero of potential energy, find the speed of the ball at the instant its kinetic energy equals its gravitational potential energy. ${TAKE_G}`,
     answer,
@@ -534,12 +655,14 @@ function keRatioQ(rng: RNG): Generated | null {
       { value: E(G * H), trap: 'forgot to take the square root: gave v²' },
     ],
     extra: [
-      { value: root(2 * G * H) ? root(2 * G * H)!.mulRat(0.5) : null, trap: 'halved the landing speed instead of halving the energy' },
+      { value: approx(Math.sqrt(2 * G * H) / 2), trap: 'halved the landing speed instead of halving the energy' },
       { value: root((G * H) / 2), trap: 'halved the energy twice' },
       { value: E(G * H * 2), trap: 'forgot the square root and used the full energy' },
       { value: E(H), trap: 'gave the height' },
+      { value: E(r(answer.toNumber() * 2)), trap: 'doubled the speed' },
+      { value: root(G * H / 4), trap: 'took a quarter of the energy' },
     ],
-    solution: `When KE = GPE each is half the initial energy $mgH$, so $\\tfrac12 m v^2 = \\tfrac12 mgH$ and $v = \\sqrt{gH} = \\sqrt{${n(G * H)}} = ${answer!.toLatex()}\\ ${U_MS}$.`,
+    solution: `When KE = GPE each is half the initial energy $mgH$, so $\\tfrac12 m v^2 = \\tfrac12 mgH$ and $v = \\sqrt{gH} = \\sqrt{${n(G * H)}} = ${n(answer.toNumber())}\\ ${U_MS}$.`,
     trap: 'Halving the energy divides the speed by √2, not by 2: v = √(gH), which is the landing speed √(2gH) divided by √2.',
     tags: ['conservation', 'ratio', 'speed'],
     params: { variant: 'ratio-speed-drop', H },

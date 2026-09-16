@@ -1,6 +1,6 @@
 import { defineTemplate, retry, type Level } from '../../core/template';
 import { statementOptions, STATEMENT_COMBOS } from '../../core/options';
-import { isPrime } from '../../core/gen-utils';
+import { isPrime, poly } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
 
 /**
@@ -45,10 +45,20 @@ interface StatementDef {
 /** "3", "-3" as a coefficient in front of a letter. */
 const coef = (k: number, v: string): string => (k === 1 ? v : k === -1 ? `-${v}` : `${k}${v}`);
 const plus = (k: number): string => (k >= 0 ? `+ ${k}` : `- ${-k}`);
-/** " + 5x", " - 3x", "" for zero. */
-const xTerm = (b: number): string => (b === 0 ? '' : ` ${plus(b)}x`);
+/** "x^{2} + x - 12": poly() prints a unit coefficient as "x", never "1x". */
+const quadratic = (b: number, c: number): string => poly([1, b, c]);
 /** Bracket a negative number inside a product. */
 const brn = (n: number): string => (n < 0 ? `(${n})` : `${n}`);
+
+/** The smallest n ≥ 1 for which n² + n + a is composite, with a factorisation of that value. */
+function firstComposite(a: number): { n: number; v: number; f: number } {
+  for (let n = 1; n <= 500; n++) {
+    const v = n * n + n + a;
+    for (let f = 2; f * f <= v; f++) if (v % f === 0) return { n, v, f };
+  }
+  // Unreachable: n = a already gives a² + 2a = a(a + 2), which is composite.
+  return { n: a, v: a * (a + 2), f: a };
+}
 
 const DEFS: StatementDef[] = [
   // --- level 1: index laws and expanding ---------------------------------------
@@ -407,7 +417,7 @@ const DEFS: StatementDef[] = [
       }
       return {
         args: [b, c],
-        text: `The equation $x^{2}${xTerm(b)} ${plus(c)} = 0$ has two distinct real roots.`,
+        text: `The equation $${quadratic(b, c)} = 0$ has two distinct real roots.`,
         truth: b * b - 4 * c > 0,
         why: `the discriminant is $${brn(b)}^{2} - 4 \\times ${brn(c)} = ${b * b - 4 * c}$`,
       };
@@ -473,7 +483,7 @@ const DEFS: StatementDef[] = [
       const f = rng.int(0, 1);
       return {
         args: [b, c, f],
-        text: `The two roots of $x^{2}${xTerm(b)} ${plus(c)} = 0$ add up to $${f === 0 ? -b : b}$.`,
+        text: `The two roots of $${quadratic(b, c)} = 0$ add up to $${f === 0 ? -b : b}$.`,
         truth: f === 0 ? true : -b === b,
         why: `the roots are $${p}$ and $${q}$, and they add to $${p + q}$`,
       };
@@ -521,11 +531,14 @@ const DEFS: StatementDef[] = [
     id: 'prime-poly',
     build: (rng) => {
       const a = rng.pick([5, 7, 11, 13, 17]);
+      // Quote the *first* counterexample, not n = a − 1: for a = 7 and a = 13 the
+      // statement already fails at n = 1 (9 = 3² and 15 = 3 × 5).
+      const { n, v, f } = firstComposite(a);
       return {
         args: [a],
         text: `$n^{2} + n + ${a}$ is a prime number for every positive integer $n$.`,
         truth: false,
-        why: `at $n = ${a - 1}$ the value is $${a * a}$, which is $${a}^{2}$`,
+        why: `at $n = ${n}$ the value is $${v} = ${f} \\times ${v / f}$, which is not prime`,
       };
     },
     check: ([a]) => {

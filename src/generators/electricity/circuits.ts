@@ -17,6 +17,12 @@ import type { RNG } from '../../core/rng';
  * Answers carry their unit (Ω, A, V). The named mistakes: adding parallel resistances, leaving 1/R_total
  * un-inverted (answering 1/2 instead of 2), inverting the divider ratio, and splitting a current in proportion
  * to the resistances instead of inversely.
+ *
+ * Two rules keep the option lists exam-like. A distractor that is impossible on sight is not offered: the p.d.
+ * across one of two resistors in series can never exceed the supply, and a branch current can never exceed the
+ * current entering the junction, so those candidates are dropped rather than wasting an option slot. And where
+ * the stem quotes a supply that the generator derived from I × R_total, the value is only printed when it is
+ * one a candidate recognises — "a 236 V supply" reads as a misprint for 240 V.
  */
 
 const U_OHM = '\\text{Ω}', U_A = '\\text{A}', U_V = '\\text{V}';
@@ -32,6 +38,9 @@ const par2 = (a: number, b: number): number => r((a * b) / (a + b));
 const parN = (rs: number[]): number => r(1 / rs.reduce((s, x) => s + 1 / x, 0));
 const condSum = (rs: number[]): number => r(rs.reduce((s, x) => s + 1 / x, 0));
 
+/** Supply p.d.s a candidate recognises, for the stems whose supply is derived from I × R_total. */
+const STANDARD_SUPPLIES = new Set([6, 9, 12, 15, 18, 20, 24, 30, 36, 40, 48, 50, 60, 80, 90, 100, 120, 150, 180, 200, 240]);
+
 /** Exact value of a computed quantity, or null if it is not an exam-clean number (short decimals only). */
 function val(x: number): Exact | null {
   if (!Number.isFinite(x)) return null;
@@ -45,12 +54,15 @@ function val(x: number): Exact | null {
   }
 }
 
-/** At most four significant digits once printed: an option a candidate can read at a glance. */
+/**
+ * At most three significant digits once printed. 24.48 V and 237.6 V are not values an examiner sets
+ * against a clean answer; parameters whose traps only produce them are redrawn.
+ */
 function readable(v: Exact): boolean {
   const dec = ratToDecimalString(v.toRat());
   if (dec === null) return true; // shown as a fraction; the denominator check covers it
   const digits = dec.replace('-', '').replace('.', '').replace(/^0+/, '').replace(/0+$/, '');
-  return digits.length <= 4;
+  return digits.length <= 3;
 }
 
 /** The same, but also accepting a simple fraction such as 1/3 (used for un-inverted conductances). */
@@ -68,13 +80,19 @@ function fracVal(x: number): Exact | null {
   return null;
 }
 
-/** Positive, finite, clean options within a factor of 100 of the answer. */
-function cleanOnly(ds: Candidate[], answer: Exact): Distractor[] {
+/**
+ * Positive, finite, clean options within a factor of 40 of the answer. `cap` is the largest value the
+ * quantity asked for could possibly take — the supply p.d. for a divider, the current entering a
+ * junction for a split — and anything above it is dropped: a candidate rules such an option out on
+ * sight without doing any physics, so it would waste a slot.
+ */
+function cleanOnly(ds: Candidate[], answer: Exact, cap?: number): Distractor[] {
   const a = answer.toNumber();
   return ds.filter((d): d is { value: Exact; trap: string } => {
     const v = d.value;
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !v.isRational() || !isCleanExact(v).ok) return false;
     const x = v.toNumber();
+    if (cap !== undefined && x > cap * (1 + 1e-9)) return false;
     if (x < 0.001 || x > 1e5 || x > 40 * a || x < a / 40) return false;
     if (!readable(v)) return false;
     return v.toRat().d <= 24n || Number.isInteger(r(x * 1000));
@@ -83,20 +101,38 @@ function cleanOnly(ds: Candidate[], answer: Exact): Distractor[] {
 
 /**
  * Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled
- * out; `spare` near-misses (doubled, halved) are taken last, only when the named circuit mistakes did
- * not yield four distinct clean values.
+ * out. At most one `spare` near-miss (doubled, halved) is ever used, and only after every named
+ * circuit mistake has been tried, so ×2 and ÷2 can never cluster an option list around the answer.
+ *
+ * The `extra` slots are filled towards a randomly drawn number of options *below* the answer. Without
+ * that the rank of the correct option is a property of the variant rather than of the numbers: a series
+ * total is the second largest option in nine questions out of ten (only the product beats it) and a
+ * parallel total is never in the top two, so the list can be answered from its layout alone.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4): Distractor[] {
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4, maxSpare = 1): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const take = (d: Distractor): boolean => {
+    if (out.length >= count || seen.some((s) => s.equals(d.value))) return false;
     seen.push(d.value);
     out.push(d);
+    return true;
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  rng.shuffle(spare).forEach(take);
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
+  let used = 0;
+  for (const d of rng.shuffle(spare)) {
+    if (out.length >= count || used >= maxSpare) break;
+    if (take(d)) used++;
+  }
   return out;
 }
 
@@ -116,8 +152,10 @@ interface Pack {
   unit: string;
   must: Candidate[];
   extra: Candidate[];
-  /** generic near-misses, used only if the named mistakes ran short */
+  /** generic near-misses; at most one is ever used, and only if the named mistakes ran short */
   spare?: Candidate[];
+  /** the largest value the quantity asked for could take (a supply p.d., a total current) */
+  cap?: number;
   solution: string;
   trap: string;
   tags: string[];
@@ -126,7 +164,7 @@ interface Pack {
 
 function pack(rng: RNG, p: Pack): Generated | null {
   if (!isCleanExact(p.answer).ok || p.answer.sign() <= 0 || !readable(p.answer)) return null;
-  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer), cleanOnly(p.extra, p.answer), cleanOnly(p.spare ?? [], p.answer));
+  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer, p.cap), cleanOnly(p.extra, p.answer, p.cap), cleanOnly(p.spare ?? [], p.answer, p.cap));
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -205,6 +243,9 @@ function seriesTotalQ(rng: RNG): Generated | null {
       { value: val(total - rs[rs.length - 1]), trap: `left the ${ohms(rs[rs.length - 1])} resistor out of the sum` },
       { value: val(par2(rs[0], rs[1])), trap: 'used the product-over-sum rule on the first two resistors' },
       { value: val(total + rs[0]), trap: `counted the ${ohms(rs[0])} resistor twice` },
+      { value: val(total + Math.min(...rs)), trap: `counted the ${ohms(Math.min(...rs))} resistor twice` },
+      { value: val(total + parN(rs)), trap: 'added the parallel combination on top of the series total' },
+      { value: val(total + par2(rs[0], rs[1])), trap: 'added the product-over-sum of the first two resistors as well' },
     ],
     spare: [
       { value: val(total / 2), trap: 'halved the total' },
@@ -234,6 +275,10 @@ function parallelEqualQ(rng: RNG): Generated | null {
       { value: fracVal(condSum([R, R])), trap: 'left 1/R_total un-inverted' },
       { value: val(R * R), trap: 'multiplied the resistances without dividing by their sum' },
       { value: val((R * R) / 2), trap: 'took half the product instead of half the resistance' },
+      { value: val(R + R / 2), trap: 'halved one of the resistors and added the other' },
+      { value: val((3 * R) / 4), trap: 'took three quarters of the resistance' },
+      { value: fracVal(1 / (2 * R)), trap: 'added the resistances and then inverted, as if they were conductances' },
+      { value: val(R / 3), trap: 'divided by three, as for three equal resistors' },
     ],
     spare: [
       { value: val(4 * R), trap: 'doubled the series total' },
@@ -267,6 +312,10 @@ function parallelPairQ(rng: RNG): Generated | null {
       { value: val(a * b), trap: 'multiplied the resistances without dividing by their sum' },
       { value: val((a * b) / Math.abs(a - b)), trap: 'divided the product by the difference instead of the sum' },
       { value: val(Math.min(a, b) / 2), trap: 'halved the smaller resistance, as for two equal resistors' },
+      { value: fracVal(1 / (a + b)), trap: 'added the resistances and then inverted, as if they were conductances' },
+      { value: val(Math.min(a, b) / 3), trap: 'divided the smaller resistance by three' },
+      { value: val((Rt * Rt) / (a + b)), trap: 'divided by the sum a second time' },
+      { value: fracVal(Math.abs(1 / a - 1 / b)), trap: 'subtracted the conductances instead of adding them' },
     ],
     spare: [
       { value: val(2 * Rt), trap: 'doubled the combined resistance' },
@@ -302,6 +351,11 @@ function parallelTripleQ(rng: RNG): Generated | null {
       { value: val(par2(rs[1], rs[2])), trap: 'combined only the last two resistors' },
       { value: val(sum / 3), trap: 'averaged the resistances' },
       { value: val(rs[0] / 3), trap: 'divided the smallest resistance by three, as for three equal resistors' },
+      { value: fracVal(1 / sum), trap: 'added the resistances and then inverted, as if they were conductances' },
+      { value: val(rs[0] / 4), trap: 'divided the smallest resistance by four' },
+      { value: val(parN([rs[0], rs[1], rs[2], rs[2]])), trap: 'counted the largest resistor twice' },
+      { value: val(par2(rs[0], rs[2])), trap: 'combined only the first and the last resistor' },
+      { value: val(rs[0]), trap: 'assumed the total is just the smallest resistance' },
     ],
     spare: [
       { value: val(2 * Rt), trap: 'doubled the combined resistance' },
@@ -346,6 +400,11 @@ function mixTotalQ(rng: RNG): Generated | null {
       { value: val(R0 + (a + b) / 2), trap: 'averaged the parallel pair instead of combining it' },
       { value: val(R0 + a), trap: 'used only one of the two parallel branches' },
       { value: val(par2(R0 + a, b)), trap: 'put the series resistor inside one branch' },
+      { value: val(R0 + b), trap: 'used only the other of the two parallel branches' },
+      { value: val(R0 + a + b - Rp), trap: 'subtracted the parallel combination from the sum of all three' },
+      { value: val(2 * R0 + Rp), trap: 'counted the series resistor twice' },
+      { value: val(R0), trap: 'forgot the parallel pair altogether' },
+      { value: val(par2(R0, Rp)), trap: 'put the series resistor in parallel with the pair as well' },
     ],
     spare: [
       { value: val(2 * Rt), trap: 'doubled the total' },
@@ -364,7 +423,7 @@ function mixCurrentQ(rng: RNG): Generated | null {
   const { R0, a, b, Rp, Rt } = m;
   const I = rng.pick([0.5, 1, 1.5, 2, 2.5, 3, 4, 5]);
   const V = r(I * Rt);
-  if (!Number.isInteger(V) || V > 240 || V < 6) return null;
+  if (!Number.isInteger(V) || !STANDARD_SUPPLIES.has(V)) return null;
   const answer = val(I);
   if (!answer) return null;
   return pack(rng, {
@@ -378,8 +437,14 @@ function mixCurrentQ(rng: RNG): Generated | null {
     extra: [
       { value: val(V / parN([R0, a, b])), trap: 'treated all three resistors as one parallel combination' },
       { value: val(V / Rp), trap: 'forgot the series resistor' },
-      { value: val(V / (R0 + a)), trap: 'used only one of the two parallel branches' },
+      { value: val(V / (R0 + a)), trap: `used only the ${ohms(a)} branch with the series resistor` },
+      { value: val(V / (R0 + b)), trap: `used only the ${ohms(b)} branch with the series resistor` },
+      { value: val(V / (R0 + a + b - Rp)), trap: 'added all three and then took the parallel combination off again' },
+      { value: val(V / (2 * R0 + Rp)), trap: 'counted the series resistor twice' },
       { value: val(V * Rt), trap: 'multiplied by the total resistance instead of dividing' },
+      { value: val(Rt), trap: 'quoted the total resistance in ohms, not the current' },
+      { value: val(V / a), trap: `used the ${ohms(a)} branch on its own` },
+      { value: val(V / b), trap: `used the ${ohms(b)} branch on its own` },
     ],
     spare: [
       { value: val(2 * I), trap: 'doubled the current' },
@@ -401,21 +466,25 @@ function dividerQ(rng: RNG): Generated | null {
   if (R1 === R2) return null;
   const V = r(I * (R1 + R2));
   const V1 = r(I * R1);
-  if (!Number.isInteger(V) || V > 240 || V < 6 || !Number.isInteger(r(V1 * 2)) || V1 < 1) return null;
+  if (!Number.isInteger(V) || !STANDARD_SUPPLIES.has(V)) return null;
+  if (!Number.isInteger(r(V1 * 2)) || V1 < 1) return null;
   const answer = val(V1);
   if (!answer) return null;
+  const wrongDivisor = r((V * R1) / R2);
   return pack(rng, {
     stem: `${Res(R1)} and ${res(R2)} are connected in series across ${supply(V)}. Find the potential difference across the ${ohms(R1)} resistor.`,
     answer,
     unit: U_V,
+    cap: V,
     must: [
       { value: val((V * R2) / (R1 + R2)), trap: 'inverted the divider ratio: used the other resistor on top' },
       { value: val(V / 2), trap: 'assumed the supply p.d. splits equally between the two resistors' },
     ],
     extra: [
-      { value: val((V * R1) / R2), trap: 'divided by the other resistance instead of the total' },
+      { value: val(wrongDivisor), trap: 'divided by the other resistance instead of the total' },
       { value: val(V), trap: 'gave the whole supply p.d.' },
       { value: val(V / (R1 + R2)), trap: 'gave the current in the circuit, not the p.d.' },
+      { value: val(R1), trap: 'quoted the resistance as the p.d.' },
     ],
     spare: [
       { value: val(V1 / 2), trap: 'halved the p.d. once too often' },
@@ -438,18 +507,29 @@ function currentSplitQ(rng: RNG): Generated | null {
   if (!Number.isInteger(r(I1 * 2)) || I1 < 0.5 || I1 >= I) return null;
   const answer = val(I1);
   if (!answer) return null;
+  const ratioA = r((I * R2) / R1);
+  const ratioB = r((I * R1) / R2);
   return pack(rng, {
     stem: `${Res(a)} and ${res(b)} are connected in parallel. A total current of ${n(I)} A enters the combination. Find the current in the ${ohms(R1)} resistor.`,
     answer,
     unit: U_A,
+    cap: I,
     must: [
       { value: val((I * R1) / (R1 + R2)), trap: 'split the current in proportion to the resistances instead of inversely' },
       { value: val(I / 2), trap: 'assumed the current splits equally' },
     ],
     extra: [
-      { value: val((I * R2) / R1), trap: 'used the ratio of the two resistances instead of the resistance over the sum' },
+      { value: val(ratioA), trap: 'used the ratio of the two resistances instead of the resistance over the sum' },
       { value: val(I), trap: 'gave the total current' },
-      { value: val((I * R1) / R2), trap: 'used the ratio of the two resistances the other way round' },
+      { value: val(ratioB), trap: 'used the ratio of the two resistances the other way round' },
+      { value: val(par2(R1, R2)), trap: 'gave the resistance of the combination, not the current' },
+      { value: val(I * par2(R1, R2)), trap: 'gave the potential difference across the pair, in volts' },
+      { value: val(R2 / (R1 + R2)), trap: 'gave the fraction of the current that branch takes, not the current' },
+      { value: val(I / (R1 + R2)), trap: 'divided the total current by the total resistance' },
+      { value: val(I / R1), trap: `divided the total current by the ${ohms(R1)} on its own` },
+      { value: val((I * par2(R1, R2)) / (R1 + R2)), trap: 'divided the p.d. across the pair by the sum of the two resistances instead of by the branch resistance' },
+      { value: val((I * R2 * R2) / ((R1 + R2) * (R1 + R2))), trap: 'applied the current-divider fraction twice' },
+      { value: val(I / R2), trap: `divided the total current by the ${ohms(R2)} on its own` },
     ],
     spare: [
       { value: val(2 * I1), trap: 'doubled the branch current' },
@@ -475,7 +555,7 @@ function branchCurrentQ(rng: RNG): Generated | null {
   const V = r(I * Rt);
   const Vp = r(I * Rp);
   const I1 = r(Vp / R1);
-  if (!Number.isInteger(V) || V > 240 || V < 6) return null;
+  if (!Number.isInteger(V) || !STANDARD_SUPPLIES.has(V)) return null;
   if (!Number.isInteger(r(I1 * 2)) || I1 < 0.5) return null;
   const answer = val(I1);
   if (!answer) return null;
@@ -493,6 +573,7 @@ function branchCurrentQ(rng: RNG): Generated | null {
       { value: val(I / 2), trap: 'assumed the current splits equally between the branches' },
       { value: val(r(Vp / Rp)), trap: 'used the combined parallel resistance instead of the branch resistance' },
       { value: val(r((I * R2) / (R1 + R2))), trap: 'split the total current by resistance without finding the p.d. first' },
+      { value: val(Vp), trap: 'gave the potential difference across the parallel section, in volts' },
     ],
     spare: [
       { value: val(2 * I1), trap: 'doubled the branch current' },
@@ -564,7 +645,7 @@ function junctionQ(rng: RNG): Generated | null {
       { value: val((a + b + c) * R), trap: 'added the outgoing current instead of subtracting it' },
       { value: val(IR / R), trap: 'divided the current by the resistance' },
       { value: val(R / IR), trap: 'inverted Ohm’s law' },
-      { value: val(IR), trap: 'gave the current in the resistor, not the p.d. across it' },
+      { value: val(IR), trap: 'gave the current in the resistor, not the p.d.' },
       { value: val(Math.abs(a - b - c) * R), trap: 'subtracted both of the other currents' },
     ],
     spare: [
@@ -611,14 +692,20 @@ export default defineTemplate({
     const branchCurrents = (Vt: number, rs: number[]) => rs.reduce((s, x) => s + Vt / x, 0);
     switch (p.variant) {
       case 'series-total': {
-        // loop equation: drive the claimed total with a test supply, walk the chain subtracting the
-        // p.d. dropped across each resistor, and require nothing to be left over at the end
+        // conductance route: in series it is the *conductances* that combine by product over sum,
+        // the mirror image of the parallel rule — never the running total generate() added up
         const rs = p.rs as number[];
-        const Vt = 6 * got;
-        const I = Vt / got;
-        let left = Vt;
-        for (const x of rs) left -= I * x;
-        return Math.abs(left) < 1e-9 * Vt && Math.abs(I * I * got - rs.reduce((s, x) => s + I * I * x, 0)) < 1e-9 * Vt;
+        let g = 1 / rs[0];
+        for (let i = 1; i < rs.length; i++) {
+          const gi = 1 / rs[i];
+          g = (g * gi) / (g + gi);
+        }
+        if (Math.abs(1 / g - got) > 1e-9 * Math.max(1, got)) return false;
+        // power balance: across a 12 V test supply each resistor takes its divider share of the p.d.,
+        // and the powers V_i²/r_i must add up to the total V²/R
+        const Vt = 12;
+        const power = rs.reduce((s, x) => s + ((Vt * x) / got) ** 2 / x, 0);
+        return Math.abs(power - (Vt * Vt) / got) < 1e-9 * Math.max(1, (Vt * Vt) / got);
       }
       case 'parallel-triple': {
         // reduce the three pairwise by product-over-sum — the route the generator did not take

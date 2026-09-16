@@ -95,6 +95,11 @@ function cleanOnly(ds: Candidate[]): Distractor[] {
   return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
+/**
+ * Headline traps first, then fill from both sides of the answer: a target number of options below
+ * the answer is drawn before the rest, so the answer's place in the sorted option list moves around
+ * instead of sitting at one end.
+ */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
@@ -104,7 +109,16 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const wantBelow = rng.int(0, count);
+  const pool = rng.shuffle(extra).filter((d) => !seen.some((s) => s.equals(d.value)));
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  while (out.length < count && pool.length) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    let i = pool.findIndex((d) => isBelow(d) === needBelow);
+    if (i < 0) i = 0;
+    take(pool[i]);
+    pool.splice(i, 1);
+  }
   return out;
 }
 
@@ -263,6 +277,10 @@ function constantQ(rng: RNG): Generated | null {
   const x1 = rng.pick([1, 2, -1, -2, 3].filter((v) => v !== x0));
   const answer = ask === 'value' ? evalExact(F, x1).add(c) : c;
   if (!answer.isInteger() || Math.abs(answer.toNumber()) > 60) return null;
+  // The answer must not be a number the stem already prints: F(x0) = 0 makes c = y0 (and
+  // F(x1) = F(x0) makes y = y0), so the question could be answered by copying, and the matching
+  // distractor would be dropped as a duplicate of the answer.
+  if (answer.equals(E(y0))) return null;
   const Fnd = noDivision(f);
   const must: Candidate[] = ask === 'value'
     ? [
@@ -279,14 +297,18 @@ function constantQ(rng: RNG): Generated | null {
       { value: evalExact(Fnd, x1).add(E(y0).sub(evalExact(Fnd, x0))), trap: 'did not divide by the new powers when integrating' },
       { value: evalExact(f, x1).add(c), trap: 'substituted into dy/dx instead of y' },
       { value: E(y0), trap: 'gave the y-coordinate of the given point' },
-      { value: answer.add(E(1)), trap: 'arithmetic slip' },
+      { value: evalExact(oldPower(f), x1).add(E(y0).sub(evalExact(oldPower(f), x0))), trap: 'divided by the old powers instead of the new ones' },
+      { value: evalExact(differentiate(f), x1).add(c), trap: 'differentiated the gradient function instead of integrating it' },
+      { value: evalExact(F, -x1).add(c), trap: `substituted $x = ${-x1}$ instead of $x = ${x1}$` },
     ]
     : [
       { value: E(y0).sub(evalExact(Fnd, x0)), trap: 'did not divide by the new powers when integrating' },
       { value: E(y0).sub(evalExact(f, x0)), trap: 'substituted into dy/dx instead of into y' },
       { value: E(y0).add(Fx0), trap: 'added F(x) instead of subtracting' },
       { value: Fx0, trap: 'gave F(x) at the point, forgetting the y-coordinate' },
-      { value: c.add(E(1)), trap: 'arithmetic slip' },
+      { value: E(y0).sub(evalExact(oldPower(f), x0)), trap: 'divided by the old powers instead of the new ones' },
+      { value: E(y0).sub(evalExact(samePower(f), x0)), trap: 'divided by the new powers but forgot to raise them' },
+      { value: E(y0).sub(evalExact(F, -x0)), trap: `substituted $x = ${-x0}$ instead of $x = ${x0}$` },
     ];
   const curve = `$y = ${termsTex(F)} + c$`;
   const stem = ask === 'constant'
@@ -316,19 +338,24 @@ function functionQ(rng: RNG): Generated | null {
   const Fx0 = evalExact(F, x0);
   const c = E(y0).sub(Fx0);
   if (c.isZero() || !c.isInteger() || Math.abs(c.toNumber()) > 40) return null;
+  // F(x0) = 0 makes c = y0, which costs the "took the constant to be the given y" distractor
+  if (Fx0.isZero()) return null;
   const cInt = c.toInt();
   const withConst = (ts: Term[], k: Exact): string => (k.isZero() ? bare(ts) : bare([...ts, T(k.toInt(), 0)]));
   const correct = withConst(F, c);
   const Fnd = noDivision(f);
   const cNd = E(y0).sub(evalExact(Fnd, x0));
   const cDer = E(y0).sub(evalExact(f, x0));
+  const Fold = oldPower(f);
+  const cOld = E(y0).sub(evalExact(Fold, x0));
   const wrong: (Wrong | null)[] = [
     { display: withConst(F, c.neg()), trap: 'sign slip when finding the constant: c = f(x₀) − F(x₀)' },
     { display: bare(F), trap: 'forgot the constant of integration' },
     { display: withConst(F, E(y0)), trap: `took the constant to be ${y0} without substituting` },
     cNd.isInteger() ? { display: withConst(Fnd, cNd), trap: 'did not divide by the new powers when integrating' } : null,
     cDer.isInteger() ? { display: withConst(f, cDer), trap: 'did not integrate: adjusted f\'(x) by a constant' } : null,
-    { display: withConst(F, E(cInt + 1)), trap: 'arithmetic slip in the constant' },
+    cOld.isInteger() ? { display: withConst(Fold, cOld), trap: 'divided by the old powers instead of the new ones' } : null,
+    { display: withConst(F, E(y0).sub(evalExact(F, -x0))), trap: `substituted $x = ${-x0}$ instead of $x = ${x0}$ when finding the constant` },
   ];
   const opts = choiceOrNull(rng, correct, wrong);
   if (!opts) return null;
@@ -409,8 +436,9 @@ function secondDerivativeQ(rng: RNG): Generated | null {
     { value: pipeline(E(v0).add(evalExact(G, x0)), true), trap: 'sign slip when finding the first constant' },
     { value: evalExact(H, k).add(E(y1)), trap: `took the second constant to be ${y1} without substituting` },
     { value: evalExact(noDivision(fPrime.filter((t) => t[0] !== 0)), k).add(E(y1).sub(evalExact(noDivision(fPrime.filter((t) => t[0] !== 0)), x1))), trap: 'did not divide by the new powers in the second integration' },
-    { value: answer.add(E(1)), trap: 'arithmetic slip' },
-    { value: answer.sub(E(1)), trap: 'arithmetic slip' },
+    { value: evalExact(H, k).add(E(y1).add(evalExact(H, x1))), trap: 'sign slip when finding the second constant' },
+    { value: E(y1), trap: `gave the value $f(${x1}) = ${y1}$ that the question supplies` },
+    { value: evalExact(oldPower(fPrime.filter((t) => t[0] !== 0)), k).add(E(y1).sub(evalExact(oldPower(fPrime.filter((t) => t[0] !== 0)), x1))), trap: 'divided by the old powers in the second integration' },
   ];
   return {
     stem: `$f''(x) = ${termsTex(f2)}$, $f'(${x0}) = ${v0}$ and $f(${x1}) = ${y1}$. Find $f(${k})$.`,

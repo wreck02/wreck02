@@ -96,28 +96,83 @@ function triangleQ(rng: RNG, quadId: 1 | 2 | 3 | 4): Generated | null {
   const answer = vals[want];
   if (!isCleanExact(answer).ok) return null;
   const gv = vals[given];
+  const third = (['sin', 'cos', 'tan'] as Fn[]).find((f) => f !== given && f !== want)!;
+  /**
+   * A sine or a cosine can never lie outside (−1, 1), so an option such as 25/7 is
+   * eliminated without any work. When the target is sin θ or cos θ every candidate is
+   * kept inside that range and the reciprocal-based slips are replaced by in-range ones.
+   */
+  const range: [number, number] | undefined = want === 'tan' ? undefined : [-1, 1];
+  /** A magnitude slip that kept the quadrant sign right, and the same slip with it wrong. */
+  const kept = (x: Exact | null): Exact | null => (x === null ? null : answer.sign() < 0 ? x.neg() : x);
+  const flipped = (x: Exact | null): Exact | null => (x === null ? null : answer.sign() < 0 ? x : x.neg());
   const must: { value: Exact | null; trap: string }[] = [
     { value: answer.neg(), trap: `wrong sign for the quadrant: ${quadId === 1 ? 'both are positive here' : 'check which of sin and cos is negative'}` },
-    { value: attempt(() => gv.inv()), trap: 'inverted the given fraction' },
-    { value: vals[(['sin', 'cos', 'tan'] as Fn[]).find((f) => f !== given && f !== want)!], trap: 'found the third ratio instead of the one asked for' },
   ];
-  if (given !== 'tan' && want !== 'tan') {
-    must.push({ value: E(1).sub(gv.abs()), trap: 'used $1 - \\sin\\theta$ instead of $1 - \\sin^{2}\\theta$' });
-    must.push({ value: attempt(() => E(1).sub(gv.mul(gv))), trap: 'stopped at $1 - \\sin^{2}\\theta$ and forgot the square root' });
-  } else if (want === 'tan') {
-    must.push({ value: attempt(() => vals[want].inv()), trap: 'used $\\tan\\theta = \\cos\\theta / \\sin\\theta$' });
+  const extra: { value: Exact | null; trap: string }[] = [];
+  if (want === 'tan') {
+    must.push(
+      { value: attempt(() => gv.inv()), trap: 'inverted the given fraction' },
+      { value: vals[third], trap: 'found the third ratio instead of the one asked for' },
+      { value: attempt(() => answer.inv()), trap: 'used $\\tan\\theta = \\cos\\theta / \\sin\\theta$' },
+    );
+    extra.push(
+      { value: attempt(() => answer.neg().inv()), trap: 'inverted and mis-signed' },
+      { value: frac(opp, adj + 1), trap: 'arithmetic slip in the third side' },
+      { value: frac(adj, h), trap: 'read the wrong side off the triangle' },
+      { value: frac(opp, h), trap: 'read the wrong side off the triangle' },
+    );
+  } else if (given === 'tan') {
+    // tan θ given, sin θ or cos θ wanted: the mistakes are reading the wrong side and
+    // stopping at the square — both land inside (−1, 1).
+    const othFn: Fn = want === 'sin' ? 'cos' : 'sin';
+    const oth = vals[othFn];
+    const sq = attempt(() => answer.mul(answer));
+    must.push(
+      { value: oth, trap: `read the wrong side off the triangle: this is $${NAME[othFn]}$` },
+      { value: kept(sq), trap: `stopped at $\\${want}^{2}\\theta = \\frac{\\tan^{2}\\theta}{1 + \\tan^{2}\\theta}$ and forgot the square root` },
+    );
+    extra.push(
+      { value: kept(attempt(() => oth.mul(oth))), trap: `found $\\${othFn}^{2}\\theta$ and forgot both the square root and which ratio was asked for` },
+      { value: flipped(sq), trap: 'forgot the square root and took the wrong quadrant sign' },
+      { value: oth.neg(), trap: 'read the wrong side off the triangle and mis-signed it' },
+      { value: frac(opp * q.sinSign, opp + adj), trap: 'took the hypotenuse to be the sum of the other two sides' },
+      { value: frac(adj * q.cosSign, opp + adj), trap: 'took the hypotenuse to be the sum of the other two sides' },
+    );
+  } else {
+    // sin θ ↔ cos θ: the Pythagorean-identity slips, all of them inside (−1, 1). Each
+    // magnitude slip is offered with the quadrant sign the answer has, so a negative
+    // answer is never the only negative option.
+    const oneMinus = attempt(() => E(1).sub(gv.abs()));
+    const oneMinusSq = attempt(() => E(1).sub(gv.mul(gv)));
+    // The square of the given ratio is the one slip that can come out *above* the answer,
+    // so it shares the fourth headline slot with the third-ratio slip: without it the
+    // answer would be the largest option every time it is the larger of sin θ and cos θ.
+    const pair = [
+      { value: vals[third], trap: 'found the third ratio instead of the one asked for' },
+      { value: kept(attempt(() => gv.mul(gv))), trap: 'squared the given ratio instead of subtracting it from 1' },
+    ];
+    const sq2 = `1 - \\${given}^{2}\\theta`;
+    must.push(
+      { value: kept(oneMinus), trap: `used $1 - ${NAME[given]}$ instead of $${sq2}$` },
+      { value: kept(oneMinusSq), trap: `stopped at $${sq2}$ and forgot the square root` },
+      ...(rng.bool() ? pair : [pair[1], pair[0]]),
+    );
+    extra.push(
+      { value: flipped(oneMinusSq), trap: 'forgot the square root and took the wrong quadrant sign' },
+      { value: flipped(oneMinus), trap: `used $1 - ${NAME[given]}$ and took the wrong quadrant sign` },
+      { value: vals[third].neg(), trap: 'found the third ratio and mis-signed it' },
+    );
   }
-  const extra = [
-    { value: answer.abs().equals(answer) ? answer.abs().neg() : answer.abs(), trap: 'sign dropped' },
-    { value: attempt(() => vals[want].neg().inv()), trap: 'inverted and mis-signed' },
-    { value: frac(opp, adj + 1), trap: 'arithmetic slip in the third side' },
-    { value: frac(adj, h), trap: 'read the wrong side off the triangle' },
-    { value: frac(opp, h), trap: 'read the wrong side off the triangle' },
-  ];
+  // For an acute angle a negative sine or cosine is impossible too, so only the headline
+  // sign trap (answer.neg()) is offered there — the padding stays positive.
+  const extraRange: [number, number] | undefined = want !== 'tan' && quadId === 1 ? [0, 1] : range;
+  const distractors = ranked(rng, answer, cleanOnly(must, range), cleanOnly(extra, extraRange));
+  if (distractors.length < 4) return null;
   return {
     stem: `Given that $${NAME[given]} = ${tx(gv)}$ and ${q.words}, find the exact value of $${NAME[want]}$.`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
-    options: options(rng, answer, ranked(rng, answer, cleanOnly(must), cleanOnly(extra))),
+    options: options(rng, answer, distractors),
     solution: `A right-angled triangle with sides $${opp}$, $${adj}$, $${h}$ gives $${NAME[want]} = \\pm${tx(answer.abs())}$; in this quadrant $\\${want}\\theta$ is ${answer.sign() > 0 ? 'positive' : 'negative'}, so $${NAME[want]} = ${tx(answer)}$.`,
     trap: 'Get the size from the 3-4-5 style triangle, then the sign from the quadrant.',
     tags: ['trig', 'identities', 'pythagoras'],
@@ -153,9 +208,12 @@ function tanSquareQ(rng: RNG): Generated | null {
   if (want === 'sin2' || want === 'cos2') {
     const sq = want === 'sin2' ? n : d;
     const other = want === 'sin2' ? frac(d * d, den) : frac(n * n, den);
+    // sin²θ, cos²θ and 1/cos²θ are all rational, so a lone surd option is eliminated on
+    // sight: only offer "gave sin θ, not its square" when that value is itself rational.
+    const root = attempt(() => answer.powRat(frac(1, 2).toRat()));
     must = [
       { value: other, trap: `gave $\\${want === 'sin2' ? 'cos' : 'sin'}^{2}\\theta$ instead` },
-      { value: attempt(() => answer.powRat(frac(1, 2).toRat())), trap: `gave $\\${want === 'sin2' ? 'sin' : 'cos'}\\theta$, not its square` },
+      { value: root && root.isRational() ? root : null, trap: `gave $\\${want === 'sin2' ? 'sin' : 'cos'}\\theta$, not its square` },
       { value: frac(sq, den), trap: 'forgot to square the numerator' },
       { value: frac(sq * sq, (n + d) * (n + d)), trap: 'used $(1 + \\tan\\theta)^{2}$ in the denominator' },
     ];
@@ -163,6 +221,7 @@ function tanSquareQ(rng: RNG): Generated | null {
       { value: frac(n, n + d), trap: 'treated the ratio as a probability-style share' },
       { value: frac(d, n + d), trap: 'treated the ratio as a probability-style share' },
       { value: frac(sq * sq, n * d), trap: 'divided by $\\tan\\theta$ instead of $1 + \\tan^{2}\\theta$' },
+      { value: frac(n * d, den), trap: 'gave $\\sin\\theta\\cos\\theta$ instead' },
     ];
   } else if (want === 'sincos') {
     must = [
@@ -369,28 +428,149 @@ const CANDS: Cand[] = [
   { id: 'tan', tex: '\\tan\\theta', fl: (t) => Math.tan(t) },
   { id: 'cot', tex: '\\frac{1}{\\tan\\theta}', fl: (t) => 1 / Math.tan(t) },
   { id: 'tan2', tex: '\\tan^{2}\\theta', fl: (t) => Math.tan(t) ** 2 },
+  { id: 'cot2', tex: '\\frac{1}{\\tan^{2}\\theta}', fl: (t) => 1 / Math.tan(t) ** 2 },
   { id: 'sincos', tex: '\\sin\\theta\\cos\\theta', fl: (t) => Math.sin(t) * Math.cos(t) },
   { id: 'sin', tex: '\\sin\\theta', fl: (t) => Math.sin(t) },
   { id: 'cos', tex: '\\cos\\theta', fl: (t) => Math.cos(t) },
+  { id: 'twocos', tex: '2\\cos\\theta', fl: (t) => 2 * Math.cos(t) },
   { id: 'sec', tex: '\\frac{1}{\\cos\\theta}', fl: (t) => 1 / Math.cos(t) },
   { id: 'cosec', tex: '\\frac{1}{\\sin\\theta}', fl: (t) => 1 / Math.sin(t) },
+  { id: 'sec2', tex: '\\frac{1}{\\cos^{2}\\theta}', fl: (t) => 1 / Math.cos(t) ** 2 },
   { id: 'one', tex: '1', fl: () => 1 },
+  { id: 'two', tex: '2', fl: () => 2 },
+  { id: 'zero', tex: '0', fl: () => 0 },
   { id: 'sin2', tex: '\\sin^{2}\\theta', fl: (t) => Math.sin(t) ** 2 },
   { id: 'cos2', tex: '\\cos^{2}\\theta', fl: (t) => Math.cos(t) ** 2 },
+  { id: 'onem2sc', tex: '1 - 2\\sin\\theta\\cos\\theta', fl: (t) => 1 - 2 * Math.sin(t) * Math.cos(t) },
+  { id: 'onep2sc', tex: '1 + 2\\sin\\theta\\cos\\theta', fl: (t) => 1 + 2 * Math.sin(t) * Math.cos(t) },
 ];
 const CAND_BY_ID: Record<string, Cand> = Object.fromEntries(CANDS.map((c) => [c.id, c]));
 
-interface SimplifyExpr { id: string; tex: string; ans: string; fl: (t: number) => number }
+/**
+ * Each expression carries its own wrong options: a candidate is offered only when a
+ * specific slip *on this expression* produces it, and the trap says which slip that is.
+ * (Keying the trap on the option alone mislabels it — there is nothing to "cancel the
+ * wrong way round" in (sin θ + cos θ)² − 2 sin θ cos θ.)
+ */
+interface SimplifyExpr {
+  id: string; tex: string; ans: string; fl: (t: number) => number;
+  /** The fast route, for the solution line. */
+  why: string;
+  /** The one-line trap for this expression. */
+  trap: string;
+  /** [candidate id, the mistake on this expression that produces it] */
+  wrongs: [string, string][];
+}
 const SIMPLIFY: SimplifyExpr[] = [
-  { id: 's1', tex: '\\frac{1 - \\cos^{2}\\theta}{\\sin\\theta\\cos\\theta}', ans: 'tan', fl: (t) => (1 - Math.cos(t) ** 2) / (Math.sin(t) * Math.cos(t)) },
-  { id: 's2', tex: '\\frac{1 - \\sin^{2}\\theta}{\\sin\\theta\\cos\\theta}', ans: 'cot', fl: (t) => (1 - Math.sin(t) ** 2) / (Math.sin(t) * Math.cos(t)) },
-  { id: 's3', tex: '\\frac{1 - \\cos^{2}\\theta}{\\cos^{2}\\theta}', ans: 'tan2', fl: (t) => (1 - Math.cos(t) ** 2) / Math.cos(t) ** 2 },
-  { id: 's4', tex: '\\sin\\theta\\tan\\theta + \\cos\\theta', ans: 'sec', fl: (t) => Math.sin(t) * Math.tan(t) + Math.cos(t) },
-  { id: 's5', tex: '(\\sin\\theta + \\cos\\theta)^{2} - 2\\sin\\theta\\cos\\theta', ans: 'one', fl: (t) => (Math.sin(t) + Math.cos(t)) ** 2 - 2 * Math.sin(t) * Math.cos(t) },
-  { id: 's6', tex: '\\frac{\\sin\\theta}{\\tan\\theta}', ans: 'cos', fl: (t) => Math.sin(t) / Math.tan(t) },
-  { id: 's7', tex: '\\tan\\theta\\cos\\theta', ans: 'sin', fl: (t) => Math.tan(t) * Math.cos(t) },
-  { id: 's8', tex: '\\frac{1}{1 + \\tan^{2}\\theta}', ans: 'cos2', fl: (t) => 1 / (1 + Math.tan(t) ** 2) },
-  { id: 's9', tex: '\\frac{1 - \\sin^{2}\\theta}{\\cos\\theta}', ans: 'cos', fl: (t) => (1 - Math.sin(t) ** 2) / Math.cos(t) },
+  {
+    id: 's1', tex: '\\frac{1 - \\cos^{2}\\theta}{\\sin\\theta\\cos\\theta}', ans: 'tan',
+    fl: (t) => (1 - Math.cos(t) ** 2) / (Math.sin(t) * Math.cos(t)),
+    why: 'The numerator is $\\sin^{2}\\theta$, so the fraction is $\\frac{\\sin^{2}\\theta}{\\sin\\theta\\cos\\theta}$ and one $\\sin\\theta$ cancels.',
+    trap: 'Replace 1 − cos²θ by sin²θ (not by sin θ), then cancel one sin θ.',
+    wrongs: [
+      ['cot', 'read the numerator as $1 - \\sin^{2}\\theta$, which leaves $\\frac{\\cos\\theta}{\\sin\\theta}$'],
+      ['sec', 'replaced $1 - \\cos^{2}\\theta$ by $\\sin\\theta$ instead of $\\sin^{2}\\theta$'],
+      ['sin2', 'simplified the numerator but forgot to divide by $\\sin\\theta\\cos\\theta$'],
+      ['tan2', 'divided by $\\cos^{2}\\theta$ instead of by $\\sin\\theta\\cos\\theta$'],
+      ['one', 'cancelled the whole numerator against the denominator'],
+    ],
+  },
+  {
+    id: 's2', tex: '\\frac{1 - \\sin^{2}\\theta}{\\sin\\theta\\cos\\theta}', ans: 'cot',
+    fl: (t) => (1 - Math.sin(t) ** 2) / (Math.sin(t) * Math.cos(t)),
+    why: 'The numerator is $\\cos^{2}\\theta$, so the fraction is $\\frac{\\cos^{2}\\theta}{\\sin\\theta\\cos\\theta}$ and one $\\cos\\theta$ cancels.',
+    trap: 'Replace 1 − sin²θ by cos²θ (not by cos θ), then cancel one cos θ.',
+    wrongs: [
+      ['tan', 'read the numerator as $1 - \\cos^{2}\\theta$, which leaves $\\frac{\\sin\\theta}{\\cos\\theta}$'],
+      ['cosec', 'replaced $1 - \\sin^{2}\\theta$ by $\\cos\\theta$ instead of $\\cos^{2}\\theta$'],
+      ['cos2', 'simplified the numerator but forgot to divide by $\\sin\\theta\\cos\\theta$'],
+      ['one', 'divided by $\\cos^{2}\\theta$ instead of by $\\sin\\theta\\cos\\theta$'],
+    ],
+  },
+  {
+    id: 's3', tex: '\\frac{1 - \\cos^{2}\\theta}{\\cos^{2}\\theta}', ans: 'tan2',
+    fl: (t) => (1 - Math.cos(t) ** 2) / Math.cos(t) ** 2,
+    why: 'The numerator is $\\sin^{2}\\theta$, so the fraction is $\\frac{\\sin^{2}\\theta}{\\cos^{2}\\theta}$.',
+    trap: '1 − cos²θ is sin²θ, and dividing by cos²θ keeps the squares: the answer is tan²θ.',
+    wrongs: [
+      ['tan', 'dropped the squares at the end'],
+      ['sin2', 'simplified the numerator but forgot to divide by $\\cos^{2}\\theta$'],
+      ['sec2', 'split the fraction as $\\frac{1}{\\cos^{2}\\theta} - 1$ and left off the $-1$'],
+      ['one', 'cancelled the $\\cos^{2}\\theta$ in the numerator against the denominator'],
+    ],
+  },
+  {
+    id: 's4', tex: '\\sin\\theta\\tan\\theta + \\cos\\theta', ans: 'sec',
+    fl: (t) => Math.sin(t) * Math.tan(t) + Math.cos(t),
+    why: 'Over the common denominator $\\cos\\theta$ the numerator is $\\sin^{2}\\theta + \\cos^{2}\\theta = 1$.',
+    trap: 'Put both terms over cos θ — the numerator is then sin²θ + cos²θ = 1.',
+    wrongs: [
+      ['one', 'stopped at $\\sin^{2}\\theta + \\cos^{2}\\theta = 1$ and forgot the $\\cos\\theta$ underneath'],
+      ['cosec', 'used $\\sin\\theta$ as the common denominator instead of $\\cos\\theta$'],
+      ['twocos', 'used $\\tan\\theta = \\frac{\\cos\\theta}{\\sin\\theta}$, so the first term became $\\cos\\theta$'],
+      ['sin2', 'multiplied the two terms instead of adding them'],
+    ],
+  },
+  {
+    id: 's5', tex: '(\\sin\\theta + \\cos\\theta)^{2} - 2\\sin\\theta\\cos\\theta', ans: 'one',
+    fl: (t) => (Math.sin(t) + Math.cos(t)) ** 2 - 2 * Math.sin(t) * Math.cos(t),
+    why: 'The square expands to $1 + 2\\sin\\theta\\cos\\theta$, and the cross term is exactly what is subtracted.',
+    trap: '(sin θ + cos θ)² = 1 + 2 sin θ cos θ: the cross term is there, and it is what cancels.',
+    wrongs: [
+      ['onem2sc', 'expanded the bracket as $\\sin^{2}\\theta + \\cos^{2}\\theta$, missing the $+2\\sin\\theta\\cos\\theta$'],
+      ['onep2sc', 'expanded correctly but then added the cross term instead of subtracting it'],
+      ['zero', 'expanded the bracket as $2\\sin\\theta\\cos\\theta$, so everything cancelled'],
+      ['two', 'took $\\sin^{2}\\theta + \\cos^{2}\\theta$ to be $2$'],
+    ],
+  },
+  {
+    id: 's6', tex: '\\frac{\\sin\\theta}{\\tan\\theta}', ans: 'cos',
+    fl: (t) => Math.sin(t) / Math.tan(t),
+    why: 'Dividing by $\\tan\\theta$ multiplies by $\\frac{\\cos\\theta}{\\sin\\theta}$, and the $\\sin\\theta$ cancels.',
+    trap: 'Dividing by tan θ means multiplying by cos θ / sin θ.',
+    wrongs: [
+      ['sec', 'turned the division upside down and simplified $\\frac{\\tan\\theta}{\\sin\\theta}$'],
+      ['sin', 'cancelled $\\tan\\theta$ as though it were $1$'],
+      ['sincos', 'multiplied $\\sin\\theta$ by $\\cos\\theta$ but dropped the $\\sin\\theta$ left in the denominator'],
+      ['cot', 'cancelled the $\\sin\\theta$ with the one inside $\\tan\\theta$, leaving $\\frac{1}{\\tan\\theta}$'],
+    ],
+  },
+  {
+    id: 's7', tex: '\\tan\\theta\\cos\\theta', ans: 'sin',
+    fl: (t) => Math.tan(t) * Math.cos(t),
+    why: '$\\tan\\theta\\cos\\theta = \\frac{\\sin\\theta}{\\cos\\theta} \\times \\cos\\theta$, and the $\\cos\\theta$ cancels.',
+    trap: 'Write tan θ as sin θ / cos θ: the cos θ cancels and sin θ is left.',
+    wrongs: [
+      ['cos', 'cancelled the $\\sin\\theta$ instead of the $\\cos\\theta$'],
+      ['sincos', 'multiplied the numerators and forgot the $\\cos\\theta$ underneath $\\tan\\theta$'],
+      ['tan', 'treated $\\cos\\theta$ as $1$'],
+      ['cot', 'used $\\tan\\theta = \\frac{\\cos\\theta}{\\sin\\theta}$ and then cancelled one $\\cos\\theta$'],
+    ],
+  },
+  {
+    id: 's8', tex: '\\frac{1}{1 + \\tan^{2}\\theta}', ans: 'cos2',
+    fl: (t) => 1 / (1 + Math.tan(t) ** 2),
+    why: '$1 + \\tan^{2}\\theta = \\frac{1}{\\cos^{2}\\theta}$, so the reciprocal is $\\cos^{2}\\theta$.',
+    trap: '1 + tan²θ = 1/cos²θ, so the whole fraction is cos²θ.',
+    wrongs: [
+      ['cos', 'forgot the square'],
+      ['sin2', 'used $1 + \\tan^{2}\\theta = \\frac{1}{\\sin^{2}\\theta}$'],
+      ['sec2', 'gave $1 + \\tan^{2}\\theta$ itself instead of its reciprocal'],
+      ['cot2', 'cancelled the two $1$s, leaving $\\frac{1}{\\tan^{2}\\theta}$'],
+    ],
+  },
+  {
+    id: 's9', tex: '\\frac{1 - \\sin^{2}\\theta}{\\cos\\theta}', ans: 'cos',
+    fl: (t) => (1 - Math.sin(t) ** 2) / Math.cos(t),
+    why: 'The numerator is $\\cos^{2}\\theta$, so the fraction is $\\frac{\\cos^{2}\\theta}{\\cos\\theta}$.',
+    trap: '1 − sin²θ is cos²θ, so one cos θ cancels and one is left.',
+    wrongs: [
+      ['cos2', 'simplified the numerator but forgot to divide by $\\cos\\theta$'],
+      ['sec', 'replaced $1 - \\sin^{2}\\theta$ by $1$'],
+      ['one', 'used $1 - \\sin^{2}\\theta = \\cos\\theta$ and cancelled straight away'],
+      ['tan', 'read the numerator as $1 - \\cos^{2}\\theta = \\sin^{2}\\theta$ and cancelled one $\\sin\\theta$'],
+    ],
+  },
 ];
 const SIMPLIFY_BY_ID: Record<string, SimplifyExpr> = Object.fromEntries(SIMPLIFY.map((s) => [s.id, s]));
 
@@ -403,29 +583,22 @@ function agrees(f: (t: number) => number, g: (t: number) => number): boolean {
   });
 }
 
-const SIMPLIFY_TRAPS: Record<string, string> = {
-  tan: 'wrote sin θ / cos θ upside down',
-  cot: 'wrote sin θ / cos θ upside down',
-  sin: 'cancelled sin and cos the wrong way round',
-  cos: 'cancelled sin and cos the wrong way round',
-  one: 'expanded the bracket wrongly',
-  sin2: 'used 1 − cos θ instead of 1 − cos²θ',
-  cos2: 'used 1 − sin θ instead of 1 − sin²θ',
-};
-
 function simplifyQ(rng: RNG): Generated | null {
   const e = rng.pick(SIMPLIFY);
   const correct = CAND_BY_ID[e.ans];
-  const wrong = rng.shuffle(CANDS.filter((c) => c.id !== correct.id && !agrees(c.fl, e.fl)))
-    .slice(0, 4)
-    .map((c) => ({ display: `$${c.tex}$`, trap: SIMPLIFY_TRAPS[c.id] ?? 'a plausible but different expression' }));
-  if (wrong.length < 4) return null;
+  // Safety net: a listed candidate that actually equals the expression would be a second
+  // correct option, so it is dropped rather than offered.
+  const pool = e.wrongs
+    .map(([id, trap]) => ({ cand: CAND_BY_ID[id], trap }))
+    .filter((w) => w.cand !== undefined && w.cand.id !== correct.id && !agrees(w.cand.fl, e.fl));
+  if (pool.length < 4) return null;
+  const wrong = rng.shuffle(pool).slice(0, 4).map((w) => ({ display: `$${w.cand.tex}$`, trap: w.trap }));
   return {
     stem: `Simplify $${e.tex}$.`,
     answer: { kind: 'choice', value: `$${correct.tex}$` },
     options: buildChoiceOptions(rng, `$${correct.tex}$`, wrong),
-    solution: `Use $\\sin^{2}\\theta + \\cos^{2}\\theta = 1$ and $\\tan\\theta = \\frac{\\sin\\theta}{\\cos\\theta}$: the expression is $${correct.tex}$.`,
-    trap: 'Replace 1 − cos²θ by sin²θ (not by sin θ) before cancelling.',
+    solution: `${e.why} The expression simplifies to $${correct.tex}$.`,
+    trap: e.trap,
     tags: ['trig', 'identities', 'simplify'],
     params: { variant: 'simplify', expr: e.id, ans: e.ans },
     typedAllowed: false,

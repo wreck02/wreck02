@@ -40,6 +40,7 @@ const X = (x: number): Exact => Exact.num(r(x));
 const q = (x: number, unit: string): string => `$${num(x)}\\ ${unit}$`;
 
 type Cand = { value: number | null; trap: string; /** a prefix/unit slip: allowed to sit far from the answer */ wide?: boolean };
+type Wide = Distractor & { wide?: boolean };
 
 /** Reads as an exam number in this format: at most 4 significant figures, no fraction bar, sane magnitude. */
 function readable(x: number, format: NumberFormat): boolean {
@@ -57,30 +58,62 @@ function readable(x: number, format: NumberFormat): boolean {
 }
 
 /** Keep only distractors that are positive, exam-clean and within a sane factor of the answer. */
-function cleanOnly(ds: Cand[], answer: number, format: NumberFormat): Distractor[] {
-  const out: Distractor[] = [];
+function cleanOnly(ds: Cand[], answer: number, format: NumberFormat): (Distractor & { wide?: boolean })[] {
+  const out: (Distractor & { wide?: boolean })[] = [];
   for (const d of ds) {
     if (d.value === null) continue;
     // A prefix slip may sit far from the answer, but only a standard-form question can carry 10^9 of spread.
-    const span = d.wide ? (format === 'sf' ? 1e12 : 1e4) : 200;
+    // Everything else stays close enough to the answer to be weighed against it.
+    const span = d.wide ? (format === 'sf' ? 1e12 : 1e4) : 30;
     if (d.value > span * answer || d.value < answer / span) continue;
     if (!readable(d.value, format)) continue;
-    out.push({ value: X(d.value), trap: d.trap });
+    out.push({ value: X(d.value), trap: d.trap, wide: d.wide });
   }
   return out;
 }
 
-/** Every distinct `must` candidate goes in before any `extra` one, so the headline traps are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Every distinct `must` candidate goes in before any `extra` one, so the headline traps are never
+ * shuffled out. The remaining slots are filled towards a randomly drawn number of options *below* the
+ * answer: pairing one huge prefix slip with a doubled and a halved answer used to pin the correct option
+ * to the exact middle of the sorted list. `spare` holds the ×2 / ÷2 near-misses — not mistakes anyone
+ * really makes — and at most one of them may appear in a list.
+ */
+function ranked(rng: RNG, answer: Exact, must: Wide[], extra: Wide[], spare: Wide[] = [], widest = 1e4, count = 4, maxSpare = 1): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const out: Wide[] = [];
+  // one prefix slip is the point of a prefixes question; two of them in opposite directions just make the
+  // list span six orders of magnitude, and both are discarded on sight
+  const take = (d: Wide): boolean => {
+    if (out.length >= count || seen.some((s) => s.equals(d.value))) return false;
+    if (d.wide && out.some((o) => o.wide)) return false;
     seen.push(d.value);
     out.push(d);
+    return true;
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  // after the headline traps, nothing may widen the list further than the traps already do, and never
+  // past the window a single prefix slip needs
+  const nums = [a, ...out.map((d) => d.value.toNumber())];
+  const limit = Math.max(widest, Math.max(...nums) / Math.min(...nums));
+  const fits = (d: Wide) => {
+    const x = d.value.toNumber();
+    return Math.max(...nums, x) / Math.min(...nums, x) <= limit;
+  };
+  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a && fits(d)));
+  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a && fits(d)));
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
+  let spares = 0;
+  for (const d of rng.shuffle(spare)) {
+    if (out.length >= count || spares >= maxSpare) break;
+    if (fits(d) && take(d)) spares++;
+  }
   return out;
 }
 
@@ -91,6 +124,8 @@ interface Pack {
   format?: NumberFormat;
   must: Cand[];
   extra: Cand[];
+  /** ×2 / ÷2 near-misses: a last resort, and never more than one of them in an option list. */
+  spare?: Cand[];
   solution: string;
   trap: string;
   tags: string[];
@@ -102,7 +137,7 @@ function pack(rng: RNG, p: Pack): Generated | null {
   const format: NumberFormat = p.format ?? 'decimal';
   if (!readable(p.answer, format)) return null;
   const ans = X(p.answer);
-  const ds = ranked(rng, ans, cleanOnly(p.must, p.answer, format), cleanOnly(p.extra, p.answer, format));
+  const ds = ranked(rng, ans, cleanOnly(p.must, p.answer, format), cleanOnly(p.extra, p.answer, format), cleanOnly(p.spare ?? [], p.answer, format), format === 'sf' ? 1e12 : 1e4);
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -147,10 +182,13 @@ function speedFromFL(rng: RNG): Generated | null {
       { value: r(lam / f), trap: 'divided the wrong way round' },
     ],
     extra: [
-      { value: r(f + lam), trap: 'added the frequency and the wavelength' },
       { value: f, trap: 'quoted the frequency as the speed' },
       { value: lam, trap: 'quoted the wavelength as the speed' },
-      { value: r(2 * v), trap: 'doubled the product' },
+      { value: r(2 * v), trap: 'read the quoted distance as crest to trough, which is half a wavelength' },
+      { value: r(v * 10), trap: 'slipped a power of ten in the product' },
+      { value: r(v / 10), trap: 'slipped a power of ten in the product the other way' },
+    ],
+    spare: [
       { value: r(v / 2), trap: 'halved the product' },
     ],
     solution: `$v = f\\lambda = ${num(f)} \\times ${num(lam)} = ${num(v)}\\ \\text{m s}^{-1}$.`,
@@ -174,8 +212,13 @@ function freqFromVL(rng: RNG): Generated | null {
       { value: r(lam / v), trap: 'divided the wrong way round' },
     ],
     extra: [
-      { value: r(v - lam), trap: 'subtracted the wavelength from the speed' },
       { value: v, trap: 'quoted the speed as the frequency' },
+      { value: r(1 / lam), trap: 'gave the number of waves in each metre, not in each second' },
+      { value: r(v / (2 * lam)), trap: 'took the quoted distance as crest to trough, so used twice the wavelength' },
+      { value: r(f * 10), trap: 'slipped a power of ten in the division' },
+      { value: r(f / 10), trap: 'slipped a power of ten in the division the other way' },
+    ],
+    spare: [
       { value: r(2 * f), trap: 'doubled the quotient' },
       { value: r(f / 2), trap: 'halved the quotient' },
     ],
@@ -202,7 +245,12 @@ function lambdaFromVF(rng: RNG): Generated | null {
     extra: [
       { value: f, trap: 'quoted the frequency as the wavelength' },
       { value: v, trap: 'quoted the speed as the wavelength' },
-      { value: r(2 * lam), trap: 'doubled the quotient' },
+      { value: r(1 / f), trap: 'gave the period 1/f instead of the wavelength' },
+      { value: r(2 * lam), trap: 'gave the crest-to-trough distance doubled: λ = v/f already is a whole wavelength' },
+      { value: r(lam * 10), trap: 'slipped a power of ten in the division' },
+      { value: r(lam / 10), trap: 'slipped a power of ten in the division the other way' },
+    ],
+    spare: [
       { value: r(lam / 2), trap: 'halved the quotient' },
     ],
     solution: `$\\lambda = \\dfrac{v}{f} = \\dfrac{${num(v)}}{${num(f)}} = ${num(lam)}\\ \\text{m}$.`,
@@ -225,8 +273,12 @@ function periodFromF(rng: RNG): Generated | null {
     ],
     extra: [
       { value: r(2 / f), trap: 'used T = 2/f' },
-      { value: r(1 / (2 * f)), trap: 'halved the period' },
+      { value: r(1 / (60 * f)), trap: 'gave the period in minutes' },
       { value: r(f / 10), trap: 'divided the frequency by 10 instead of inverting it' },
+      { value: r(10 / f), trap: 'slipped a power of ten in the reciprocal' },
+    ],
+    spare: [
+      { value: r(1 / (2 * f)), trap: 'halved the period' },
     ],
     solution: `$T = \\dfrac{1}{f} = \\dfrac{1}{${f}} = ${num(T)}\\ \\text{s}$.`,
     trap: 'The period is the reciprocal of the frequency, not the frequency itself.',
@@ -247,9 +299,14 @@ function freqFromT(rng: RNG): Generated | null {
       { value: r(60 * T), trap: 'multiplied by 60 instead of inverting' },
     ],
     extra: [
+      { value: r(60 / T), trap: 'gave the number of waves per minute' },
+      { value: r(10 * T), trap: 'multiplied by 10 instead of inverting' },
+      { value: r(1 / (10 * T)), trap: 'slipped a power of ten in the reciprocal' },
+      { value: r(10 / T), trap: 'slipped a power of ten in the reciprocal the other way' },
+    ],
+    spare: [
       { value: r(1 / (2 * T)), trap: 'halved the frequency' },
       { value: r(2 / T), trap: 'doubled the frequency' },
-      { value: r(10 * T), trap: 'multiplied by 10 instead of inverting' },
     ],
     solution: `$f = \\dfrac{1}{T} = \\dfrac{1}{${num(T)}} = ${num(f)}\\ \\text{Hz}$.`,
     trap: 'f = 1/T: a period of 0.02 s means 50 waves a second, not 0.02 of one.',
@@ -260,20 +317,29 @@ function freqFromT(rng: RNG): Generated | null {
 
 // ------------------------------------------------------------------------------------------ level 2
 
+const RADIO_MHZ = [6, 8, 10, 12, 15, 16, 20, 24, 25, 30, 40, 48, 50, 60, 75, 80, 88, 96, 100, 120, 125, 150, 200, 240, 250, 300, 375, 400, 500, 600, 750, 800];
+
 function radioWavelength(rng: RNG): Generated | null {
-  const fMHz = rng.pick([30, 40, 50, 60, 75, 80, 100, 120, 150, 200, 250, 300, 400, 500, 600]);
+  const fMHz = rng.pick(RADIO_MHZ);
   const lam = r(300 / fMHz);
   return pack(rng, {
     stem: `Radio waves of frequency ${fMHz} MHz travel through air at $${C_TEX}\\ \\text{m s}^{-1}$. Find the wavelength of the waves.`,
     answer: lam,
     unit: U.m,
-    format: 'auto',
+    // 'decimal', not 'auto': a wavelength of 1.5 m is how a paper prints it, and under 'auto' every
+    // non-integer wavelength (and every option beside it) would be rejected for carrying a fraction bar.
+    format: 'decimal',
     must: [
       { value: r(1000 * lam), trap: 'treated MHz as kHz (10^3 instead of 10^6)', wide: true },
       { value: r(C / fMHz), trap: 'used the frequency in MHz as though it were already in Hz', wide: true },
     ],
     extra: [
       { value: r(fMHz / 300), trap: 'inverted the calculation' },
+      { value: r(lam / 1000), trap: 'treated MHz as GHz (10^9 instead of 10^6)', wide: true },
+      { value: r(10 * lam), trap: 'used 10^5 for the prefix: one power of ten too few' },
+      { value: r(lam / 10), trap: 'used 10^7 for the prefix: one power of ten too many' },
+    ],
+    spare: [
       { value: r(2 * lam), trap: 'doubled the wavelength' },
       { value: r(lam / 2), trap: 'halved the wavelength' },
     ],
@@ -285,7 +351,7 @@ function radioWavelength(rng: RNG): Generated | null {
 }
 
 function radioFrequencyMHz(rng: RNG): Generated | null {
-  const fMHz = rng.pick([30, 40, 50, 60, 75, 80, 100, 120, 150, 200, 250, 300, 400, 500]);
+  const fMHz = rng.pick(RADIO_MHZ);
   const lam = r(300 / fMHz);
   return pack(rng, {
     stem: `Radio waves of wavelength ${q(lam, U.m)} travel through air at $${C_TEX}\\ \\text{m s}^{-1}$. Find the frequency of the waves, in MHz.`,
@@ -297,6 +363,12 @@ function radioFrequencyMHz(rng: RNG): Generated | null {
     ],
     extra: [
       { value: r(1000 * fMHz), trap: 'gave the frequency in kHz', wide: true },
+      { value: r(fMHz / 1000), trap: 'gave the frequency in GHz', wide: true },
+      { value: r(10 * fMHz), trap: 'slipped one power of ten in the prefix' },
+      { value: r(fMHz / 10), trap: 'slipped one power of ten in the prefix the other way' },
+      { value: r(340 / lam), trap: 'used the speed of sound instead of the speed of light', wide: true },
+    ],
+    spare: [
       { value: r(2 * fMHz), trap: 'doubled the frequency' },
       { value: r(fMHz / 2), trap: 'halved the frequency' },
     ],
@@ -309,7 +381,7 @@ function radioFrequencyMHz(rng: RNG): Generated | null {
 
 function soundWavelength(rng: RNG): Generated | null {
   const v = 340;
-  const f = rng.pick([68, 85, 100, 136, 170, 200, 250, 272, 340, 400, 425, 500, 680, 850, 1000, 1700]);
+  const f = rng.pick([20, 25, 34, 40, 50, 68, 80, 85, 100, 125, 136, 170, 200, 250, 272, 340, 400, 425, 500, 544, 680, 800, 850, 1000, 1250, 1360, 1700, 2000]);
   const lam = r(v / f);
   return pack(rng, {
     stem: `Sound travels through air at ${q(v, U.v)}. Find the wavelength in air of a note of frequency ${q(f, U.Hz)}.`,
@@ -321,8 +393,13 @@ function soundWavelength(rng: RNG): Generated | null {
     unit: U.m,
     extra: [
       { value: r(1000 * lam), trap: 'read the frequency as kHz', wide: true },
+      { value: r(1500 / f), trap: 'used the speed of sound in water instead of in air' },
+      { value: r(1 / f), trap: 'gave the period 1/f instead of the wavelength' },
+      { value: r(10 * lam), trap: 'slipped a power of ten in the division' },
+      { value: r(lam / 10), trap: 'slipped a power of ten in the division the other way' },
+    ],
+    spare: [
       { value: r(2 * lam), trap: 'doubled the wavelength' },
-      { value: r(lam / 2), trap: 'halved the wavelength' },
       { value: r(v / (2 * f)), trap: 'used half the speed of sound' },
     ],
     solution: `$\\lambda = \\dfrac{v}{f} = \\dfrac{340}{${f}} = ${num(lam)}\\ \\text{m}$.`,
@@ -332,12 +409,14 @@ function soundWavelength(rng: RNG): Generated | null {
   });
 }
 
+const ULTRASOUND: [number, string][] = [[1500, 'water'], [1600, 'body tissue'], [5000, 'steel'], [1200, 'paraffin']];
+
 function ultrasoundWavelength(rng: RNG): Generated | null {
-  const v = 1500;
-  const fkHz = rng.pick([1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 25, 30, 50, 60, 75]);
-  const lam = r(1.5 / fkHz);
+  const [v, medium] = rng.pick(ULTRASOUND);
+  const fkHz = rng.pick([1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 15, 16, 20, 24, 25, 30, 40, 50, 60, 75, 80, 100]);
+  const lam = r(v / (fkHz * 1000));
   return pack(rng, {
-    stem: `An ultrasound pulse of frequency ${fkHz} kHz travels through water at ${q(v, U.v)}. Find the wavelength of the pulse in water.`,
+    stem: `An ultrasound pulse of frequency ${num(fkHz)} kHz travels through ${medium} at ${q(v, U.v)}. Find the wavelength of the pulse in ${medium}.`,
     answer: lam,
     unit: U.m,
     must: [
@@ -345,18 +424,28 @@ function ultrasoundWavelength(rng: RNG): Generated | null {
       { value: r((fkHz * 1000) / v), trap: 'divided the wrong way round' },
     ],
     extra: [
+      { value: r(340 / (fkHz * 1000)), trap: `used the speed of sound in air instead of in ${medium}` },
+      { value: r(lam / 1000), trap: 'treated kHz as MHz (10^6 instead of 10^3)', wide: true },
+      { value: r(10 * lam), trap: 'slipped one power of ten in the prefix' },
+      { value: r(lam / 10), trap: 'slipped one power of ten in the prefix the other way' },
+      { value: r(1 / (fkHz * 1000)), trap: 'gave the period 1/f instead of the wavelength' },
+    ],
+    spare: [
       { value: r(2 * lam), trap: 'doubled the wavelength' },
       { value: r(lam / 2), trap: 'halved the wavelength' },
-      { value: r(340 / (fkHz * 1000)), trap: 'used the speed of sound in air instead of in water' },
     ],
-    solution: `$\\lambda = \\dfrac{v}{f} = \\dfrac{1500}{${fkHz} \\times 10^{3}} = ${num(lam)}\\ \\text{m}$.`,
+    solution: `$\\lambda = \\dfrac{v}{f} = \\dfrac{${v}}{${num(fkHz)} \\times 10^{3}} = ${num(lam)}\\ \\text{m}$.`,
     trap: '1 kHz = 10^3 Hz: leaving the frequency in kHz makes the wavelength a thousand times too big.',
     tags: ['waves', 'wave-equation', 'prefixes', 'ultrasound'],
     params: { variant: 'ultrasound-lambda', v, fkHz },
   });
 }
 
-const KHZ_PAIRS: [number, number][] = [[2, 0.17], [1, 0.34], [5, 0.3], [3, 0.5], [10, 0.15], [4, 0.25], [2, 0.5], [20, 0.075], [8, 0.125], [5, 0.08], [2, 0.6], [4, 0.85], [1, 1.5], [6, 0.25], [15, 0.1]];
+const KHZ_PAIRS: [number, number][] = [
+  [2, 0.17], [1, 0.34], [5, 0.3], [3, 0.5], [10, 0.15], [4, 0.25], [2, 0.5], [20, 0.075], [8, 0.125], [5, 0.08],
+  [2, 0.6], [4, 0.85], [1, 1.5], [6, 0.25], [15, 0.1], [2, 0.8], [2.5, 0.6], [1.5, 1], [4, 0.4], [5, 0.32],
+  [8, 0.2], [10, 0.16], [12, 0.125], [16, 0.1], [20, 0.08], [25, 0.06], [3, 0.4], [6, 0.5], [1, 1.2], [2, 1.5],
+];
 
 function speedFromKHz(rng: RNG): Generated | null {
   const [fkHz, lam] = rng.pick(KHZ_PAIRS);
@@ -370,9 +459,13 @@ function speedFromKHz(rng: RNG): Generated | null {
       { value: r((fkHz * 1000) / lam), trap: 'divided instead of multiplying', wide: true },
     ],
     extra: [
-      { value: r(2 * v), trap: 'doubled the product' },
+      { value: r(1000 * v), trap: 'treated kHz as MHz (10^6 instead of 10^3)', wide: true },
+      { value: r(10 * v), trap: 'slipped one power of ten in the prefix' },
+      { value: r(v / 10), trap: 'slipped one power of ten in the prefix the other way' },
+      { value: r(2 * v), trap: 'read the quoted distance as crest to trough, which is half a wavelength' },
+    ],
+    spare: [
       { value: r(v / 2), trap: 'halved the product' },
-      { value: r(v / 1000), trap: 'left the frequency in kHz and then scaled', wide: true },
     ],
     solution: `$v = f\\lambda = ${fkHz} \\times 10^{3} \\times ${num(lam)} = ${num(v)}\\ \\text{m s}^{-1}$.`,
     trap: 'Convert kHz to Hz before using v = fλ.',
@@ -383,29 +476,44 @@ function speedFromKHz(rng: RNG): Generated | null {
 
 // ------------------------------------------------------------------------------------------ level 3
 
+/** Media that carry an echo, with the scene each one belongs to. */
+const ECHO_MEDIA: [number, string, string][] = [
+  [1500, 'sea water', 'sonar'],
+  [1400, 'fresh water', 'sonar'],
+  [1600, 'body tissue', 'scan'],
+  [340, 'air', 'cliff'],
+];
+
 function sonarDepth(rng: RNG): Generated | null {
-  const water = rng.bool(0.6);
-  const v = water ? rng.pick([1500, 1400]) : 340;
-  const t = rng.pick([0.4, 0.5, 1, 2, 3, 4, 5, 6, 8]);
+  const [v, medium, scene] = rng.pick(ECHO_MEDIA);
+  const t = scene === 'scan'
+    ? rng.pick([0.0001, 0.0002, 0.00025, 0.0004, 0.0005])
+    : rng.pick([0.2, 0.25, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8]);
   const d = r((v * t) / 2);
-  if (!Number.isInteger(d) || d < 50 || d > 9000) return null;
-  const stem = water
-    ? `A ship sends a sonar pulse vertically downwards and detects the echo from the sea bed ${q(t, U.s)} later. The speed of sound in sea water is ${q(v, U.v)}. Find the depth of the sea bed below the ship.`
-    : `A student stands in front of a large cliff, claps once and hears the echo ${q(t, U.s)} later. The speed of sound in air is ${q(v, U.v)}. Find the distance from the student to the cliff.`;
+  if (!Number.isInteger(scene === 'scan' ? d * 100 : d) || d < (scene === 'scan' ? 0.05 : 30) || d > 9000) return null;
+  const stem = scene === 'sonar'
+    ? `A ship sends a sonar pulse vertically downwards and detects the echo from the sea bed ${q(t, U.s)} later. The speed of sound in ${medium} is ${q(v, U.v)}. Find the depth of the sea bed below the ship.`
+    : scene === 'scan'
+      ? `An ultrasound scanner sends a pulse into ${medium}, in which sound travels at ${q(v, U.v)}, and detects the reflection ${q(t, U.s)} later. Find the depth of the reflecting surface below the scanner.`
+      : `A student stands in front of a large cliff, claps once and hears the echo ${q(t, U.s)} later. The speed of sound in ${medium} is ${q(v, U.v)}. Find the distance from the student to the cliff.`;
   return pack(rng, {
     stem,
     answer: d,
     unit: U.m,
     must: [
       { value: r(v * t), trap: 'forgot that the pulse travels there and back: that distance is 2d' },
-      { value: r(2 * v * t), trap: 'doubled instead of halving' },
+      { value: r((v * t) / 4), trap: 'halved twice' },
     ],
     extra: [
+      { value: r(2 * v * t), trap: 'doubled instead of halving' },
       { value: r(v / t), trap: 'divided instead of multiplying' },
-      { value: r((v * t) / 4), trap: 'halved twice' },
+      { value: r((v * t) / 8), trap: 'halved three times' },
       { value: r(v / (2 * t)), trap: 'divided by the time instead of multiplying by it' },
+      { value: v === 340 ? r((1500 * t) / 2) : r((340 * t) / 2), trap: v === 340 ? 'used the speed of sound in water instead of in air' : `used the speed of sound in air instead of in ${medium}` },
+      { value: r(d / 10), trap: 'slipped a power of ten' },
+      { value: r(d * 10), trap: 'slipped a power of ten the other way' },
     ],
-    solution: `The pulse covers $2d$ in ${num(t)} s, so $2d = vt = ${v} \\times ${num(t)} = ${num(v * t)}\\ \\text{m}$ and $d = ${num(d)}\\ \\text{m}$.`,
+    solution: `The pulse covers $2d$ in ${num(t)} s, so $2d = vt = ${v} \\times ${num(t)} = ${num(r(v * t))}\\ \\text{m}$ and $d = ${num(d)}\\ \\text{m}$.`,
     trap: 'An echo travels out and back: divide vt by 2.',
     tags: ['waves', 'echo', 'sonar'],
     params: { variant: 'sonar-depth', v, t },
@@ -413,14 +521,13 @@ function sonarDepth(rng: RNG): Generated | null {
 }
 
 function echoTime(rng: RNG): Generated | null {
-  const water = rng.bool(0.5);
-  const v = water ? 1500 : 340;
-  const t = rng.pick([0.4, 0.5, 1, 2, 3, 4, 5, 6]);
+  const [v, medium, scene] = rng.pick(ECHO_MEDIA.filter(([, , sc]) => sc !== 'scan'));
+  const t = rng.pick([0.2, 0.25, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6]);
   const d = r((v * t) / 2);
-  if (!Number.isInteger(d) || d < 50 || d > 9000) return null;
-  const stem = water
-    ? `A ship sends a sonar pulse vertically downwards towards a sea bed ${q(d, U.m)} below it. The speed of sound in sea water is ${q(v, U.v)}. Find the time between sending the pulse and detecting the echo.`
-    : `A student stands ${q(d, U.m)} from a large cliff and claps once. The speed of sound in air is ${q(v, U.v)}. Find the time between the clap and hearing the echo.`;
+  if (!Number.isInteger(d) || d < 30 || d > 9000) return null;
+  const stem = scene === 'sonar'
+    ? `A ship sends a sonar pulse vertically downwards towards a sea bed ${q(d, U.m)} below it. The speed of sound in ${medium} is ${q(v, U.v)}. Find the time between sending the pulse and detecting the echo.`
+    : `A student stands ${q(d, U.m)} from a large cliff and claps once. The speed of sound in ${medium} is ${q(v, U.v)}. Find the time between the clap and hearing the echo.`;
   return pack(rng, {
     stem,
     answer: t,
@@ -432,6 +539,13 @@ function echoTime(rng: RNG): Generated | null {
     extra: [
       { value: r(v / d), trap: 'divided the wrong way round' },
       { value: r((2 * v) / d), trap: 'inverted the fraction' },
+      { value: r(d / (2 * v)), trap: 'halved the distance instead of doubling it' },
+      { value: r((8 * d) / v), trap: 'doubled the distance three times' },
+      { value: v === 340 ? r((2 * d) / 1500) : r((2 * d) / 340), trap: v === 340 ? 'used the speed of sound in water instead of in air' : `used the speed of sound in air instead of in ${medium}` },
+      { value: r(t * 10), trap: 'slipped a power of ten' },
+      { value: r(t / 10), trap: 'slipped a power of ten the other way' },
+    ],
+    spare: [
       { value: r(t / 2), trap: 'halved the time' },
     ],
     solution: `The sound covers $2d = ${num(2 * d)}$ m, so $t = \\dfrac{2d}{v} = \\dfrac{${num(2 * d)}}{${v}} = ${num(t)}\\ \\text{s}$.`,
@@ -457,6 +571,13 @@ function echoSpeed(rng: RNG): Generated | null {
     extra: [
       { value: r(t / d), trap: 'divided the wrong way round', wide: true },
       { value: r(d * t), trap: 'multiplied instead of dividing' },
+      { value: r(d / (2 * t)), trap: 'halved the distance instead of doubling it' },
+      { value: v === 340 ? 1500 : 340, trap: 'quoted a remembered speed of sound instead of using the data' },
+      { value: r((8 * d) / t), trap: 'doubled the distance three times' },
+      { value: r(v * 10), trap: 'slipped a power of ten' },
+      { value: r(v / 10), trap: 'slipped a power of ten the other way' },
+    ],
+    spare: [
       { value: r(v / 2), trap: 'halved the speed' },
     ],
     solution: `The pulse covers $2 \\times ${num(d)} = ${num(2 * d)}$ m in ${num(t)} s, so $v = \\dfrac{${num(2 * d)}}{${num(t)}} = ${num(v)}\\ \\text{m s}^{-1}$.`,
@@ -466,27 +587,38 @@ function echoSpeed(rng: RNG): Generated | null {
   });
 }
 
+/**
+ * Level 3, so the two quantities are in different units: the wavelength in cm (or mm) and the length in
+ * metres. Dividing the numbers as they stand is then a factor of 100 (or 1000) out, which is the trap.
+ */
 function countWavelengths(rng: RNG): Generated | null {
-  const lam = rng.pick([0.2, 0.25, 0.4, 0.5, 0.8, 1.25, 2, 2.5]);
+  const small = rng.bool(0.6) ? { name: 'cm', per: 100 } : { name: 'mm', per: 1000 };
+  const lamSmall = rng.pick(small.per === 100 ? [20, 25, 40, 50, 80, 125, 200, 250] : [200, 250, 400, 500, 800]);
   const k = rng.pick([8, 10, 12, 15, 16, 20, 24, 25, 30, 40, 50]);
+  const lam = r(lamSmall / small.per);
   const L = r(lam * k);
   if (!Number.isInteger(L) || L < 4 || L > 200) return null;
+  const where = rng.pick(['corridor', 'tube', 'hall']);
   return pack(rng, {
-    stem: `A sound wave of wavelength ${q(lam, U.m)} travels along a corridor of length ${q(L, U.m)}. How many complete wavelengths of this wave fit into the length of the corridor?`,
+    stem: `A sound wave of wavelength ${lamSmall} ${small.name} travels along a ${where} of length ${q(L, U.m)}. How many complete wavelengths of this wave fit into the length of the ${where}?`,
     answer: k,
     must: [
-      { value: Number.isInteger(r(L * lam)) ? r(L * lam) : null, trap: 'multiplied instead of dividing' },
-      { value: k + 1, trap: 'off by one' },
+      { value: r(L / lamSmall), trap: `divided the numbers as they stand, without converting ${small.name} to m`, wide: true },
+      { value: rng.bool(0.5) ? k + 1 : k - 1, trap: 'off by one' },
     ],
     extra: [
-      { value: r(2 * k), trap: 'doubled the count' },
-      { value: Number.isInteger(k / 2) ? k / 2 : null, trap: 'halved the count' },
-      { value: k - 1, trap: 'off by one' },
-      { value: r(L * 2 / lam), trap: 'used half the wavelength' },
+      { value: r(2 * k), trap: `took the quoted ${small.name} as half a wavelength` },
+      { value: Number.isInteger(r(k / 2)) ? r(k / 2) : null, trap: 'used twice the wavelength' },
+      { value: r(10 * k), trap: `slipped one power of ten in the ${small.name} → m conversion` },
+      { value: Number.isInteger(r(k / 10)) ? r(k / 10) : null, trap: `slipped one power of ten in the ${small.name} → m conversion the other way` },
+      { value: r(L * lamSmall), trap: 'multiplied instead of dividing', wide: true },
     ],
-    solution: `Number of wavelengths $= \\dfrac{L}{\\lambda} = \\dfrac{${num(L)}}{${num(lam)}} = ${k}$.`,
-    trap: 'A count of wavelengths is a length divided by a wavelength, not a product.',
-    tags: ['waves', 'wavelength', 'counting'],
+    spare: [
+      { value: k + 2, trap: 'off by two' },
+    ],
+    solution: `$${num(L)}$ m is $${num(L * small.per)}$ ${small.name}, so the number of wavelengths is $\\dfrac{${num(L * small.per)}}{${lamSmall}} = ${k}$.`,
+    trap: `Put both lengths in the same unit first: 1 m = ${small.per} ${small.name}.`,
+    tags: ['waves', 'wavelength', 'counting', 'unit-conversion'],
     params: { variant: 'count-lambda', lam, L },
   });
 }
@@ -504,10 +636,15 @@ function countWaves(rng: RNG): Generated | null {
       { value: f, trap: 'gave the number of waves in one second' },
     ],
     extra: [
+      { value: k + 1, trap: 'off by one' },
+      { value: r(60 * f), trap: 'gave the number of waves in a minute', wide: true },
+      { value: t, trap: 'quoted the time as the number of waves' },
+      { value: r(f * t * 10), trap: 'slipped a power of ten in the product' },
+      { value: r((f * t) / 10), trap: 'slipped a power of ten in the product the other way' },
+    ],
+    spare: [
       { value: r(2 * k), trap: 'doubled the count' },
       { value: Number.isInteger(k / 2) ? k / 2 : null, trap: 'halved the count' },
-      { value: k + 1, trap: 'off by one' },
-      { value: r(60 * f), trap: 'worked per minute instead of per second', wide: true },
     ],
     solution: `The frequency is the number of waves each second, so in ${num(t)} s, $${f} \\times ${t} = ${num(k)}$ waves pass.`,
     trap: 'Frequency is waves per second: multiply by the time, do not divide.',
@@ -532,9 +669,12 @@ function lightFrequency(rng: RNG): Generated | null {
     ],
     extra: [
       { value: r(C / (lamNm * 1e-6)), trap: 'treated nm as µm (10^-6 instead of 10^-9)', wide: true },
-      { value: r(2 * f), trap: 'doubled the frequency' },
-      { value: r(f / 2), trap: 'halved the frequency' },
       { value: r(f / 10), trap: 'slipped one power of ten' },
+      { value: r(f * 10), trap: 'slipped one power of ten the other way' },
+      { value: r(f / 2), trap: 'took the quoted wavelength to be half a wavelength' },
+    ],
+    spare: [
+      { value: r(2 * f), trap: 'doubled the frequency' },
     ],
     solution: `$f = \\dfrac{c}{\\lambda} = \\dfrac{3 \\times 10^{8}}{${lamNm} \\times 10^{-9}} = \\dfrac{3 \\times 10^{17}}{${lamNm}} = ${X(f).toLatex({ format: 'sf' })}\\ \\text{Hz}$.`,
     trap: '1 nm = 10^-9 m: leaving the wavelength in nm is a factor of 10^9 out.',
@@ -544,8 +684,8 @@ function lightFrequency(rng: RNG): Generated | null {
 }
 
 function periodFromVL(rng: RNG): Generated | null {
-  const v = rng.pick([20, 25, 40, 50, 100, 200, 300, 340, 1500]);
-  const lam = rng.pick([0.5, 1, 1.7, 2, 2.5, 3, 5, 10, 25]);
+  const v = rng.pick([20, 25, 40, 50, 80, 100, 125, 150, 200, 250, 300, 340, 400, 500, 1200, 1400, 1500, 1600]);
+  const lam = rng.pick([0.4, 0.5, 0.8, 1, 1.25, 1.6, 1.7, 2, 2.5, 3, 4, 5, 8, 10, 16, 25]);
   const T = r(lam / v);
   if (T < 0.001 || T > 1 || lam === v) return null;
   return pack(rng, {
@@ -558,9 +698,13 @@ function periodFromVL(rng: RNG): Generated | null {
     ],
     extra: [
       { value: r(1 / (v * lam)), trap: 'took the reciprocal of vλ', wide: true },
-      { value: r(T / 2), trap: 'halved the period' },
-      { value: r(2 * T), trap: 'doubled the period' },
+      { value: r(2 * T), trap: 'took the quoted distance as crest to trough, so used twice the wavelength' },
       { value: r(10 * T), trap: 'slipped one power of ten' },
+      { value: r(T / 10), trap: 'slipped one power of ten the other way' },
+      { value: r(60 * T), trap: 'gave the period in minutes' },
+    ],
+    spare: [
+      { value: r(T / 2), trap: 'halved the period' },
     ],
     solution: `$f = \\dfrac{v}{\\lambda} = \\dfrac{${num(v)}}{${num(lam)}} = ${num(r(v / lam))}\\ \\text{Hz}$, so $T = \\dfrac{1}{f} = ${num(T)}\\ \\text{s}$ (that is $T = \\lambda/v$).`,
     trap: 'The period is λ/v; v/λ is the frequency.',
@@ -570,7 +714,7 @@ function periodFromVL(rng: RNG): Generated | null {
 }
 
 function microwaveWavelength(rng: RNG): Generated | null {
-  const fGHz = rng.pick([1, 1.5, 2, 3, 5, 6, 10, 15]);
+  const fGHz = rng.pick([1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5, 10, 12, 15, 20, 25, 30]);
   const lam = r(0.3 / fGHz);
   return pack(rng, {
     stem: `Microwaves of frequency ${num(fGHz)} GHz travel through air at $${C_TEX}\\ \\text{m s}^{-1}$. Find the wavelength of the microwaves.`,
@@ -581,10 +725,14 @@ function microwaveWavelength(rng: RNG): Generated | null {
       { value: r(fGHz / 0.3), trap: 'inverted the calculation', wide: true },
     ],
     extra: [
-      { value: r(lam / 1000), trap: 'slipped three powers of ten the other way', wide: true },
+      { value: r(lam / 1000), trap: 'treated GHz as THz (10^12 instead of 10^9)', wide: true },
+      { value: r(3 / fGHz), trap: 'used c = 3 × 10^9', wide: true },
+      { value: r(lam / 10), trap: 'slipped one power of ten in the prefix' },
+      { value: r(10 * lam), trap: 'slipped one power of ten in the prefix the other way' },
+    ],
+    spare: [
       { value: r(2 * lam), trap: 'doubled the wavelength' },
       { value: r(lam / 2), trap: 'halved the wavelength' },
-      { value: r(3 / fGHz), trap: 'used c = 3 × 10^9', wide: true },
     ],
     solution: `$\\lambda = \\dfrac{c}{f} = \\dfrac{${C_TEX}}{${num(fGHz)} \\times 10^{9}} = \\dfrac{0.3}{${num(fGHz)}} = ${num(lam)}\\ \\text{m}$.`,
     trap: '1 GHz = 10^9 Hz.',
@@ -594,7 +742,7 @@ function microwaveWavelength(rng: RNG): Generated | null {
 }
 
 function freqFromMs(rng: RNG): Generated | null {
-  const Tms = rng.pick([0.5, 1, 2, 2.5, 4, 5, 10, 20, 25, 50]);
+  const Tms = rng.pick([0.2, 0.25, 0.4, 0.5, 0.8, 1, 1.25, 2, 2.5, 4, 5, 8, 10, 12.5, 20, 25, 40, 50, 80, 100]);
   const f = r(1000 / Tms);
   return pack(rng, {
     stem: `A wave has a period of ${num(Tms)} ms. Find the frequency of the wave. ($1\\ \\text{ms} = 10^{-3}\\ \\text{s}$.)`,
@@ -606,9 +754,14 @@ function freqFromMs(rng: RNG): Generated | null {
     ],
     extra: [
       { value: r(1e6 / Tms), trap: 'treated ms as µs', wide: true },
+      { value: r(60 / Tms), trap: 'worked per minute instead of per second', wide: true },
+      { value: r(f / 10), trap: 'slipped one power of ten in the conversion' },
+      { value: r(10 * f), trap: 'slipped one power of ten in the conversion the other way' },
+      { value: r(f * 60), trap: 'gave the number of waves in a minute' },
+    ],
+    spare: [
       { value: r(f / 2), trap: 'halved the frequency' },
       { value: r(2 * f), trap: 'doubled the frequency' },
-      { value: r(60 / Tms), trap: 'worked per minute instead of per second', wide: true },
     ],
     solution: `$T = ${num(Tms)} \\times 10^{-3}\\ \\text{s}$, so $f = \\dfrac{1}{T} = \\dfrac{1000}{${num(Tms)}} = ${num(f)}\\ \\text{Hz}$.`,
     trap: 'Convert ms to s first: f = 1/T only with T in seconds.',
@@ -618,25 +771,34 @@ function freqFromMs(rng: RNG): Generated | null {
 }
 
 function xrayWavelength(rng: RNG): Generated | null {
-  const f = rng.pick([5e17, 1e18, 1.5e18, 3e18, 6e18]);
+  const f = rng.pick([2e17, 2.5e17, 5e17, 7.5e17, 1e18, 1.2e18, 1.5e18, 2e18, 3e18, 5e18, 6e18, 1e19]);
   const lam = r(C / f);
+  // The frequency with its mantissa dropped: "3 × 10^8 ÷ 10^18" is the slip this question really catches.
+  const tenPower = Math.pow(10, Math.floor(Math.log10(f)));
   return pack(rng, {
     stem: `X-rays of frequency $${X(f).toLatex({ format: 'sf' })}\\ \\text{Hz}$ travel through a vacuum at $${C_TEX}\\ \\text{m s}^{-1}$. Find the wavelength of the X-rays, in metres, giving your answer in standard form.`,
     answer: lam,
     unit: U.m,
     format: 'sf',
+    // f/c and λ in nm are 10^10 and 10^9 times the answer: as options they are discarded on sight, and
+    // the span guard drops them anyway. Every option here lives within a factor of ten or so of λ, so the
+    // question is decided by the power of ten, which is the whole point of it.
     must: [
-      { value: r(f / C), trap: 'divided the wrong way round', wide: true },
-      { value: r(lam * 1e9), trap: 'gave the answer in nm when metres were asked for', wide: true },
+      { value: r(lam * 10), trap: 'read the exponent of the frequency one too small' },
+      { value: r(lam / 10), trap: 'read the exponent of the frequency one too large' },
     ],
     extra: [
-      { value: r(lam * 1e10), trap: 'gave the answer in ångström-sized units', wide: true },
+      { value: r(C / tenPower), trap: 'used only the power of ten of the frequency, dropping its mantissa' },
+      { value: r(lam / 3), trap: 'used c = 1 × 10^8' },
+      { value: r(lam * 3), trap: 'divided by 10^8 and forgot the 3 in c' },
+      { value: r((C / f) * (f / tenPower) * (f / tenPower)), trap: 'multiplied by the mantissa of the frequency instead of dividing by it' },
+    ],
+    spare: [
       { value: r(2 * lam), trap: 'doubled the wavelength' },
       { value: r(lam / 2), trap: 'halved the wavelength' },
-      { value: r(lam * 10), trap: 'slipped one power of ten' },
     ],
     solution: `$\\lambda = \\dfrac{c}{f} = \\dfrac{3 \\times 10^{8}}{${X(f).toLatex({ format: 'sf' })}} = ${X(lam).toLatex({ format: 'sf' })}\\ \\text{m}$.`,
-    trap: 'λ = c/f: dividing the frequency by c inverts the answer.',
+    trap: 'Subtract the powers of ten: 10^8 ÷ 10^18 = 10^-10, and the mantissas divide the other way round.',
     tags: ['waves', 'wave-equation', 'standard-form'],
     params: { variant: 'xray-lambda', f },
   });
@@ -644,28 +806,38 @@ function xrayWavelength(rng: RNG): Generated | null {
 
 // ------------------------------------------------------------------------------------------ level 5
 
+/**
+ * Level 5, so the wave is described only in words and the crest spacing is quoted in cm: the candidate
+ * has to see that the spacing is λ, that the rate of crests is f, and to convert before multiplying.
+ */
 function crestSpeed(rng: RNG): Generated | null {
-  const d = rng.pick([0.5, 0.8, 1.2, 1.5, 2, 2.5, 3, 4]);
+  const dCm = rng.pick([20, 25, 40, 50, 60, 80, 120, 150, 250, 300, 400]);
   const nC = rng.pick([2, 3, 4, 5, 6, 8, 10]);
+  const d = r(dCm / 100);
   const v = r(d * nC);
-  if (v > 40 || d === nC) return null;
+  if (v > 40 || v < 0.5) return null;
   return pack(rng, {
-    stem: `The crests of a water wave are ${q(d, U.m)} apart, and ${nC} crests pass a fixed post each second. Find the speed of the wave.`,
+    stem: `The crests of a water wave are ${dCm} cm apart, and ${nC} crests pass a fixed post each second. Find the speed of the wave in metres per second.`,
     answer: v,
     unit: U.v,
     must: [
+      { value: r(dCm * nC), trap: 'left the crest spacing in cm', wide: true },
       { value: r(d / nC), trap: 'divided instead of multiplying: the crest spacing is λ and the rate is f' },
-      { value: r(nC / d), trap: 'divided the wrong way round' },
-      { value: r(2 * v), trap: 'doubled the product' },
     ],
     extra: [
-      { value: r(d + nC), trap: 'added the two numbers' },
+      { value: r(nC / d), trap: 'divided the wrong way round' },
+      { value: r(2 * v), trap: 'took the crest spacing to be half a wavelength' },
       { value: nC, trap: 'quoted the frequency as the speed' },
+      { value: d, trap: 'quoted the wavelength as the speed' },
+      { value: r(v * 10), trap: 'slipped one power of ten in the cm → m conversion' },
+      { value: r(v / 10), trap: 'slipped one power of ten in the cm → m conversion the other way' },
+    ],
+    spare: [
       { value: r(v / 2), trap: 'halved the product' },
     ],
-    solution: `The crest spacing is the wavelength and the rate of crests is the frequency, so $v = f\\lambda = ${nC} \\times ${num(d)} = ${num(v)}\\ \\text{m s}^{-1}$.`,
-    trap: 'Crests per second is the frequency; crest spacing is the wavelength: multiply them.',
-    tags: ['waves', 'wave-equation', 'description'],
+    solution: `The crest spacing is the wavelength, $\\lambda = ${num(d)}$ m, and the rate of crests is the frequency, $f = ${nC}$ Hz, so $v = f\\lambda = ${nC} \\times ${num(d)} = ${num(v)}\\ \\text{m s}^{-1}$.`,
+    trap: 'Crests per second is the frequency and crest spacing is the wavelength: convert the spacing to metres, then multiply.',
+    tags: ['waves', 'wave-equation', 'description', 'unit-conversion'],
     params: { variant: 'crest-speed', d, nC },
   });
 }
@@ -685,10 +857,14 @@ function crestCount(rng: RNG): Generated | null {
       { value: Number.isInteger(r(v * lam * t)) ? r(v * lam * t) : null, trap: 'multiplied by the wavelength instead of dividing by it' },
     ],
     extra: [
-      { value: r(2 * k), trap: 'doubled the count' },
-      { value: Number.isInteger(k / 2) ? k / 2 : null, trap: 'halved the count' },
       { value: k + 1, trap: 'off by one' },
       { value: Number.isInteger(r(v * t)) ? r(v * t) : null, trap: 'gave the distance travelled instead of the number of crests' },
+      { value: Number.isInteger(r(k / 2)) ? r(k / 2) : null, trap: 'took the crest spacing to be half a wavelength' },
+      { value: r(2 * k), trap: 'used half the crest spacing as the wavelength' },
+      { value: t, trap: 'quoted the time as the number of crests' },
+    ],
+    spare: [
+      { value: r(k * 10), trap: 'slipped a power of ten' },
     ],
     solution: `$f = \\dfrac{v}{\\lambda} = \\dfrac{${num(v)}}{${num(lam)}} = ${num(f)}\\ \\text{Hz}$, so in ${num(t)} s the number of crests is $${num(f)} \\times ${num(t)} = ${num(k)}$.`,
     trap: 'Find the frequency first (v/λ), then multiply by the time.',
@@ -712,11 +888,16 @@ function mediumChange(rng: RNG): Generated | null {
     must: [
       { value: r((340 * lam2) / lam1cm), trap: 'forgot to convert the first wavelength from cm to m' },
       { value: 340, trap: 'assumed the speed is unchanged' },
-      { value: f, trap: 'stopped at the frequency' },
-      { value: r(2 * v2), trap: 'doubled the speed' },
     ],
     extra: [
+      { value: f, trap: 'stopped at the frequency' },
       { value: r((340 * (lam1cm / 100)) / lam2), trap: 'inverted the wavelength ratio' },
+      { value: r(340 * lam2), trap: 'multiplied the speed in air by the second wavelength' },
+      { value: r(v2 * 10), trap: 'slipped a power of ten in the cm → m conversion' },
+      { value: r(v2 / 10), trap: 'slipped a power of ten in the cm → m conversion the other way' },
+    ],
+    spare: [
+      { value: r(2 * v2), trap: 'doubled the speed' },
       { value: r(v2 / 2), trap: 'halved the speed' },
     ],
     solution: `The frequency is the same in both media: $f = \\dfrac{340}{${num(lam1cm / 100)}} = ${f}\\ \\text{Hz}$. Then $v = f\\lambda = ${f} \\times ${num(lam2)} = ${num(v2)}\\ \\text{m s}^{-1}$.`,
@@ -742,7 +923,11 @@ function twoStepConversion(rng: RNG): Generated | null {
     extra: [
       { value: r((lamCm / 100) * (Tms / 1000)), trap: 'multiplied instead of dividing', wide: true },
       { value: r((Tms / 1000) / (lamCm / 100)), trap: 'divided the wrong way round', wide: true },
-      { value: r(2 * v), trap: 'doubled the speed' },
+      { value: r(v / 10), trap: 'converted the wavelength as if cm were mm' },
+      { value: r(v * 10), trap: 'converted the period as if ms were cs' },
+      { value: r(2 * v), trap: 'took the quoted wavelength to be half a wavelength' },
+    ],
+    spare: [
       { value: r(v / 2), trap: 'halved the speed' },
     ],
     solution: `$T = ${num(Tms / 1000)}\\ \\text{s}$ and $\\lambda = ${num(lamCm / 100)}\\ \\text{m}$, so $v = \\dfrac{\\lambda}{T} = \\dfrac{${num(lamCm / 100)}}{${num(Tms / 1000)}} = ${num(v)}\\ \\text{m s}^{-1}$.`,
@@ -753,9 +938,10 @@ function twoStepConversion(rng: RNG): Generated | null {
 }
 
 const BY_LEVEL: Record<Level, ((rng: RNG) => Generated | null)[]> = {
-  1: [speedFromFL, freqFromVL, lambdaFromVF, periodFromF, freqFromT],
+  // countWaves is a one-step product of two small integers (5 × 6): a level-1 question, not a level-3 one.
+  1: [speedFromFL, freqFromVL, lambdaFromVF, periodFromF, freqFromT, countWaves],
   2: [radioWavelength, radioFrequencyMHz, soundWavelength, ultrasoundWavelength, speedFromKHz],
-  3: [sonarDepth, echoTime, echoSpeed, countWavelengths, countWaves],
+  3: [sonarDepth, echoTime, echoSpeed, countWavelengths],
   4: [lightFrequency, periodFromVL, microwaveWavelength, freqFromMs, xrayWavelength],
   5: [crestSpeed, crestCount, mediumChange, twoStepConversion],
 };
@@ -766,11 +952,11 @@ export default defineTemplate({
   topic: 'waves',
   title: 'Wave speed, frequency and wavelength',
   levels: {
-    1: 'v = fλ with clean integers; T = 1/f and f = 1/T',
+    1: 'v = fλ with clean integers; T = 1/f and f = 1/T; how many waves pass in t seconds',
     2: 'prefixes: 100 MHz radio waves → 3 m; sound at 340 m s^-1; kHz ultrasound',
-    3: 'echoes and sonar (there and back); whole wavelengths in a length, whole waves in a time',
-    4: '600 nm light → 5 × 10^14 Hz; the period from v and λ; GHz and ms',
-    5: 'a wave described in words; the speed in a second medium from the wavelength ratio; ms and cm together',
+    3: 'echoes and sonar (there and back); whole wavelengths of a wave given in cm or mm in a length in m',
+    4: '600 nm light → 5 × 10^14 Hz; the period from v and λ; GHz, ms and X-ray wavelengths',
+    5: 'a wave described in words with the crest spacing in cm; the speed in a second medium; ms and cm together',
   },
   generate(rng, level: Level) {
     return retry(rng, () => pickVariant(rng, BY_LEVEL[level]));

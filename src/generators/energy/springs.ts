@@ -17,7 +17,9 @@ import type { RNG } from '../../core/rng';
  * Stiffness answers are bare numbers with "in N m^-1" in the stem (the typed-answer parser has no N/m unit);
  * every other answer carries its unit. Every wrong option is a named mistake (½ dropped, cm used as m,
  * series/parallel swapped, F × x instead of ½Fx); parameters that cannot supply four distinct clean ones are
- * redrawn, never padded.
+ * redrawn, never padded. Options live in one visual family — whole numbers and one-decimal-place values, never
+ * a surd — and a list carries at most one bare decimal-place slip and at most one cm/m unit slip, so it is
+ * never a ladder of powers of ten and the answer is not habitually the smallest number in it.
  */
 
 const G = 10;

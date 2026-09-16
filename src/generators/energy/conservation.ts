@@ -7,7 +7,7 @@ import type { RNG } from '../../core/rng';
 /**
  * Kinetic and potential energy, conservation with and without losses (g = 10 m s^-2 throughout).
  * Level 1: KE = ½mv², GPE = mgh with clean numbers (occasionally solved for v, m or h)
- * Level 2: dropped from h → speed at the bottom √(2gh) with h = 5, 20, 45, 80, 125 (mass a red herring)
+ * Level 2: dropped from h → speed at the bottom √(2gh) with 2gh a perfect square (mass a red herring)
  * Level 3: height reached by a ball thrown up at u (u²/20); pendulum or swing released from height h, or
  *          from a string of length L at 60° (h = L/2), → speed at the bottom
  * Level 4: a fraction of the energy lost to friction → speed (√ of the remaining fraction), or the work done
@@ -16,7 +16,8 @@ import type { RNG } from '../../core/rng';
  *          (or speed) at which KE = n × GPE for a dropped or thrown ball
  *
  * Every wrong option is a named mistake (missing ½, no square root, v ∝ h, forgetting g, % of speed instead of
- * % of energy); parameters that cannot supply four distinct clean ones are redrawn, never padded.
+ * % of energy) printed in the same family as the answer — a whole number or a one-decimal-place value, never a
+ * surd; parameters that cannot supply four distinct clean ones are redrawn, never padded.
  */
 
 const G = 10;
@@ -691,9 +692,9 @@ export default defineTemplate({
   title: 'Kinetic and potential energy',
   levels: {
     1: 'KE = ½mv² and GPE = mgh with clean numbers (sometimes solved for v, m or h)',
-    2: 'dropped from h = 5, 20, 45, 80 or 125 m → speed √(2gh); the mass is a red herring',
+    2: 'dropped from h with 2gh a perfect square (3.2 m, 20 m, 45 m …) → speed √(2gh); the mass is a red herring',
     3: 'height reached by a ball thrown up at u (u²/20); pendulum or swing → speed at the bottom, including a string at 60°',
-    4: 'a percentage of the energy lost to friction → speed; work done against friction from the speeds',
+    4: 'a percentage of the energy lost to friction (the fraction left is a perfect square) → speed; work done against friction from the speeds',
     5: 'rollercoaster with a stated energy loss → speed at a lower point; height or speed at which KE = n × GPE',
   },
   generate(rng, level: Level) {

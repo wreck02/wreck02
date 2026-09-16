@@ -100,7 +100,9 @@ function countAbove(answer: Exact, pool: Distractor[]): number {
 
 /**
  * Take `count` of them with a randomly drawn number below the answer, so the correct option is not
- * pinned to one slot in the sorted list.
+ * pinned to one slot in the sorted list. The draw is uniform over all five positions and then clamped
+ * to what the candidate list can actually supply, which means the scarcer side is always used in full:
+ * if only two mistakes overshoot, both are offered rather than one.
  */
 function splitPick(rng: RNG, answer: Exact, pool: Distractor[], count = 4): Distractor[] {
   const a = answer.toNumber();
@@ -108,7 +110,7 @@ function splitPick(rng: RNG, answer: Exact, pool: Distractor[], count = 4): Dist
   const above = pool.filter((d) => d.value.toNumber() > a);
   const lo = Math.max(0, count - above.length);
   const hi = Math.min(count, below.length);
-  const nBelow = lo <= hi ? rng.int(lo, hi) : hi;
+  const nBelow = Math.max(Math.min(rng.int(0, count), hi), Math.min(lo, hi));
   return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
 }
 
@@ -278,7 +280,12 @@ export default defineTemplate({
           typedAllowed: true,
         };
       };
-      const ask = (body: string) => (rng.bool(0.5) ? `Evaluate $${body}$.` : `Find the value of $${body}$.`);
+      const ask = (body: string) => rng.pick([
+        `Evaluate $${body}$.`,
+        `Find the value of $${body}$.`,
+        `Calculate the value of $${body}$.`,
+        `What is the value of $${body}$?`,
+      ]);
 
       // ------------------------------------------------------------------ level 1: x^(1/q)
       if (level === 1) {

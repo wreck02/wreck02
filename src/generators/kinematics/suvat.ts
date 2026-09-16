@@ -44,17 +44,38 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
   return out;
 }
 
-/** Every distinct `must` candidate goes in before any `extra` one, so the headline traps are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * One headline trap always goes in; the remaining musts are preferred within their own side of the
+ * answer, and the rest are chosen towards a randomly drawn number of options *below* it. Without
+ * that, a variant whose named mistakes all overshoot (forgot the ½, forgot the square root, …) puts
+ * the correct option at the same rank in every instance, and "pick the second smallest" answers it
+ * with no arithmetic. Candidates that would stretch the list beyond `maxSpread` are skipped.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 50): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
+  const mags: number[] = Math.abs(a) > 0 ? [Math.abs(a)] : [];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    const x = Math.abs(d.value.toNumber());
+    if (x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread) return;
     seen.push(d.value);
+    if (x > 0) mags.push(x);
     out.push(d);
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const heads = rng.shuffle(must);
+  if (heads.length > 0) take(heads[0]);
+  const rest = heads.slice(1);
+  const side = (lo: boolean) => [...rest, ...rng.shuffle(extra)].filter((d) => (lo ? d.value.toNumber() < a : d.value.toNumber() > a));
+  const below = side(true);
+  const above = side(false);
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
@@ -131,6 +152,10 @@ function sFromUVT(rng: RNG): Generated | null {
     { value: ((v - u) * t) / 2, trap: 'used (v − u) instead of (u + v)' },
     { value: u * t, trap: 'used the initial velocity only' },
     { value: (v - u) * t, trap: 'used the change in velocity × time' },
+    // these three survive u = 0, where (u + v)t, vt and (v − u)t are all the same number
+    { value: (u + v) / 2, trap: 'forgot to multiply by the time: ½(u + v) is the average velocity' },
+    { value: (u + v) / (2 * t), trap: 'divided by the time instead of multiplying' },
+    { value: 0.5 * v * t * t, trap: 'used ½at² with the velocity in place of the acceleration' },
   ]),
   `$s = \\frac{(u + v)}{2}\\,t = \\frac{${u} + ${v}}{2} \\times ${t} = ${s}$ m.`,
   'Distance = average velocity × time = ½(u + v)t; using vt or forgetting the ½ over-counts.',
@@ -160,6 +185,8 @@ function sFromUAT(rng: RNG): Generated | null {
     u > 0 ? { value: 0.5 * a * t * t, trap: 'ignored the initial velocity term ut' } : { value: a * t, trap: 'found the velocity at instead of the distance' },
     { value: u * t, trap: 'ignored the acceleration' },
     { value: (u + a * t) * t, trap: 'used final velocity × time' },
+    { value: u * t * t + 0.5 * a * t * t, trap: 'squared the time in the ut term as well' },
+    { value: u * t + 0.5 * a * t * t * t, trap: 'cubed the time in the ½at² term' },
     a === 10 ? { value: u * t + 4.9 * t * t, trap: 'used g = 9.8 m s⁻² instead of the stated 10 m s⁻²' } : { value: u + 0.5 * a * t * t, trap: 'added u instead of ut' },
   ]),
   `$s = ut + \\tfrac{1}{2}at^2 = ${u} \\times ${t} + \\tfrac{1}{2} \\times ${a} \\times ${t}^2 = ${u * t} + ${0.5 * a * t * t} = ${s}$ m.`,
@@ -169,7 +196,9 @@ function sFromUAT(rng: RNG): Generated | null {
 
 function vFromUAS(rng: RNG): Generated | null {
   const v = rng.pick([6, 8, 10, 12, 15, 16, 20, 25, 30]);
-  const u = rng.pick([0, 0, 0, 2, 3, 4, 5, 6, 8, 10, 12].filter((x) => x < v));
+  // u > 0: with u = 0, a·s, u + a·s and 2as/v collapse onto one another (and onto v), leaving the
+  // question with one real distractor and three unlabelled multiples. From rest is covered by v = u + at.
+  const u = rng.pick([2, 3, 4, 5, 6, 8, 10, 12].filter((x) => x < v));
   const a = rng.pick([2, 4, 5, 10]);
   const twoAS = v * v - u * u;
   if (twoAS % (2 * a) !== 0) return null;
@@ -182,9 +211,12 @@ function vFromUAS(rng: RNG): Generated | null {
     { value: u * u + 2 * a * s, trap: 'forgot to take the square root: this is v², not v' },
     { value: rootOrNull(u * u + a * s), trap: 'forgot the 2 in v² = u² + 2as' },
   ], [
-    u > 0 ? { value: root2as, trap: 'ignored the initial speed: forgot the u² term' } : { value: 2 * a * s / v, trap: 'divided 2as by v instead of square-rooting' },
-    u > 0 ? { value: root2as === null ? null : u + root2as, trap: 'added u to √(2as): speeds do not add like that' } : { value: a * s, trap: 'multiplied a by s and forgot the 2 and the root' },
+    { value: root2as, trap: 'ignored the initial speed: forgot the u² term' },
+    { value: root2as === null ? null : u + root2as, trap: 'added u to √(2as): speeds do not add like that' },
     { value: u + a * s, trap: 'used v = u + as (as if s were a time)' },
+    { value: a * s, trap: 'multiplied a by s and forgot the 2 and the square root' },
+    { value: (u + v) / 2, trap: 'quoted the average speed ½(u + v) instead of the speed at the end' },
+    { value: (u * u + 2 * a * s) / (2 * a), trap: 'divided v² by 2a (that gives the distance again)' },
   ]),
   `$v^2 = u^2 + 2as = ${u * u} + 2 \\times ${a} \\times ${s} = ${v * v}$, so $v = ${v}$ m s$^{-1}$.`,
   'v² = u² + 2as gives v squared: finish with a square root, and keep the factor 2.',
@@ -204,12 +236,16 @@ function aOrTFromUV(rng: RNG, ask: 'a' | 't'): Generated | null {
   if (ask === 'a') {
     const stem = `${who} ${change} in ${q(t, U.t)}. Find its acceleration.`;
     return finish(stem, a, U.a, physOptions(rng, a, U.a, [
-      { value: (v + u) / t, trap: 'added the velocities instead of subtracting: a = (v − u)/t' },
-      u > 0 ? { value: v / t, trap: 'ignored the initial velocity' } : { value: (v - u) * t, trap: 'multiplied by t instead of dividing' },
+      // with u = 0 the "added the velocities" slip is the answer itself, so the headline trap changes
+      u > 0 ? { value: (v + u) / t, trap: 'added the velocities instead of subtracting: a = (v − u)/t' } : { value: (v - u) * t, trap: 'multiplied by t instead of dividing' },
+      u > 0 ? { value: v / t, trap: 'ignored the initial velocity' } : { value: t / v, trap: 'inverted: divided t by the change in velocity' },
     ], [
       { value: (v - u) * t, trap: 'multiplied by t instead of dividing' },
       { value: t / (v - u), trap: 'inverted: divided t by the change in velocity' },
-      { value: (v - u) / (2 * t), trap: 'halved the change in velocity (confused with average velocity)' },
+      { value: (v - u) / (2 * t), trap: 'used the average of the change in velocity' },
+      { value: (v - u) / (t * t), trap: 'divided by the time twice' },
+      { value: (v + u) / (2 * t), trap: 'used the average velocity ½(u + v) in place of the change' },
+      { value: 0.5 * (u + v) * t, trap: 'found the distance ½(u + v)t instead of the acceleration' },
     ]),
     `$a = \\frac{v - u}{t} = \\frac{${v} - ${u}}{${t}} = ${num(a)}$ m s$^{-2}$.`,
     'Acceleration is the change in velocity divided by the time: (v − u)/t, not (v + u)/t or v/t.',
@@ -218,11 +254,14 @@ function aOrTFromUV(rng: RNG, ask: 'a' | 't'): Generated | null {
   const stem = `${who} ${change} with a uniform acceleration of ${q(a, U.a)}. How long does this take?`;
   return finish(stem, t, U.t, physOptions(rng, t, U.t, [
     u > 0 ? { value: v / a, trap: 'ignored the initial velocity: t = (v − u)/a' } : { value: (v - u) * a, trap: 'multiplied by a instead of dividing' },
-    { value: (v + u) / a, trap: 'added the velocities instead of subtracting' },
+    u > 0 ? { value: (v + u) / a, trap: 'added the velocities instead of subtracting' } : { value: a / v, trap: 'inverted: divided a by the change in velocity' },
   ], [
     { value: (v - u) * a, trap: 'multiplied by a instead of dividing' },
     { value: (v * v - u * u) / (2 * a), trap: 'found the distance (v² − u²)/2a instead of the time' },
-    { value: (v - u) / (2 * a), trap: 'an extra factor of ½ crept in' },
+    { value: (v - u) / (2 * a), trap: 'used the average of the change in velocity' },
+    { value: (v - u) / (a * a), trap: 'divided by the acceleration twice' },
+    { value: a / (v - u), trap: 'inverted: divided a by the change in velocity' },
+    { value: (v + u) / (2 * a), trap: 'used the average velocity ½(u + v) in place of the change' },
   ]),
   `$v = u + at$, so $t = \\frac{v - u}{a} = \\frac{${v} - ${u}}{${num(a)}} = ${num(t)}$ s.`,
   'Rearrange v = u + at: t = (v − u)/a; subtract u before dividing.',
@@ -263,9 +302,11 @@ function restFromUS(rng: RNG, ask: 't' | 'a'): Generated | null {
       { value: s / u, trap: 'used s = ut with the initial speed: the average speed is only u/2' },
       { value: (u * u) / (2 * s), trap: 'found the deceleration u²/(2s) instead of the time' },
     ], [
-      { value: 4 * s / u, trap: 'doubled the time' },
-      { value: u / s * 10, trap: 'inverted the fraction' },
+      { value: 4 * s / u, trap: 'divided by the average speed twice: t = 2s/u, not 4s/u' },
+      { value: u / s, trap: 'inverted the fraction: t = 2s/u' },
       { value: s / (2 * u), trap: 'halved s/u instead of doubling it' },
+      { value: (2 * s) / (u * u), trap: 'divided by u² instead of u' },
+      { value: u / (2 * s), trap: 'inverted the fraction and kept the 2 on the bottom' },
     ]),
     `Average speed is $\\frac{u}{2} = ${num(u / 2)}$ m s$^{-1}$, so $t = \\frac{s}{u/2} = \\frac{2 \\times ${s}}{${u}} = ${t}$ s.`,
     'Coming to rest uniformly, the average speed is u/2, so t = 2s/u; s/u is half the true time.',
@@ -305,6 +346,8 @@ function uFromSTA(rng: RNG): Generated | null {
     { value: s / t - a * t, trap: 'forgot the ½ in ½at²' },
     { value: s / t - 0.5 * a, trap: 'forgot the t in ½at' },
     { value: u + a * t, trap: 'found the final velocity, not the initial velocity' },
+    { value: s / t - 0.5 * a * t * t, trap: 'subtracted ½at² instead of ½at' },
+    { value: (2 * s) / t - 0.5 * a * t, trap: 'used 2s/t for the average velocity' },
   ]),
   `$s = ut + \\tfrac{1}{2}at^2$: $${s} = ${t}u ${a < 0 ? '-' : '+'} \\tfrac{1}{2} \\times ${mag} \\times ${t}^2 = ${t}u ${a < 0 ? '-' : '+'} ${0.5 * mag * t * t}$, so $u = \\frac{${s - 0.5 * a * t * t}}{${t}} = ${u}$ m s$^{-1}$.`,
   decel
@@ -327,18 +370,22 @@ function twoStage(rng: RNG): Generated | null {
   if (!Number.isInteger(total) || total > 1500) return null;
   const T = t1 + t2;
   const avg = total / T;
-  const askAvg = rng.bool(0.35) && Number.isInteger(avg * 2);
+  const askAvg = rng.bool(0.4);
+  if (askAvg && !Number.isInteger(avg * 2)) return null; // redraw rather than silently switching ask
   const who = rng.pick(['A car', 'A train', 'A cyclist', 'A tram', 'A runner']);
   const intro = `${who} starts from rest and accelerates uniformly at ${q(a, U.a)} for ${q(t1, U.t)}, then continues at the constant speed it has reached for a further ${q(t2, U.t)}.`;
+  // a·t₁² + s₂ and v·T are the same number (v = a t₁), so only one of them can ever be offered.
   const distTraps: Cand[] = [
-    { value: a * t1 * t1 + s2, trap: 'forgot the ½ in the first stage (½at²)' },
-    { value: v * T, trap: 'treated the whole journey as being at the final speed' },
+    { value: v * T, trap: 'treated the whole journey as being at the final speed (that is also what forgetting the ½ in ½at₁² gives)' },
+    { value: s1 + v * t2 + 0.5 * a * t2 * t2, trap: 'assumed it kept accelerating through the second stage' },
   ];
   const distExtra: Cand[] = [
     { value: s1 + 0.5 * s2, trap: 'halved the second stage too: the ½ only belongs to the accelerating stage' },
     { value: s1, trap: 'forgot the constant-speed stage' },
     { value: 0.5 * v * T, trap: 'used ½vt for the whole journey' },
     { value: s2, trap: 'forgot the accelerating stage' },
+    { value: s1 + v * T, trap: 'counted the accelerating stage again inside the cruise' },
+    { value: 0.5 * a * T * T, trap: 'used ½aT² for the whole journey' },
   ];
   if (askAvg) {
     return finish(`${intro} Find its average speed for the whole journey.`, avg, U.v, physOptions(rng, avg, U.v, [
@@ -373,8 +420,9 @@ function tFromS(rng: RNG): Generated | null {
   ], [
     { value: s / a, trap: 'used s = at (no ½, no square)' },
     { value: rootOrNull(s / (2 * a)), trap: 'put the ½ on the wrong side: t² = 2s/a, not s/(2a)' },
-    { value: 2 * t, trap: 'doubled the time' },
+    { value: 2 * t, trap: 'doubled the time (that is the time to travel 4s)' },
     { value: rootOrNull(2 * s) === null ? null : rootOrNull(2 * s)! / a, trap: 'took the root before dividing by a' },
+    { value: (2 * s) / (a * a), trap: 'divided by a twice and forgot the root' },
   ]),
   `$s = \\tfrac{1}{2}at^2$, so $t^2 = \\frac{2s}{a} = \\frac{${num(2 * s)}}{${a}} = ${num(t * t)}$ and $t = ${num(t)}$ s.`,
   'From rest, s = ½at² so t = √(2s/a): remember both the 2 and the square root.',
@@ -397,6 +445,8 @@ function aFromSUT(rng: RNG): Generated | null {
     { value: s / t / t, trap: 'divided the distance by t twice with no ut and no 2' },
     { value: (s - u * t) / t, trap: 'divided the extra distance by t once only (no 2, no square)' },
     { value: (2 * s) / t - u, trap: 'found the final velocity 2s/t − u instead of the acceleration' },
+    { value: (2 * (s - u * t)) / (t * t * t), trap: 'cubed the time' },
+    { value: (2 * s - u * t) / (t * t), trap: 'doubled s before subtracting ut' },
   ]),
   `$s - ut = ${s} - ${u * t} = ${s - u * t}$ m is the extra distance $\\tfrac{1}{2}at^2$, so $a = \\frac{2 \\times ${s - u * t}}{${t}^2} = \\frac{${2 * (s - u * t)}}{${t * t}} = ${num(a)}$ m s$^{-2}$.`,
   'Subtract the ut part first, then a = 2(s − ut)/t²: keep the 2 and the square.',

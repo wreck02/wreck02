@@ -15,7 +15,9 @@ import type { RNG } from '../../core/rng';
  *
  * Answers carry their unit (W, kW, J, kJ, N); percentages are bare numbers with the stem asking for a
  * percentage (the typed-answer parser reads a trailing "%" as ÷100). Every wrong option is a named mistake;
- * parameters that cannot supply four distinct clean ones are redrawn, never padded.
+ * parameters that cannot supply four distinct clean ones are redrawn, never padded. A percentage option is
+ * never above 100% (an impossible efficiency is deleted for free), a power is printed as a decimal and never
+ * as a surd, and a list carries at most one power-of-ten option, so it is never a ladder of decimal points.
  */
 
 const G = 10;

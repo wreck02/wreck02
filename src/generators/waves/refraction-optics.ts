@@ -46,30 +46,29 @@ function usable(v: Exact | null, format: NumberFormat): v is Exact {
 }
 
 /**
- * Headline traps first, then the rest chosen towards a randomly drawn number of options *below* the
- * answer. Most of the mistakes here (multiplying by n instead of dividing, leaving a quantity
- * unchanged) overshoot, so without this the answer would sit second-from-bottom in every question.
+ * Choose the distractors.
+ *
+ * Most of the mistakes here (multiplying by n instead of dividing, leaving a quantity unchanged)
+ * overshoot, so taking the headline traps first and filling up afterwards puts the answer
+ * second-from-bottom in nearly every question — "pick the second smallest" would be a winning
+ * strategy. Instead the number of options *below* the answer is drawn uniformly and then clamped to
+ * what the candidate list can supply, and the `must` traps keep their priority inside each side.
  */
 function ranked(rng: RNG, answer: Exact, must: Cand[], extra: Cand[], format: NumberFormat, count = 4): Distractor[] {
   const a = answer.toNumber();
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Cand) => {
-    if (out.length >= count || !usable(d.value, format) || seen.some((s) => s.equals(d.value!))) return;
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (!usable(d.value, format) || seen.some((s) => s.equals(d.value!))) continue;
     seen.push(d.value);
-    out.push({ value: d.value, trap: d.trap });
-  };
-  must.forEach(take);
-  const pool = rng.shuffle(extra).filter((d): d is { value: Exact; trap: string } => usable(d.value, format));
+    pool.push({ value: d.value, trap: d.trap });
+  }
   const below = pool.filter((d) => d.value.toNumber() < a);
   const above = pool.filter((d) => d.value.toNumber() > a);
-  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
-  while (out.length < count && (below.length > 0 || above.length > 0)) {
-    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
-    take((useBelow ? below : above).shift()!);
-    if (useBelow) wantBelow--;
-  }
-  return out;
+  const lo = Math.max(0, count - above.length);
+  const hi = Math.min(count, below.length);
+  const nBelow = Math.max(Math.min(rng.int(0, count), hi), Math.min(lo, hi));
+  return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
 }
 
 interface Pack {
@@ -355,12 +354,19 @@ function refractionAngle(rng: RNG): Generated | null {
   });
 }
 
-/** The only two refractive indices whose critical angle is a round number of degrees. */
-const CRITICAL: [number, number, string][] = [[2, 30, '2'], [Math.SQRT2, 45, '\\sqrt{2}']];
+/**
+ * The only refractive indices whose critical angle is a round number of degrees: sin C = 1/n has to
+ * land on 1/2, √2/2 or √3/2.
+ */
+const CRITICAL: [number, number, string][] = [
+  [2, 30, '2'],
+  [Math.SQRT2, 45, '\\sqrt{2}'],
+  [2 / Math.sqrt(3), 60, '\\frac{2\\sqrt{3}}{3}'],
+];
 
 function criticalAngle(rng: RNG): Generated | null {
   const [n, Cdeg, tex] = rng.pick(CRITICAL);
-  const other = Cdeg === 30 ? 45 : 30;
+  const other = rng.pick([30, 45, 60].filter((d) => d !== Cdeg));
   const stem = rng.pick([
     `${materialFor(rng, n)} has refractive index $${tex}$. Find the critical angle for a boundary between this material and air, in degrees.`,
     `Light travels inside a material of refractive index $${tex}$ and meets the boundary with air. Find the critical angle for that boundary, in degrees.`,
@@ -375,10 +381,11 @@ function criticalAngle(rng: RNG): Generated | null {
     ],
     extra: [
       { value: E(90), trap: 'used sin C = 1 (a ray grazing along the boundary) instead of sin C = 1/n' },
-      { value: E(2 * Cdeg), trap: 'doubled the angle' },
-      { value: E(60), trap: 'read the sine table one row out' },
-      { value: E(15), trap: 'halved the smaller standard critical angle' },
+      { value: 2 * Cdeg < 90 ? E(2 * Cdeg) : null, trap: 'doubled the angle' },
+      { value: E(Cdeg / 2), trap: 'halved the angle' },
+      { value: E(15), trap: 'halved the smallest standard critical angle' },
       { value: E(Cdeg - 10), trap: 'arithmetic slip of ten degrees' },
+      { value: E(Cdeg + 10), trap: 'arithmetic slip of ten degrees the other way' },
     ],
     solution: `$\\sin C = \\dfrac{1}{n} = \\dfrac{1}{${tex}}${n === 2 ? '' : ` = ${exactSin(Cdeg).toLatex()}`}$, so $C = ${Cdeg}^{\\circ}$.`,
     trap: 'sin C = 1/n gives the sine of the critical angle; the answer wanted is the angle itself, in degrees.',
@@ -387,17 +394,23 @@ function criticalAngle(rng: RNG): Generated | null {
   });
 }
 
-/** [n, p, q] with 1/n = p/q in lowest terms; every n is one a real material could have. */
-const SIN_C: [number, number, number][] = [
-  [1.2, 5, 6], [1.25, 4, 5], [1.4, 5, 7], [1.5, 2, 3], [1.6, 5, 8], [1.75, 4, 7],
-  [1.8, 5, 9], [2, 1, 2], [2.2, 5, 11], [2.25, 4, 9], [2.4, 5, 12],
+/**
+ * [n, p, q] with 1/n = p/q in lowest terms; every n is one a real material could have (water 1.33 …
+ * diamond 2.42) and every q is a denominator the clean-number rule accepts. `tex` prints n when the
+ * decimal does not: 4/3 for water, not 1.3333.
+ */
+const SIN_C: [number, number, number, string?][] = [
+  [1.2, 5, 6], [1.25, 4, 5], [4 / 3, 3, 4, '\\frac{4}{3}'], [1.375, 8, 11], [1.4, 5, 7], [1.44, 25, 36],
+  [1.5, 2, 3], [1.6, 5, 8], [1.68, 25, 42], [1.75, 4, 7], [1.8, 5, 9], [1.875, 8, 15],
+  [2, 1, 2], [2.1, 10, 21], [2.2, 5, 11], [2.25, 4, 9], [2.4, 5, 12],
 ];
 
 function sinCritical(rng: RNG): Generated | null {
-  const [n, p, qd] = rng.pick(SIN_C);
+  const [n, p, qd, tex] = rng.pick(SIN_C);
+  const nTxt = tex ? `$${tex}$` : num(n);
   const stem = rng.bool(0.5)
-    ? `${materialFor(rng, n)} has refractive index ${num(n)}. The critical angle for a boundary between this material and air is $C$. Find $\\sin C$, giving your answer as a fraction in its lowest terms.`
-    : `Light inside ${lower(materialFor(rng, n))} of refractive index ${num(n)} meets the boundary with air. Find $\\sin C$ for this boundary, where $C$ is the critical angle, giving your answer as a fraction in its lowest terms.`;
+    ? `${materialFor(rng, n)} has refractive index ${nTxt}. The critical angle for a boundary between this material and air is $C$. Find $\\sin C$, giving your answer as a fraction in its lowest terms.`
+    : `Light inside ${lower(materialFor(rng, n))} of refractive index ${nTxt} meets the boundary with air. Find $\\sin C$ for this boundary, where $C$ is the critical angle, giving your answer as a fraction in its lowest terms.`;
   return pack(rng, {
     stem,
     answer: frac(p, qd),
@@ -413,7 +426,7 @@ function sinCritical(rng: RNG): Generated | null {
       { value: frac(p, qd + p), trap: 'used 1/(n + 1)' },
       { value: frac(p, qd - p), trap: 'used 1/(n − 1)' },
     ],
-    solution: `$\\sin C = \\dfrac{1}{n} = \\dfrac{1}{${num(n)}} = \\dfrac{${p}}{${qd}}$.`,
+    solution: `$\\sin C = \\dfrac{1}{n} = \\dfrac{1}{${tex ?? num(n)}} = \\dfrac{${p}}{${qd}}$.`,
     trap: 'sin C = 1/n: the fraction is the reciprocal of the refractive index.',
     tags: ['waves', 'refraction', 'critical-angle', 'fractions'],
     params: { variant: 'sin-critical', n },
@@ -462,6 +475,7 @@ function wavelengthInGlass(rng: RNG): Generated | null {
       { value: E(r12(lam / 2)), trap: 'halved the wavelength instead of dividing by n' },
       { value: E(r12((2 * lam) / n)), trap: 'doubled the answer' },
       { value: E(r12(lam / (n * n))), trap: 'divided by n twice' },
+      { value: E(r12(lam / (n + 1))), trap: 'divided by n + 1' },
       { value: E(r12(lam - 100)), trap: 'subtracted a round number instead of dividing' },
     ]
     : [
@@ -470,6 +484,7 @@ function wavelengthInGlass(rng: RNG): Generated | null {
       { value: E(r12(lam - inside)), trap: 'gave the increase in wavelength, not the wavelength in air' },
       { value: E(r12(lam / 2)), trap: 'halved the answer' },
       { value: E(r12(2 * lam)), trap: 'doubled the answer' },
+      { value: E(r12(inside * (n + 1))), trap: 'multiplied by n + 1' },
       { value: E(r12(inside + 100)), trap: 'added a round number instead of multiplying' },
     ];
   return pack(rng, {
@@ -528,7 +543,10 @@ function changeChoice(rng: RNG): Generated | null {
 
 // ------------------------------------------------------------------------------------------ level 5
 
-const BLOCK_PAIRS: [number, number][] = [[30, 20], [40, 25], [45, 30], [50, 30], [60, 35], [60, 40], [70, 40], [55, 35]];
+const BLOCK_PAIRS: [number, number][] = [
+  [30, 20], [40, 25], [45, 30], [50, 30], [60, 35], [60, 40], [70, 40], [55, 35],
+  [25, 15], [35, 25], [50, 35], [65, 40], [75, 45], [80, 45], [65, 35], [45, 25],
+];
 
 function parallelBlock(rng: RNG): Generated | null {
   const [i, rr] = rng.pick(BLOCK_PAIRS);
@@ -557,28 +575,44 @@ function parallelBlock(rng: RNG): Generated | null {
 const TIR_TEXT = 'The ray is totally internally reflected at the boundary.';
 const UNDEVIATED = 'The ray passes out of the material without changing direction.';
 const ABSORBED = 'The light is absorbed at the boundary and does not continue.';
+const BENDS_IN = 'The ray refracts out of the material into the air, bending towards the normal.';
 
 /**
- * [n, the angle of incidence inside the material, the angle of refraction out (null = total internal
- *  reflection), n as LaTeX, the critical angle when it is a round number of degrees].
- * With n = √3 the critical angle is 35.3°, so that case is settled by comparing sines, never by
- * printing an approximate angle.
+ * A boundary the ray meets from inside the material.
+ *  `out`     the angle it refracts out at, or null when it is totally internally reflected;
+ *  `Cdeg`    the critical angle, quoted only when it is a round number of degrees;
+ *  `invSq`   1/n² as an exact fraction — with n = √3 the critical angle is 35.3°, so that case is
+ *            settled by comparing sin² i with 1/n², never by printing an approximate angle.
  */
-const TIR_CASES: [number, number, number | null, string, number | null][] = [
-  [2, 40, null, '2', 30],
-  [2, 45, null, '2', 30],
-  [2, 50, null, '2', 30],
-  [2, 60, null, '2', 30],
-  [2, 70, null, '2', 30],
-  [Math.SQRT2, 50, null, '\\sqrt{2}', 45],
-  [Math.SQRT2, 60, null, '\\sqrt{2}', 45],
-  [Math.SQRT2, 70, null, '\\sqrt{2}', 45],
-  [Math.SQRT2, 30, 45, '\\sqrt{2}', 45],
-  [Math.sqrt(3), 30, 60, '\\sqrt{3}', null],
+interface TirCase { n: number; i: number; out: number | null; tex: string; Cdeg: number | null; invSq: string }
+
+const TIR_CASES: TirCase[] = [
+  { n: 2, i: 40, out: null, tex: '2', Cdeg: 30, invSq: '\\frac{1}{4}' },
+  { n: 2, i: 45, out: null, tex: '2', Cdeg: 30, invSq: '\\frac{1}{4}' },
+  { n: 2, i: 50, out: null, tex: '2', Cdeg: 30, invSq: '\\frac{1}{4}' },
+  { n: 2, i: 60, out: null, tex: '2', Cdeg: 30, invSq: '\\frac{1}{4}' },
+  { n: 2, i: 70, out: null, tex: '2', Cdeg: 30, invSq: '\\frac{1}{4}' },
+  { n: Math.SQRT2, i: 50, out: null, tex: '\\sqrt{2}', Cdeg: 45, invSq: '\\frac{1}{2}' },
+  { n: Math.SQRT2, i: 60, out: null, tex: '\\sqrt{2}', Cdeg: 45, invSq: '\\frac{1}{2}' },
+  { n: Math.SQRT2, i: 70, out: null, tex: '\\sqrt{2}', Cdeg: 45, invSq: '\\frac{1}{2}' },
+  { n: Math.sqrt(3), i: 45, out: null, tex: '\\sqrt{3}', Cdeg: null, invSq: '\\frac{1}{3}' },
+  { n: Math.sqrt(3), i: 60, out: null, tex: '\\sqrt{3}', Cdeg: null, invSq: '\\frac{1}{3}' },
+];
+
+/**
+ * The ray gets out. Only indices and angles whose sines are exact appear, so the emergent angle is a
+ * whole number of degrees. There are fewer of these than of the TIR cases, so the two lists are drawn
+ * from with equal probability: a candidate who answers "totally internally reflected" every time and
+ * never compares i with C must not beat the 1-in-5 a guess deserves by much.
+ */
+const REFRACT_CASES: TirCase[] = [
+  { n: Math.SQRT2, i: 30, out: 45, tex: '\\sqrt{2}', Cdeg: 45, invSq: '\\frac{1}{2}' },
+  { n: Math.sqrt(3), i: 30, out: 60, tex: '\\sqrt{3}', Cdeg: null, invSq: '\\frac{1}{3}' },
+  { n: Math.sqrt(6) / 2, i: 45, out: 60, tex: '\\frac{\\sqrt{6}}{2}', Cdeg: null, invSq: '\\frac{2}{3}' },
 ];
 
 function tirChoice(rng: RNG): Generated | null {
-  const [n, i, out, tex, Cdeg] = rng.pick(TIR_CASES);
+  const { n, i, out, tex, Cdeg, invSq } = rng.pick(rng.bool(0.5) ? TIR_CASES : REFRACT_CASES);
   const refr = (d: number) => `The ray refracts out of the material into the air at ${DEG(d)} to the normal.`;
   const correct = out === null ? TIR_TEXT : refr(out);
   const wrong: { display: string; trap: string; key?: string }[] = [];
@@ -603,15 +637,20 @@ function tirChoice(rng: RNG): Generated | null {
       trap: 'a reflected ray makes the angle of incidence with the normal, not with the surface',
     });
   }
+  wrong.push({ display: BENDS_IN, trap: 'leaving a denser medium the ray bends away from the normal, not towards it' });
   wrong.push({ display: ABSORBED, trap: 'at a boundary light is reflected or refracted, not absorbed' });
   // The critical angle is only ever quoted when it is a round number of degrees; otherwise the
   // comparison is made exactly, between sin^2 i and 1/n^2 (arcsin(1/√3) = 35.3° is not a quotable angle).
   const sinI = out !== null || Cdeg === null ? exactSin(i) : null;
   const compare = Cdeg !== null
     ? `$\\sin C = \\dfrac{1}{${tex}}$, so $C = ${Cdeg}^{\\circ}$, and ${DEG(i)} is ${out === null ? 'greater' : 'less'} than $C$`
-    : `$\\sin^2 C = \\dfrac{1}{${Math.round(n * n)}}$ and $\\sin^2 ${i}^{\\circ} = ${sinI!.mul(sinI!).toLatex({ format: 'fraction' })}$, so $\\sin i$ is ${out === null ? 'greater' : 'less'} than $\\sin C$`;
+    : `$\\sin^2 C = \\dfrac{1}{n^{2}} = ${invSq}$ and $\\sin^2 ${i}^{\\circ} = ${sinI!.mul(sinI!).toLatex({ format: 'fraction' })}$, so $\\sin i$ is ${out === null ? 'greater' : 'less'} than $\\sin C$`;
   return {
-    stem: `A ray of light travelling inside a material of refractive index $${tex}$ meets the boundary with air at an angle of incidence of ${DEG(i)} to the normal. Which of the following describes what happens to the ray?`,
+    stem: rng.pick([
+      `A ray of light travelling inside a material of refractive index $${tex}$ meets the boundary with air at an angle of incidence of ${DEG(i)} to the normal. Which of the following describes what happens to the ray?`,
+      `Light inside a block of refractive index $${tex}$ strikes the flat boundary with the air at ${DEG(i)} to the normal. Which of the following describes what happens to the light?`,
+      `A ray travelling inside a transparent material of refractive index $${tex}$ reaches its surface, making ${DEG(i)} with the normal. Beyond the surface is air. Which of the following describes what happens next?`,
+    ]),
     answer: { kind: 'choice', value: correct },
     options: buildChoiceOptions(rng, correct, wrong),
     solution: out === null

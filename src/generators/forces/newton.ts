@@ -122,6 +122,7 @@ function fma(rng: RNG): Generated | null {
       { value: F / (m * G), trap: 'divided by the weight mg instead of the mass' },
       { value: (F * G) / m, trap: 'multiplied by g as well: a = F/m needs no g' },
       { value: F / (m * m), trap: 'divided by the mass twice' },
+      { value: F, trap: 'quoted the force: the question asks for the acceleration' },
       { value: (F / m) / 2, trap: 'halved: a = F/m, with no ½ (that belongs to ½at²)' },
     ]),
     `$F = ma$, so $a = \\frac{F}{m} = \\frac{${F}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
@@ -137,6 +138,7 @@ function fma(rng: RNG): Generated | null {
       { value: a / m, trap: 'divided the wrong way round' },
       { value: m * a * a, trap: 'squared the acceleration' },
       { value: (m * a) / G, trap: 'divided by g as well: F = ma needs no g' },
+      { value: m, trap: 'quoted the mass: the question asks for the force' },
       { value: m * a * 0.5, trap: 'halved: F = ma, with no ½ (that belongs to ½at²)' },
     ]),
     `$F = ma = ${m} \\times ${num(a)} = ${F}$ N.`,
@@ -151,6 +153,8 @@ function fma(rng: RNG): Generated | null {
     { value: F / (a * G), trap: 'divided by g as well (confused mass with weight)' },
     { value: F * G / a, trap: 'found the weight F g/a instead of the mass' },
     { value: F / (a * a), trap: 'divided by the acceleration twice' },
+    { value: F, trap: 'quoted the force: the question asks for the mass' },
+    { value: a * a, trap: 'squared the acceleration instead of dividing the force by it' },
   ]),
   `$F = ma$, so $m = \\frac{F}{a} = \\frac{${F}}{${num(a)}} = ${m}$ kg.`,
   'm = F/a; the answer is a mass in kg (no factor of g involved).',
@@ -173,6 +177,7 @@ function weight(rng: RNG): Generated | null {
       { value: W / 100, trap: 'divided by g² (or slipped a power of ten)' },
       { value: W - G, trap: 'subtracted g instead of dividing by it' },
       { value: (W - G) / G, trap: 'subtracted g as well as dividing by it' },
+      { value: (W + G) / G, trap: 'added g before dividing by it' },
     ]),
     `$W = mg$, so $m = \\frac{W}{g} = \\frac{${W}}{10} = ${num(m)}$ kg.`,
     'Weight is a force (N) and mass is in kg: m = W/g, not W itself.',
@@ -183,10 +188,11 @@ function weight(rng: RNG): Generated | null {
     { value: m, trap: 'quoted the mass as the weight: W = mg' },
     { value: m * G * G, trap: 'multiplied by g twice' },
   ], [
-    { value: rng.bool(0.3) ? m * 9.8 : null, trap: 'used g = 9.8 instead of the stated 10' },
+    { value: rng.bool(0.4) ? m * 9.8 : null, trap: 'used g = 9.8 instead of the stated 10' },
     { value: m / G, trap: 'divided by g instead of multiplying' },
     { value: m + G, trap: 'added g instead of multiplying' },
     { value: (m + G) * G, trap: 'added g to the mass before multiplying by g' },
+    { value: m * (G + 1), trap: 'added the mass to the weight' },
   ]),
   `$W = mg = ${num(m)} \\times 10 = ${num(W)}$ N.`,
   'Weight = mg (newtons); the mass in kg is not the weight.',
@@ -357,6 +363,7 @@ function pushOnRough(rng: RNG): Generated | null {
     { value: (P - fr) / (m * G), trap: 'divided by the weight mg instead of the mass' },
     { value: fr / m, trap: 'used the friction force instead of the resultant (that is μg)' },
     { value: (P - fr) / (m * m), trap: 'divided by the mass twice' },
+    { value: P - 2 * fr > 0 ? (P - 2 * fr) / m : null, trap: 'subtracted the friction twice' },
   ]),
   `Friction $= \\mu mg = ${num(mu)} \\times ${m * G} = ${num(fr)}$ N. Resultant $= ${P} - ${num(fr)} = ${num(P - fr)}$ N, so $a = \\frac{${num(P - fr)}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
   'Friction opposes the motion: subtract μmg from the push before dividing by the mass.',
@@ -510,6 +517,7 @@ function tablePulley(rng: RNG): Generated | null {
       { value: (m1 * m2) / (m1 + m2), trap: 'forgot g' },
       { value: m1 > m2 ? (m1 * m2 * G) / (m1 - m2) : null, trap: 'used the difference of the masses instead of their sum' },
       { value: m1 * G * m2, trap: 'multiplied the two weights' },
+      { value: (m1 * m2 * G) / (m1 + 2 * m2), trap: 'counted the hanging particle twice in the total mass' },
     ]),
     `System: $a = \\frac{${m2} \\times 10}{${m1} + ${m2}} = ${num(a)}$ m s$^{-2}$. Table particle: $T = m_1 a = ${m1} \\times ${num(a)} = ${num(T)}$ N.`,
     'Only the hanging weight drives the system, but the whole mass accelerates; then T = m₁a for the particle on the smooth table.',
@@ -523,6 +531,7 @@ function tablePulley(rng: RNG): Generated | null {
     { value: m2 / (m1 + m2), trap: 'forgot g (divided the hanging mass by the total mass)' },
     { value: (m1 * G) / (m1 + m2), trap: 'used the wrong weight as the driving force' },
     { value: (m2 * G) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
+    { value: (m2 * G) / (m1 + 2 * m2), trap: 'counted the hanging particle twice in the total mass' },
   ]),
   `The only unbalanced force is the hanging weight $${m2 * G}$ N acting on a total mass of $${m1 + m2}$ kg: $a = \\frac{${m2 * G}}{${m1 + m2}} = ${num(a)}$ m s$^{-2}$.`,
   'Driving force is the hanging weight m₂g; it accelerates the total mass m₁ + m₂, so a = m₂g/(m₁ + m₂).',
@@ -530,15 +539,17 @@ function tablePulley(rng: RNG): Generated | null {
 }
 
 function tow(rng: RNG): Generated | null {
-  const M = rng.pick([800, 1000, 1200, 1500]);
-  const m = rng.pick([200, 400, 500, 600, 800, 1000]);
+  // Mass pairs with m/(M + m) a short decimal, and resistances proportional to mass, so that
+  // "ignored the resistances", "forgot the trailer's resistance" and the rest are clean numbers.
+  const [M, m] = rng.pick([[800, 200], [1200, 400], [1500, 500], [1200, 800], [1000, 1000], [1500, 1000], [800, 800], [1000, 600], [800, 1200]]);
   const a = rng.pick([0.5, 1, 1.5, 2, 2.5, 3]);
   // Most draws give the car and the trailer a resistance. Without them every named mistake overshoots
   // the tow-bar tension ma (F, Ma and mg are all larger, because a < g), so the answer is the smallest
   // option in almost every question; "forgot the trailer's resistance" is the mistake that undershoots.
   const rough = rng.bool(0.75);
-  const RM = rough ? rng.pick([200, 300, 400, 500, 600]) : 0;
-  const Rm = rough ? rng.pick([100, 150, 200, 250, 300]) : 0;
+  const c = rng.pick([0.25, 0.5, 0.75, 1]);
+  const RM = rough ? M * c : 0;
+  const Rm = rough ? m * c : 0;
   const F = (M + m) * a + RM + Rm;
   const T = m * a + Rm;
   const askT = rng.bool(0.6);
@@ -570,6 +581,7 @@ function tow(rng: RNG): Generated | null {
     { value: rough ? F / (M + m) : null, trap: 'ignored the resistances' },
     { value: rough ? (F - RM) / (M + m) : null, trap: 'forgot the resistance on the trailer' },
     { value: rough ? (RM + Rm) / (M + m) : null, trap: 'used the resistance as the resultant force' },
+    { value: rough ? (F - RM - 2 * Rm) / (M + m) : null, trap: 'subtracted the trailer\'s resistance twice' },
     { value: (F - RM - Rm) / ((M + m) * G), trap: 'divided by the total weight instead of the total mass' },
     { value: (F + RM + Rm) / (M + m), trap: 'added the resistances instead of subtracting them' },
     { value: M > m ? (F - RM - Rm) / (M - m) : null, trap: 'subtracted the masses instead of adding them' },
@@ -601,6 +613,7 @@ function lift(rng: RNG): Generated | null {
       { value: M * (G + signedA), trap: 'forgot the passenger' },
       { value: (M + m) * a, trap: 'found only the resultant force (M + m)a' },
       { value: (M + m) * (9.8 + signedA), trap: 'used g = 9.8 instead of the stated 10' },
+      { value: (M + m) * G + (M + m) * a * G, trap: 'multiplied the (M + m)a term by g as well' },
     ]),
     `Upwards positive, acceleration $${num(signedA)}$ m s$^{-2}$: $T - ${W} = ${M + m} \\times (${num(signedA)})$, so $T = ${M + m} \\times ${num(G + signedA)} = ${T}$ N.`,
     'Direction of acceleration, not of motion, decides the sign: T = (total mass)(g + a) with a positive upwards.',
@@ -614,6 +627,7 @@ function lift(rng: RNG): Generated | null {
     { value: m * a, trap: 'found only the resultant force ma' },
     { value: m, trap: 'quoted the mass as the reading' },
     { value: m * (9.8 + signedA), trap: 'used g = 9.8 instead of the stated 10' },
+    { value: m * G + m * a * G, trap: 'multiplied the ma term by g as well' },
   ]),
   `Upwards positive, the acceleration is $${num(signedA)}$ m s$^{-2}$. $R - mg = ma$: $R = ${m}(10 ${signedA >= 0 ? '+' : '-'} ${num(a)}) = ${m} \\times ${num(G + signedA)} = ${R}$ N.`,
   'Apparent weight R = m(g + a) with a positive upwards; "moving up but slowing down" is a downward acceleration, so R < mg.',

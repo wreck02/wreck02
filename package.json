@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "sample": "vite-node scripts/sample.ts"
+    "sample": "vite-node scripts/sample.ts",
+    "stats": "vite-node scripts/distractor-stats.ts"
   },
   "dependencies": {
     "katex": "^0.18.7",

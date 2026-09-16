@@ -16,7 +16,7 @@ const SHORTCUTS: { keys: ReactNode; action: string }[] = [
 const SYNTAX: { input: string; means: string }[] = [
   { input: '3/4   0.75   -1/2', means: 'Fractions and decimals. Any equivalent form is accepted: 6/8 is 3/4.' },
   { input: '1 1/2', means: 'Mixed number, 3/2.' },
-  { input: '25%', means: 'Percentage, 1/4.' },
+  { input: '25%', means: 'Read as 25 when the question asks for a percentage, and as 1/4 otherwise.' },
   { input: '2√5   2sqrt5   2*sqrt(5)', means: 'Surds. √ and sqrt are interchangeable.' },
   { input: 'sqrt(12)', means: 'Simplified automatically to 2√3.' },
   { input: 'π/6   pi/6   2pi', means: 'Multiples of π.' },
@@ -24,7 +24,7 @@ const SYNTAX: { input: string; means: string }[] = [
   { input: '±3', means: 'Both 3 and −3 (for a two-root answer).' },
   { input: 'x = 2 or x = 3   2, 3', means: 'A set of values in any order. "x =" is ignored.' },
   { input: '1/(2√3)', means: 'Rationalised automatically. Implicit products bind tighter than division, so 1/2√3 also means 1/(2√3), not (1/2)√3.' },
-  { input: '5 m/s   30°   2 kg', means: 'A unit after a number is ignored; give the number in the unit the question asks for.' },
+  { input: '5 m/s   30°   20 kg m s^-1', means: 'A trailing unit is ignored, compound units included; give the number in the unit the question asks for.' },
 ];
 
 export function Help({ nav }: { nav: Nav }) {

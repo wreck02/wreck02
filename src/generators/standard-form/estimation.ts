@@ -88,18 +88,54 @@ function cleanOnly(ds: Cand[], fmt: 'decimal' | 'sf' = 'decimal'): Distractor[] 
   return out;
 }
 
-/** `must` traps first, then shuffled extras; distinct, and within three orders of magnitude of the answer. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Choose the distractors so that the answer moves around the sorted option list: a random number of
+ * them is taken from below the answer and the rest from above, so the rank histogram is flat instead
+ * of peaking at the median. At most `maxPow10` options may be the answer at another scale — a list of
+ * the same digits with the decimal point moved is one mistake, not four — and no trap is repeated
+ * (the two renormalisation slips used to share a label and appear together). Candidates stay within
+ * `maxRatio` of the answer (an option a thousand times the answer is not a real choice). `must` first,
+ * then the extras in random order.
+ */
+function spread(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], opts: { count?: number; maxPow10?: number; maxRatio?: number } = {}): Distractor[] {
+  const count = opts.count ?? 4;
+  const maxPow10 = opts.maxPow10 ?? 1;
+  const bound = opts.maxRatio ?? 1e3;
+  const a = answer.toNumber();
+  const near = (v: Exact) => { const r = v.toNumber() / a; return r > 1 / bound && r < bound; };
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const near = (v: Exact) => { const r = v.toNumber() / answer.toNumber(); return r > 1e-3 && r < 1e3; };
-  const take = (d: Distractor) => {
-    if (out.length >= count || !near(d.value) || seen.some((s) => s.equals(d.value))) return;
+  const traps = new Set<string>();
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (!Number.isFinite(d.value.toNumber()) || !near(d.value)) continue;
+    if (seen.some((s) => s.equals(d.value))) continue;
+    if (d.trap && traps.has(d.trap)) continue;
     seen.push(d.value);
-    out.push(d);
+    if (d.trap) traps.add(d.trap);
+    pool.push(d);
+  }
+  const isPow10 = (v: Exact) => {
+    const r = Math.log10(Math.abs(v.toNumber() / a));
+    return Number.isFinite(r) && Math.abs(r - Math.round(r)) < 1e-9 && Math.round(r) !== 0;
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const below = pool.filter((d) => d.value.cmp(answer) < 0);
+  const above = pool.filter((d) => d.value.cmp(answer) > 0);
+  const want = rng.weighted(Array.from({ length: count + 1 }, (_, i) => i), Array.from({ length: count + 1 }, (_, i) => (i === 0 || i === count ? 1 : 2)));
+  const out: Distractor[] = [];
+  let tens = 0;
+  const take = (d: Distractor, cap: number) => {
+    if (out.length >= count || out.includes(d)) return false;
+    const ten = isPow10(d.value);
+    if (ten && tens >= cap) return false;
+    out.push(d);
+    if (ten) tens++;
+    return true;
+  };
+  let n = 0;
+  for (const d of below) { if (n >= want) break; if (take(d, maxPow10)) n++; }
+  for (const d of above) take(d, maxPow10);
+  for (const d of below) take(d, maxPow10);
+  for (const d of pool) take(d, Infinity); // last resort: a second point slip beats an unlabelled pad
   return out;
 }
 
@@ -157,11 +193,16 @@ function product(rng: RNG): Generated | null {
   const extra = cleanOnly([
     { value: ans.mulRat(10), trap: 'decimal point one place too far right' },
     { value: ans.mulRat(E(0.1).toRat()), trap: 'decimal point one place too far left' },
-    { value: sf(a.d, a.k).mul(exact(b)), trap: 'rounded only one of the numbers' },
-    { value: exact(a).mul(sf(b.d, b.k)), trap: 'rounded only one of the numbers' },
+    { value: sf(a.d, a.k).mul(exact(b)), trap: 'rounded the first number only' },
+    { value: exact(a).mul(sf(b.d, b.k)), trap: 'rounded the second number only' },
     { value: sf(a.d + b.d, a.k + b.k), trap: 'added the leading digits instead of multiplying' },
+    // rounded to the neighbouring leading digit: same magnitude, and on both sides of the answer
+    { value: sf((a.d + 1) * b.d, a.k + b.k), trap: `rounded ${a.str} up to ${dec(sf(a.d + 1, a.k))}` },
+    { value: a.d > 1 ? sf((a.d - 1) * b.d, a.k + b.k) : null, trap: `rounded ${a.str} down to ${dec(sf(a.d - 1, a.k))}` },
+    { value: sf(a.d * (b.d + 1), a.k + b.k), trap: `rounded ${b.str} up to ${dec(sf(b.d + 1, b.k))}` },
+    { value: b.d > 1 ? sf(a.d * (b.d - 1), a.k + b.k) : null, trap: `rounded ${b.str} down to ${dec(sf(b.d - 1, b.k))}` },
   ]);
-  return pack(rng, `Estimate the value of $${a.str}${times}${b.str}$ ${RULE}.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Estimate the value of $${a.str}${times}${b.str}$ ${RULE}.`, ans, spread(rng, ans, must, extra),
     `$${a.str} \\approx ${dec(sf(a.d, a.k))}$ and $${b.str} \\approx ${dec(sf(b.d, b.k))}$, so the estimate is $${dec(sf(a.d, a.k))}${times}${dec(sf(b.d, b.k))} = ${dec(ans)}$.`,
     'Round each number to 1 s.f. before multiplying (5 × 20 = 100); rounding the exact product afterwards is a different, unasked-for number.',
     ['estimation', 'rounding', 'significant-figures'],
@@ -188,19 +229,28 @@ function quotient(rng: RNG): Generated | null {
   const stemExpr = b ? `\\frac{${numTex}}{${c.str}}` : `${a.str} \\div ${c.str}`;
   const exactVal = exact(a).mul(b ? exact(b) : Exact.ONE).div(exact(c));
   const rounded = (n: Num) => dec(sf(n.d, n.k));
+  // The same-magnitude mistakes lead; a decimal-point slip is allowed as one option, not as a ladder.
   const must = cleanOnly([
-    { value: ans.mulRat(10), trap: 'decimal point one place too far right' },
-    { value: ans.mulRat(E(0.1).toRat()), trap: 'decimal point one place too far left' },
+    { value: round1(exactVal.toNumber()), trap: 'calculated exactly and rounded at the end' },
+    { value: a.trunc.mul(b ? b.trunc : Exact.ONE).div(c.trunc), trap: 'truncated each number instead of rounding it' },
   ]);
   const extra = cleanOnly([
-    { value: round1(exactVal.toNumber()), trap: 'calculated exactly and rounded at the end' },
     { value: sf(numMant, numExp).mul(sf(c.d, c.k)), trap: `multiplied by ${rounded(c)} instead of dividing` },
     { value: b ? sf(a.d, a.k).div(sf(b.d, b.k)).div(sf(c.d, c.k)) : sf(c.d, c.k).div(sf(a.d, a.k)), trap: b ? 'divided by both numbers' : 'divided the wrong way round' },
-    { value: a.trunc.mul(b ? b.trunc : Exact.ONE).div(c.trunc), trap: 'truncated each number instead of rounding it' },
+    { value: sf(c.d, c.k).div(sf(numMant, numExp)), trap: 'divided the wrong way round' },
+    { value: exact(a).mul(b ? exact(b) : Exact.ONE).div(sf(c.d, c.k)), trap: 'rounded the denominator only' },
+    { value: sf(numMant, numExp).div(exact(c)), trap: 'rounded the numerator only' },
+    // rounded to the neighbouring leading digit: same magnitude, and on both sides of the answer
+    { value: sf((a.d + 1) * (b ? b.d : 1), numExp).div(sf(c.d, c.k)), trap: `rounded ${a.str} up to ${dec(sf(a.d + 1, a.k))} instead of ${rounded(a)}` },
+    { value: a.d > 1 ? sf((a.d - 1) * (b ? b.d : 1), numExp).div(sf(c.d, c.k)) : null, trap: `rounded ${a.str} down to ${dec(sf(a.d - 1, a.k))} instead of ${rounded(a)}` },
+    { value: sf(numMant, numExp).div(sf(c.d + 1, c.k)), trap: `rounded ${c.str} up to ${dec(sf(c.d + 1, c.k))} instead of ${rounded(c)}` },
+    { value: c.d > 1 ? sf(numMant, numExp).div(sf(c.d - 1, c.k)) : null, trap: `rounded ${c.str} down to ${dec(sf(c.d - 1, c.k))} instead of ${rounded(c)}` },
+    { value: ans.mulRat(10), trap: 'decimal point one place too far right' },
+    { value: ans.mulRat(E(0.1).toRat()), trap: 'decimal point one place too far left' },
     { value: ans.mulRat(100), trap: 'decimal point two places out' },
   ]);
   const work = b ? `\\frac{${rounded(a)}${times}${rounded(b)}}{${rounded(c)}} = \\frac{${dec(sf(numMant, numExp))}}{${rounded(c)}}` : `${rounded(a)} \\div ${rounded(c)}`;
-  return pack(rng, `Estimate the value of $${stemExpr}$ ${RULE}.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Estimate the value of $${stemExpr}$ ${RULE}.`, ans, spread(rng, ans, must, extra, { maxRatio: 30 }),
     `Rounding: $${work} = ${dec(ans)}$.`,
     'Keep track of the powers of ten when dividing by a decimal: 1 ÷ 0.5 = 2, not 0.2 or 20.',
     ['estimation', 'rounding', 'division'],
@@ -237,7 +287,7 @@ function root(rng: RNG): Generated | null {
     { value: sf(m, k / 2), trap: 'halved the power of ten but did not root the leading number' },
   ]);
   const rule = twoSf ? 'by rounding the number under the root to 2 significant figures' : 'by rounding the number under the root to 1 significant figure';
-  return pack(rng, `Estimate the value of $\\sqrt{${str}}$ ${rule}.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Estimate the value of $\\sqrt{${str}}$ ${rule}.`, ans, spread(rng, ans, must, extra, { maxRatio: 30 }),
     `$${str} \\approx ${dec(rounded)} = ${m}${times}10^{${k}}$, so $\\sqrt{${str}} \\approx \\sqrt{${m}}${times}10^{${k / 2}} = ${dec(ans)}$.`,
     'Write the rounded number as (square) × (even power of ten) and halve the power: √0.04 = √(4 × 10⁻²) = 2 × 10⁻¹ = 0.2.',
     ['estimation', 'square-root', 'rounding'],
@@ -270,7 +320,7 @@ function squareProduct(rng: RNG): Generated | null {
   ]);
   const expr = divide ? `\\frac{${a.str}^2}{${b.str}}` : `${a.str}^2${times}${b.str}`;
   const work = divide ? `\\frac{${dec(A)}^2}{${dec(B)}} = \\frac{${dec(sq)}}{${dec(B)}}` : `${dec(A)}^2${times}${dec(B)} = ${dec(sq)}${times}${dec(B)}`;
-  return pack(rng, `Estimate the value of $${expr}$ ${RULE}.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Estimate the value of $${expr}$ ${RULE}.`, ans, spread(rng, ans, must, extra, { maxRatio: 30 }),
     `Rounding: $${work} = ${dec(ans)}$.`,
     'Square the rounded number (3² = 9, not 6), then multiply or divide; keep the decimal point under control.',
     ['estimation', 'squares', 'rounding'],
@@ -437,7 +487,7 @@ function standardForm(rng: RNG): Generated | null {
     const answer = ans;
     const exp = sfExponent(answer);
     if (Math.abs(exp) < 2) return null;
-    return pack(rng, `Estimate the value of $${expr}$ ${RULE}, giving your answer in standard form.`, answer, ranked(rng, answer, must, extra),
+    return pack(rng, `Estimate the value of $${expr}$ ${RULE}, giving your answer in standard form.`, answer, spread(rng, answer, must, extra, { maxRatio: 30 }),
       `Rounding: $${work} = ${answer.toLatex(SF)}$.`,
       'Under a square root, halve the power of ten (make it even first) and root the leading number; then multiply and renormalise the mantissa.',
       ['estimation', 'standard-form', 'square-root'],
@@ -462,7 +512,7 @@ function standardForm(rng: RNG): Generated | null {
   const exp = sfExponent(ans);
   if (Math.abs(exp) < 2 || Math.abs(exp) > 12) return null;
   const nums = form === 'mul-div' ? [[A.mant, A.exp], [C.mant, C.exp], [B.mant, B.exp]] : [[A.mant, A.exp], [B.mant, B.exp]];
-  return pack(rng, `Estimate the value of $${expr}$ ${RULE}, giving your answer in standard form.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Estimate the value of $${expr}$ ${RULE}, giving your answer in standard form.`, ans, spread(rng, ans, must, extra, { maxRatio: 30 }),
     `Rounding: $${work} = ${ans.toLatex(SF)}$.`,
     'Square both the mantissa and the power of ten; subtract exponents when dividing (dividing by 10⁻² multiplies by 100); then renormalise so the mantissa is between 1 and 10.',
     ['estimation', 'standard-form', 'indices'],

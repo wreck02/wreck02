@@ -103,8 +103,8 @@ function shareTwo(rng: RNG): Generated | null {
     { value: frac(N, part), trap: 'divided the total by the part' },
     { value: E(k), trap: 'found the value of one part only' },
     { value: frac(N, 2), trap: 'shared equally' },
-    { value: E((part + 1) * k), trap: 'off by one part' },
-    { value: E((part - 1) * k), trap: 'off by one part' },
+    { value: E((part + 1) * k), trap: 'used the next part up' },
+    { value: E((part - 1) * k), trap: 'used the next part down' },
     { value: frac(N * part, a + b + 1), trap: 'miscounted the number of parts' },
   ]);
   return pack(rng, stem, ans, ranked(rng, ans, must, extra),
@@ -147,15 +147,18 @@ function shareThree(rng: RNG): Generated | null {
     : `A prize of £${N} is divided in the ratio $${ratio(...parts)}$. Find the ${label} share in pounds.`;
   else stem = `${N} counters are shared between three players in the ratio $${ratio(...parts)}$. How many counters does the player with the ${label} share receive?`;
   const others = parts.filter((_, i) => i !== which);
+  const otherIdx = [0, 1, 2].filter((i) => i !== which);
+  const NAME = ['smallest', 'middle', 'largest'];
   const must = whole([
-    { value: E(others[0] * k), trap: 'gave a different share' },
-    { value: E(others[1] * k), trap: 'gave a different share' },
+    { value: E(others[0] * k), trap: `gave the ${NAME[otherIdx[0]]} share instead of the ${label} one` },
+    { value: E(others[1] * k), trap: `gave the ${NAME[otherIdx[1]]} share instead of the ${label} one` },
   ]);
   const extra = whole([
     { value: frac(N, 3), trap: 'shared equally between three' },
     { value: E(k), trap: 'found one part only' },
     { value: frac(N * part, others[0] + others[1]), trap: 'divided by the other two parts instead of all three' },
-    { value: E((part + 1) * k), trap: 'off by one part' },
+    { value: E((part + 1) * k), trap: 'used the next part up' },
+    { value: E((part - 1) * k), trap: 'used the next part down' },
     { value: E((sum - part) * k), trap: 'found what the other two receive together' },
     { value: frac(N * part, sum + 1), trap: 'miscounted the number of parts' },
   ]);
@@ -195,8 +198,8 @@ function fromDifference(rng: RNG): Generated | null {
     { value: E(a * k), trap: `gave ${n1}'s share` },
     { value: E(b * k), trap: `gave ${n2}'s share` },
     { value: E(k), trap: 'found one part only' },
-    { value: E(ans.toNumber() + k), trap: 'off by one part' },
-    { value: E(ans.toNumber() - k), trap: 'off by one part' },
+    { value: E(ans.toNumber() + k), trap: 'one part too many' },
+    { value: E(ans.toNumber() - k), trap: 'one part too few' },
     { value: E(2 * D), trap: 'doubled the difference' },
   ]);
   return pack(rng, intro + ' ' + question, ans, ranked(rng, ans, must, extra),
@@ -259,8 +262,16 @@ function combineChoice(rng: RNG): Generated | null {
   if (!c) return null;
   const { p, q, r, s } = c;
   const [A, C] = reduce(p * r, q * s);
+  // a : c = p·r : q·s is the product of two ratios, so it has the biggest numbers on the page unless the
+  // list also holds an uncancelled version of it. Offer one in most questions (never all, or "not the
+  // biggest ratio" would become a tell of its own), and redraw when this draw cannot supply one.
+  const forceBigger = rng.bool(0.75);
+  if (forceBigger && gcd(p * r, q * s) === 1) return null;
   const correct = `$${ratio(A, C)}$`;
+  const L = (q * r) / gcd(q, r);
   const cand: { pair: [number, number]; trap: string }[] = [
+    { pair: [p * r, q * s], trap: 'did not cancel the ratio to its simplest form' },
+    { pair: [p * (L / q), s * (L / r)], trap: 'read $a : c$ off the scaled triple without cancelling' },
     { pair: reduce(p, s), trap: 'took the outer numbers without first making the b values match' },
     { pair: reduce(p * s, q * r), trap: 'cross-multiplied the wrong way round' },
     { pair: reduce(q * s, p * r), trap: 'gave c : a instead of a : c' },
@@ -269,17 +280,25 @@ function combineChoice(rng: RNG): Generated | null {
     { pair: reduce(p * r, q * r), trap: 'gave a : b' },
     { pair: reduce(r, s), trap: 'gave b : c' },
   ];
-  const wrong: { display: string; trap: string }[] = [];
+  const pool: { display: string; trap: string; sum: number }[] = [];
   const seen = new Set([correct]);
   for (const w of cand) {
     if (w.pair[0] === w.pair[1]) continue;
     const d = `$${ratio(w.pair[0], w.pair[1])}$`;
     if (seen.has(d)) continue;
     seen.add(d);
-    wrong.push({ display: d, trap: w.trap });
+    pool.push({ display: d, trap: w.trap, sum: w.pair[0] + w.pair[1] });
   }
+  const bigger = pool.filter((w) => w.sum > A + C);
+  const rest = pool.filter((w) => w.sum <= A + C);
+  if (pool.length < 4 || (forceBigger && bigger.length === 0)) return null;
+  const wrong = (forceBigger
+    ? [...rng.shuffle(bigger).slice(0, Math.min(2, bigger.length)), ...rng.shuffle(rest), ...rng.shuffle(bigger)]
+    : rng.shuffle(pool))
+    .filter((w, i, all) => all.indexOf(w) === i)
+    .slice(0, 4)
+    .map((w) => ({ display: w.display, trap: w.trap }));
   if (wrong.length < 4) return null;
-  const L = (q * r) / gcd(q, r);
   const stem = rng.bool()
     ? `Given that $a : b = ${ratio(p, q)}$ and $b : c = ${ratio(r, s)}$, find $a : c$ in its simplest form.`
     : `In a school the ratio of teachers to teaching assistants is $${ratio(p, q)}$ and the ratio of teaching assistants to technicians is $${ratio(r, s)}$. Find the ratio of teachers to technicians in its simplest form.`;
@@ -319,12 +338,12 @@ function combineShare(rng: RNG): Generated | null {
   const notGiven = (ds: Distractor[]) => ds.filter((d) => d.value.toNumber() !== givenValue);
   const must = notGiven(whole([{ value: naive, trap: 'used the ratios without first matching the b values' }]));
   const extra = notGiven(whole([
-    { value: E(values[(askIdx + 1) % 3]), trap: 'gave a different one of the three numbers' },
-    { value: E(values[(askIdx + 2) % 3]), trap: 'gave a different one of the three numbers' },
+    { value: E(values[(askIdx + 1) % 3]), trap: `gave $${'abc'[(askIdx + 1) % 3]}$ instead of $${'abc'[askIdx]}$` },
+    { value: E(values[(askIdx + 2) % 3]), trap: `gave $${'abc'[(askIdx + 2) % 3]}$ instead of $${'abc'[askIdx]}$` },
     { value: E(total), trap: 'gave the total' },
     { value: E(k), trap: 'found one part only' },
-    { value: E(values[askIdx] + k), trap: 'off by one part' },
-    { value: E(values[askIdx] - k), trap: 'off by one part' },
+    { value: E(values[askIdx] + k), trap: 'one part too many' },
+    { value: E(values[askIdx] - k), trap: 'one part too few' },
   ]));
   return pack(rng, stem, ans, ranked(rng, ans, must, extra),
     `Scale so that $b$ is ${L} in both: $a : b : c = ${ratio(A, B, C)}$. ${given === 'total' ? `The ${A + B + C} parts make ${total}, so one part is ${k}` : `Then $${given} = ${values['abc'.indexOf(given)]}$ means one part is ${k}`}, and $${'abc'[askIdx]} = ${[A, B, C][askIdx]} \\times ${k} = ${values[askIdx]}$.`,
@@ -361,8 +380,11 @@ function joinLeave(rng: RNG): Generated | null {
   if (newTotal > 80) return null;
   const ask = rng.pick(['now', 'now', 'girls-original', 'boys-original', 'original-total']);
   const ans = E(ask === 'now' ? newTotal : ask === 'girls-original' ? girls : ask === 'boys-original' ? boys : boys + girls);
-  const verb = move.endsWith('join') ? 'join the class' : 'leave the class';
-  const stem = `In a class the ratio of boys to girls is $${ratio(p, q)}$. After ${x} ${move.split(' ')[0]} ${verb}, the ratio of boys to girls is $${ratio(r, s)}$. ` +
+  // "After 1 girls leave the class" is not exam register: singularise when x = 1.
+  const group = move.split(' ')[0]; // 'boys' | 'girls'
+  const who = x === 1 ? group.slice(0, -1) : group; // boy / girl
+  const verb = move.endsWith('join') ? (x === 1 ? 'joins the class' : 'join the class') : (x === 1 ? 'leaves the class' : 'leave the class');
+  const stem = `In a class the ratio of boys to girls is $${ratio(p, q)}$. After ${x} ${who} ${verb}, the ratio of boys to girls is $${ratio(r, s)}$. ` +
     (ask === 'now' ? 'How many students are now in the class?'
       : ask === 'girls-original' ? 'How many girls were in the class originally?'
         : ask === 'boys-original' ? 'How many boys were in the class originally?'

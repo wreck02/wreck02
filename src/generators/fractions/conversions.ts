@@ -31,19 +31,58 @@ function cleanOnly(ds: Cand[]): Distractor[] {
   return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && !d.value.isZero() && isCleanExact(d.value).ok);
 }
 
-/** `must` traps first (in order), then shuffled extras; distinct from each other and from the answer. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Choose the distractors so that the answer is not always in the same place once the options are
+ * sorted: a random number of them is taken from below the answer and the rest from above, so the
+ * rank histogram is flat instead of peaking at the median. At most `maxPow10` options may be the
+ * answer times a power of ten (a decimal-point ladder is a layout tell, not four mistakes), and no
+ * trap string is used twice. `must` candidates are offered first, then the extras in random order.
+ */
+interface SpreadOptions { count?: number; maxPow10?: number; keep?: (v: Exact) => boolean }
+
+function spread(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], opts: SpreadOptions = {}): Distractor[] {
+  const count = opts.count ?? 4;
+  const maxPow10 = opts.maxPow10 ?? 1;
+  const allow = opts.keep ?? (() => true);
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const traps = new Set<string>();
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (!Number.isFinite(d.value.toNumber()) || !allow(d.value)) continue;
+    if (seen.some((s) => s.equals(d.value))) continue;
+    if (d.trap && traps.has(d.trap)) continue;
     seen.push(d.value);
-    out.push(d);
+    if (d.trap) traps.add(d.trap);
+    pool.push(d);
+  }
+  const a = answer.toNumber();
+  const isPow10 = (v: Exact) => {
+    const r = Math.log10(Math.abs(v.toNumber() / a));
+    return Number.isFinite(r) && Math.abs(r - Math.round(r)) < 1e-9 && Math.round(r) !== 0;
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const below = pool.filter((d) => d.value.cmp(answer) < 0);
+  const above = pool.filter((d) => d.value.cmp(answer) > 0);
+  const want = rng.weighted(Array.from({ length: count + 1 }, (_, i) => i), Array.from({ length: count + 1 }, (_, i) => (i === 0 || i === count ? 1 : 2)));
+  const out: Distractor[] = [];
+  let tens = 0;
+  const take = (d: Distractor, cap: number) => {
+    if (out.length >= count || out.includes(d)) return false;
+    const ten = isPow10(d.value);
+    if (ten && tens >= cap) return false;
+    out.push(d);
+    if (ten) tens++;
+    return true;
+  };
+  let n = 0;
+  for (const d of below) { if (n >= want) break; if (take(d, maxPow10)) n++; }
+  for (const d of above) take(d, maxPow10);
+  for (const d of below) take(d, maxPow10);
+  for (const d of pool) take(d, Infinity); // last resort: a second decimal-point slip beats an unlabelled pad
   return out;
 }
+
+/** Values strictly between 0 and 1: what a proper fraction or a decimal below 1 must look like. */
+const proper = (v: Exact) => v.sign() > 0 && v.cmp(Exact.ONE) < 0;
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix. */
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -139,6 +178,12 @@ function parseRecur(tex: string): Expansion | null {
   return null;
 }
 
+/** Three-decimal-place value for a trap line, without LaTeX: "0.636…". */
+function approxPlain(v: number): string {
+  const s = v.toFixed(3);
+  return Math.abs(Number(s) - v) < 1e-12 ? s.replace(/0+$/, '').replace(/\.$/, '') : `${s}…`;
+}
+
 /** Three-decimal-place value for a solution line: 0.636… or 0.625. */
 function approx(v: number): string {
   const s = v.toFixed(3);
@@ -158,19 +203,27 @@ function decimalToFraction(rng: RNG): Generated | null {
   const dec = dt(ans); // e.g. 0.375
   const digits = dec.split('.')[1];
   const k = digits.length;
+  const pow = 10 ** k;
+  const v = ans.toNumber();
+  // Every option stays between 0 and 1: an improper fraction is discarded on sight for a decimal below 1.
   const must = cleanOnly([
-    { value: k >= 2 ? frac(Number(digits), 10 ** (k - 1)) : null, trap: 'wrong power of ten: one decimal place too few in the denominator' },
+    { value: frac(Number(digits), 10 ** (k + 1)), trap: 'wrong power of ten: one decimal place too many in the denominator' },
   ]);
   const extra = cleanOnly([
-    { value: frac(Number(digits), 10 ** (k + 1)), trap: 'wrong power of ten: one decimal place too many in the denominator' },
+    { value: k >= 2 ? frac(Number(digits), 10 ** (k - 1)) : null, trap: 'wrong power of ten: one decimal place too few in the denominator' },
+    { value: frac(p, pow), trap: `cancelled the numerator but not the denominator (${digits}/${pow} became ${p}/${pow})` },
     { value: q > 2 ? frac(p, q - 1) : null, trap: `misremembered the denominator (${p}/${q - 1} instead of ${p}/${q})` },
     { value: frac(p, q + 1), trap: `misremembered the denominator (${p}/${q + 1} instead of ${p}/${q})` },
-    { value: p > 1 ? frac(q, p) : null, trap: 'inverted the fraction' },
     { value: k >= 2 && Number(digits[0]) > 0 && Number(digits.slice(1)) > 0 ? frac(Number(digits[0]), Number(digits.slice(1))) : null, trap: 'read the decimal digits as numerator and denominator' },
     { value: frac(q - p, q), trap: 'found 1 minus the value' },
     { value: frac(p, 2 * q), trap: 'halved instead of cancelling' },
+    { value: 2 * p < q ? frac(2 * p, q) : null, trap: 'doubled the numerator instead of cancelling' },
+    { value: p + 1 < q ? frac(p + 1, q) : null, trap: 'off by one in the numerator (used the next numerator up)' },
+    { value: Math.round(v * 10) > 0 ? frac(Math.round(v * 10), 10) : null, trap: 'rounded the decimal to one place before converting' },
+    { value: Math.ceil(v * 10) < 10 ? frac(Math.ceil(v * 10), 10) : null, trap: 'rounded the decimal up to one place before converting' },
+    { value: Math.floor(v * 10) > 0 ? frac(Math.floor(v * 10), 10) : null, trap: 'kept only the first decimal place' },
   ]);
-  const ds = ranked(rng, ans, must, extra);
+  const ds = spread(rng, ans, must, extra, { keep: proper });
   if (ds.length < 4) return null;
   const known = q === 8 ? ` Or spot that $0.125 = \\tfrac18$, so $${dec} = ${p} \\times \\tfrac18$.` : '';
   return {
@@ -189,19 +242,22 @@ function fractionToDecimal(rng: RNG): Generated | null {
   const q = rng.pick(L1_DENS);
   const p = rng.pick(coprimeNumerators(q));
   const ans = frac(p, q);
-  const must = cleanOnly([
-    { value: ans.mulRat(10), trap: 'decimal point one place too far right' },
-  ]);
+  const v = ans.toNumber();
+  const must = cleanOnly([]);
   const extra = cleanOnly([
+    { value: ans.mulRat(10), trap: 'decimal point one place too far right' },
     { value: ans.mulRat(frac(1, 10).toRat()), trap: 'decimal point one place too far left' },
     { value: p < 10 && q < 10 ? Exact.decimal(`0.${p}${q}`) : null, trap: 'wrote the digits of the fraction after the decimal point' },
+    { value: frac(p, 10), trap: 'divided by 10 instead of by the denominator' },
     { value: frac(q - p, q), trap: 'found 1 minus the value' },
-    { value: frac(p + 1, q), trap: 'off by one in the numerator' },
-    { value: p > 1 ? frac(p - 1, q) : null, trap: 'off by one in the numerator' },
-    { value: p > 1 ? frac(q, p) : null, trap: 'inverted the fraction' },
+    { value: frac(p + 1, q), trap: 'off by one in the numerator (used the next numerator up)' },
+    { value: p > 1 ? frac(p - 1, q) : null, trap: 'off by one in the numerator (used the next numerator down)' },
+    { value: Exact.decimal(v.toFixed(2)), trap: 'rounded to two decimal places instead of giving the exact decimal' },
+    { value: Math.ceil(v * 10) < 10 ? frac(Math.ceil(v * 10), 10) : null, trap: 'rounded up to one decimal place' },
+    { value: q > 2 ? frac(p, q - 1) : null, trap: `misremembered the denominator (${p}/${q - 1})` },
     { value: frac(p, q === 20 ? 25 : q === 25 ? 20 : 2 * q), trap: 'used the wrong denominator' },
   ]);
-  const ds = ranked(rng, ans, terminating(must), terminating(extra));
+  const ds = spread(rng, ans, terminating(must), terminating(extra), { keep: proper });
   if (ds.length < 4) return null;
   let route: string;
   if (q === 8) route = `$\\tfrac18 = 0.125$, so $${fracTex(p, q)} = ${p} \\times 0.125 = ${dt(ans)}$.`;
@@ -240,19 +296,21 @@ function fractionToPercent(rng: RNG): Generated | null {
   const p = rng.pick(coprimeNumerators(q));
   const pct = frac(100 * p, q); // e.g. 87.5
   if (pct.toRat().d > 4n) return null;
-  const must = cleanOnly([
-    { value: frac(p, q), trap: 'forgot to multiply by 100 (gave the decimal)' },
-  ]);
+  // The "forgot the × 100" decimal is the classic trap, but it is a hundred times the answer: offer it in
+  // only some questions so the option list is not a decimal ladder every time.
+  const must = cleanOnly(rng.bool(0.45) ? [{ value: frac(p, q), trap: 'forgot to multiply by 100 (gave the decimal)' }] : []);
   const extra = cleanOnly([
     { value: pct.mulRat(frac(1, 10).toRat()), trap: 'decimal point slip: multiplied by 10 instead of 100' },
     { value: pct.mulRat(10), trap: 'decimal point slip: multiplied by 1000' },
     { value: E(100).sub(pct), trap: 'found the complementary percentage 100% − p%' },
-    { value: tryE(() => frac(100 * p, q - 1)), trap: 'misremembered the denominator' },
-    { value: frac(100 * p, q + 1), trap: 'misremembered the denominator' },
-    { value: frac(100 * (p + 1), q), trap: 'off by one in the numerator' },
-    { value: p > 1 ? frac(100 * (p - 1), q) : null, trap: 'off by one in the numerator' },
+    { value: frac(100, q), trap: 'gave one part in q as a percentage (forgot the numerator)' },
+    { value: tryE(() => frac(100 * p, q - 1)), trap: `misremembered the denominator (${p}/${q - 1})` },
+    { value: frac(100 * p, q + 1), trap: `misremembered the denominator (${p}/${q + 1})` },
+    { value: frac(100 * (p + 1), q), trap: 'off by one in the numerator (used the next numerator up)' },
+    { value: p > 1 ? frac(100 * (p - 1), q) : null, trap: 'off by one in the numerator (used the next numerator down)' },
+    { value: frac(100 * p, 2 * q), trap: 'halved the fraction before converting' },
   ]);
-  const ds = ranked(rng, pct, terminating(must), terminating(extra));
+  const ds = spread(rng, pct, terminating(must), terminating(extra));
   if (ds.length < 4) return null;
   const unit = frac(100, q);
   return {
@@ -275,19 +333,23 @@ function percentToFraction(rng: RNG): Generated | null {
   const ans = frac(p, q);
   const pctTex = dt(pct);
   const whole = Math.floor(pct.toNumber());
-  const must = cleanOnly([
-    { value: pct.mulRat(frac(1, 10).toRat()), trap: 'divided by 10 instead of 100' },
-  ]);
+  // Every option is a fraction below 1: 3.5 (from "divided by 10") is thrown away without any work.
+  const must = cleanOnly([]);
   const extra = cleanOnly([
+    { value: pct.mulRat(frac(1, 10).toRat()), trap: 'divided by 10 instead of 100' },
     { value: pct.mulRat(frac(1, 1000).toRat()), trap: 'divided by 1000 instead of 100' },
     { value: frac(p, 2 * q), trap: 'halved the fraction (12.5% read as 1/16)' },
+    { value: 2 * p < q ? frac(2 * p, q) : null, trap: 'doubled the fraction' },
     { value: !pct.isInteger() && whole > 0 ? frac(whole, 100) : null, trap: 'dropped the decimal part of the percentage' },
+    { value: frac(p, 100), trap: `cancelled the numerator but not the denominator (${p}/100)` },
     { value: frac(q - p, q), trap: 'found the complementary fraction' },
-    { value: tryE(() => frac(p, q - 1)), trap: 'misremembered the denominator' },
-    { value: frac(p, q + 1), trap: 'misremembered the denominator' },
+    { value: tryE(() => frac(p, q - 1)), trap: `misremembered the denominator (${p}/${q - 1})` },
+    { value: frac(p, q + 1), trap: `misremembered the denominator (${p}/${q + 1})` },
+    { value: p > 1 ? frac(p - 1, q) : null, trap: 'off by one in the numerator (used the next numerator down)' },
+    { value: p + 1 < q ? frac(p + 1, q) : null, trap: 'off by one in the numerator (used the next numerator up)' },
     { value: pct.isInteger() && whole >= 2 ? frac(1, whole) : null, trap: 'wrote p% as 1/p' },
   ]);
-  const ds = ranked(rng, ans, must, extra);
+  const ds = spread(rng, ans, must, extra, { keep: proper });
   if (ds.length < 4) return null;
   return {
     stem: `Write $${pctTex}\\%$ as a fraction in its lowest terms.`,
@@ -336,8 +398,10 @@ function recurringToFraction(rng: RNG): Generated | null {
     { value: frac(p + 1, q), trap: 'off by one in the numerator' },
     { value: p > 1 ? frac(p - 1, q) : null, trap: 'off by one in the numerator' },
     { value: q === 12 ? frac(Number(digits.slice(0, 2)), 100) : null, trap: 'rounded to two decimal places and converted that' },
+    { value: frac(p, 2 * q), trap: 'halved the fraction' },
+    { value: 2 * p < q ? frac(2 * p, q) : null, trap: 'doubled the numerator' },
   ]);
-  const ds = ranked(rng, ans, must, extra);
+  const ds = spread(rng, ans, must, extra, { keep: proper });
   if (ds.length < 4) return null;
   const stem = rng.bool(0.5) ? `Which fraction is equal to $${tex}$?` : `Write $${tex}$ as a fraction in its lowest terms.`;
   return {
@@ -359,19 +423,31 @@ function fractionToRecurring(rng: RNG): Generated | null {
   const target = p / q;
   const wrong: { display: string; trap: string }[] = [];
   const seen = new Set<string>([correct]);
+  const usedTraps = new Set<string>();
   const add = (x: Expansion | null, trap: string, allowLong = false) => {
     if (!x || (x.prefix + x.period).length === 0 || (x.prefix + x.period).length > (allowLong ? 6 : 3)) return;
     const v = recurValue(x);
     if (Math.abs(v - target) < 1e-9 || v <= 0 || v >= 1) return;
     const d = `$${recurTex(x)}$`;
-    if (seen.has(d)) return;
+    if (seen.has(d) || usedTraps.has(trap)) return; // one option per named mistake
     seen.add(d);
+    usedTraps.add(trap);
     wrong.push({ display: d, trap });
   };
   const digits = e.prefix + e.period;
-  // headline mistake: the terminating decimal with the same digits
-  add({ prefix: digits.slice(0, Math.min(digits.length, 3)), period: '' }, 'treated the decimal as terminating');
-  add({ prefix: digits.slice(0, 2), period: '' }, 'treated the decimal as terminating');
+  // headline mistake: the terminating decimal with the same digits — exactly one per question, or the
+  // option list shows two near-identical truncations carrying the same label.
+  const cut = rng.bool(0.5) ? 2 : Math.min(digits.length, 3);
+  add({ prefix: digits.slice(0, cut), period: '' }, `treated the decimal as terminating (stopped after ${cut} decimal places)`);
+  // For sevenths the answer would be the only six-digit option: force a second one in.
+  if (q === 7) {
+    for (const pp of rng.shuffle([1, 2, 3, 4, 5, 6].filter((x) => x !== p))) {
+      const before = wrong.length;
+      add(expand(pp, 7), `another seventh: ${pp}/7 has the same six digits, started in a different place`, true);
+      if (wrong.length > before) break;
+    }
+  }
+  const forced = wrong.length; // the options above are always offered
   type Other = { x: Expansion | null; trap: string; via?: [number, number] };
   const others: Other[] = [
     { x: null, trap: `confused ${q}ths with ${q - 2}ths`, via: [p, q - 2] },
@@ -400,10 +476,12 @@ function fractionToRecurring(rng: RNG): Generated | null {
     } else add(o.x, o.trap);
   }
   if (wrong.length < 4) return null;
+  // keep the forced options (one "terminating", and a second long seventh) and fill the rest at random
+  const chosen = [...wrong.slice(0, forced), ...rng.shuffle(wrong.slice(forced))].slice(0, 4);
   return {
     stem: `Which of the following is equal to $${fracTex(p, q)}$?`,
     answer: { kind: 'choice', value: correct },
-    options: buildChoiceOptions(rng, correct, wrong),
+    options: buildChoiceOptions(rng, correct, chosen),
     solution: `${FAMILY[q]} So $${fracTex(p, q)} = ${recurTex(e)}$.`,
     trap: 'Know the recurring families: ninths repeat one digit, elevenths repeat a multiple of 9, twelfths have a non-recurring digit or two before a 3 or 6.',
     tags: ['fractions', 'recurring-decimals', 'conversion'],
@@ -473,7 +551,9 @@ function recurringDistractors(p: number, q: number, e: Expansion): { must: Distr
     { value: frac(p + 1, q), trap: 'off by one in the numerator' },
     { value: p > 1 ? frac(p - 1, q) : null, trap: 'off by one in the numerator' },
     { value: frac(p, 10 * q), trap: 'decimal point slip (a factor of 10)' },
-    { value: 10 * p < q ? frac(10 * p, q) : null, trap: 'decimal point slip (a factor of 10)' },
+    { value: frac(p, 2 * q), trap: 'halved the fraction' },
+    { value: 2 * p < q ? frac(2 * p, q) : null, trap: 'doubled the numerator' },
+    { value: recurFrac({ prefix: e.prefix, period: e.period + e.period[b - 1] }), trap: 'wrote the last recurring digit twice in the block' },
   ]);
   return { must, extra };
 }
@@ -484,7 +564,7 @@ function recurringAlgebra(rng: RNG, pool: Pool[], level: number): Generated | nu
   if (!isCleanExact(ans).ok) return null;
   const tex = recurTex(e);
   const { must, extra } = recurringDistractors(p, q, e);
-  const ds = ranked(rng, ans, must, extra);
+  const ds = spread(rng, ans, must, extra, { keep: proper });
   if (ds.length < 4) return null;
   const stem = rng.bool(0.5) ? `Write $${tex}$ as a fraction in its lowest terms.` : `Express the recurring decimal $${tex}$ as a fraction in its lowest terms.`;
   return {
@@ -539,7 +619,14 @@ function ordering(rng: RNG): Generated | null {
   const idx = vals.indexOf(extreme);
   if (items[idx].kind === 'dec' && !rng.bool(0.2)) return null; // the answer should usually need a conversion
   const correct = itemTex(items[idx]);
-  const wrong = items.filter((_, i) => i !== idx).map(itemTex);
+  // Name the mistake behind every other value: how a candidate could pick it without converting.
+  const why = (it: Item, v: number): string => {
+    if (Math.abs(v - extreme) <= 0.005) return `nearest rival: ${approxPlain(v)} agrees with the answer to two decimal places, so only the third decimal decides`;
+    if (it.kind === 'pct') return `read ${it.s}% as ${it.s} and compared it with the decimals without dividing by 100`;
+    if (it.kind === 'frac') return `judged ${it.n}/${it.d} by its numerator and denominator instead of converting it (${approxPlain(v)})`;
+    return `took the ${ask} decimal, ${it.s}, on sight without converting the fractions and percentages`;
+  };
+  const wrong = items.map((it, i) => ({ display: itemTex(it), trap: why(it, vals[i]) })).filter((_, i) => i !== idx);
   const order = items.map((_, i) => i).sort((i, j) => (ask === 'largest' ? vals[j] - vals[i] : vals[i] - vals[j]));
   const lines = order.map((i) => `${itemTex(items[i])} $= ${approx(vals[i])}$`).join(', ');
   return {
@@ -586,7 +673,7 @@ function chain(rng: RNG): Generated | null {
     { value: ans.add(frac(1, Number(ans.toRat().d) > 1 ? Number(ans.toRat().d) : 9)), trap: 'arithmetic slip in the numerator' },
   ]);
   const positive = (ds: Distractor[]) => ds.filter((d) => d.value.sign() > 0);
-  const ds = ranked(rng, ans, positive(must), positive(extra));
+  const ds = spread(rng, ans, positive(must), positive(extra));
   if (ds.length < 4) return null;
   return {
     stem: `Find the value of $${tx} ${op} ${ty}$, giving your answer as a fraction in its lowest terms.`,

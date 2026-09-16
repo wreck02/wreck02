@@ -10,10 +10,10 @@ import type { RNG } from '../../core/rng';
  * Level 2: Σ_{r=1}^{4} r² = 30; Σ_{r=1}^{5} r³ = 225
  * Level 3: Σ_{r=1}^{10}(3r + 2) = 185; a sum starting away from r = 1, such as Σ_{r=5}^{15} r
  * Level 4: Σ r(r + 1) = Σr² + Σr; Σ (2r + 1)²; Σ_{r=p}^{q} r²
- * Level 5: which closed form equals Σ_{r=1}^{n} f(r)? (choice)
+ * Level 5: which closed form equals Σ f(r)? (choice) — the summand and the limits both vary
  */
 
-type SumId = 'r' | 'odd' | 'even' | 'sq' | 'cube' | 'linear' | 'r-r1' | 'odd-sq';
+type SumId = 'r' | 'odd' | 'even' | 'sq' | 'cube' | 'linear' | 'r-r1' | 'odd-sq' | 'r-rk' | 'lin-sq';
 
 /** The r-th term of each summand — the only thing verify() needs. */
 function term(id: SumId, r: number, a = 0, b = 0): number {
@@ -26,6 +26,8 @@ function term(id: SumId, r: number, a = 0, b = 0): number {
     case 'linear': return a * r + b;
     case 'r-r1': return r * (r + 1);
     case 'odd-sq': return (2 * r + 1) * (2 * r + 1);
+    case 'r-rk': return r * (r + a);
+    case 'lin-sq': return (a * r + b) * (a * r + b);
   }
 }
 
@@ -44,10 +46,12 @@ function termTex(id: SumId, a = 0, b = 0): string {
     case 'linear': return `(${a === 1 ? '' : a === -1 ? '-' : a}r ${b >= 0 ? '+' : '-'} ${Math.abs(b)})`;
     case 'r-r1': return 'r(r + 1)';
     case 'odd-sq': return '(2r + 1)^2';
+    case 'r-rk': return `r(r ${a >= 0 ? '+' : '-'} ${Math.abs(a)})`;
+    case 'lin-sq': return b === 0 ? `(${a === 1 ? '' : a}r)^2` : `(${a === 1 ? '' : a}r ${b > 0 ? '+' : '-'} ${Math.abs(b)})^2`;
   }
 }
 
-const sigma = (id: SumId, lo: number, hi: number | string, a = 0, b = 0): string =>
+const sigma = (id: SumId, lo: number | string, hi: number | string, a = 0, b = 0): string =>
   `\\sum_{r=${lo}}^{${hi}} ${termTex(id, a, b)}`;
 
 function cleanOnly(ds: { value: Exact | null; trap: string }[]): Distractor[] {
@@ -151,11 +155,14 @@ function sumOddQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 2
 
 function sumSquareQ(rng: RNG): Generated | null {
-  const n = rng.int(4, 9);
+  const n = rng.int(4, 12);
   const value = S2(n);
+  const asList = rng.bool(0.4);
   return numericQuestion(rng, {
     id: 'sq', lo: 1, hi: n, value,
-    stem: `Find the value of $${sigma('sq', 1, n)}$.`,
+    stem: asList
+      ? `Find the value of $1^2 + 2^2 + 3^2 + \\dots + ${n}^2$.`
+      : `Find the value of $${sigma('sq', 1, n)}$.`,
     solution: `$\\sum_{r=1}^{n} r^2 = \\frac{n(n+1)(2n+1)}{6} = \\frac{${n} \\times ${n + 1} \\times ${2 * n + 1}}{6} = ${value}$.`,
     trap: 'Σr² is not (Σr)²: squaring the sum is the classic slip.',
     must: cleanOnly([
@@ -167,16 +174,20 @@ function sumSquareQ(rng: RNG): Generated | null {
       { value: E(S2(n - 1)), trap: 'off by one: summed only to n − 1' },
       { value: E((n * (n + 1) * (2 * n + 1)) / 3), trap: 'divided by 3 instead of 6' },
       { value: E(value + n * n), trap: 'added the last square twice' },
+      { value: E(S2(n + 1)), trap: 'off by one: summed one term too many' },
     ]),
   });
 }
 
 function sumCubeQ(rng: RNG): Generated | null {
-  const n = rng.int(4, 7);
+  const n = rng.int(4, 9);
   const value = S3(n);
+  const asList = rng.bool(0.4);
   return numericQuestion(rng, {
     id: 'cube', lo: 1, hi: n, value,
-    stem: `Find the value of $${sigma('cube', 1, n)}$.`,
+    stem: asList
+      ? `Find the value of $1^3 + 2^3 + 3^3 + \\dots + ${n}^3$.`
+      : `Find the value of $${sigma('cube', 1, n)}$.`,
     solution: `$\\sum_{r=1}^{n} r^3 = \\left(\\frac{n(n+1)}{2}\\right)^2 = ${S1(n)}^2 = ${value}$.`,
     trap: 'Σr³ is the square of Σr — using Σr² or forgetting to square gives the wrong order of magnitude.',
     must: cleanOnly([
@@ -245,7 +256,7 @@ function sumRangeQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 4
 
 function sumProductQ(rng: RNG): Generated | null {
-  const n = rng.int(5, 9);
+  const n = rng.int(5, 11);
   const value = S2(n) + S1(n);
   return numericQuestion(rng, {
     id: 'r-r1', lo: 1, hi: n, value,
@@ -267,7 +278,7 @@ function sumProductQ(rng: RNG): Generated | null {
 }
 
 function sumOddSquareQ(rng: RNG): Generated | null {
-  const n = rng.int(4, 6);
+  const n = rng.int(4, 8);
   const value = 4 * S2(n) + 4 * S1(n) + n;
   return numericQuestion(rng, {
     id: 'odd-sq', lo: 1, hi: n, value,
@@ -289,8 +300,8 @@ function sumOddSquareQ(rng: RNG): Generated | null {
 }
 
 function sumSquareRangeQ(rng: RNG): Generated | null {
-  const lo = rng.int(3, 6);
-  const hi = rng.int(lo + 2, 9);
+  const lo = rng.int(3, 7);
+  const hi = rng.int(lo + 2, 11);
   const value = S2(hi) - S2(lo - 1);
   return numericQuestion(rng, {
     id: 'sq', lo, hi, value,
@@ -313,81 +324,243 @@ function sumSquareRangeQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 5
 
-/** A closed form for a sum, as LaTeX and as the coefficients of a polynomial in n (highest power first). */
-interface Formula { tex: string; coeffs: number[] }
+/** A polynomial in n, highest power first (so it can be evaluated by Horner in verify). */
+type Poly = number[];
 
-const F: Record<string, Formula> = {
-  n2: { tex: 'n^2', coeffs: [1, 0, 0] },
-  nn1: { tex: 'n(n+1)', coeffs: [1, 1, 0] },
-  nn1over2: { tex: '\\frac{n(n+1)}{2}', coeffs: [0.5, 0.5, 0] },
-  n2minus1: { tex: 'n^2 - 1', coeffs: [1, 0, -1] },
-  twoN2: { tex: '2n^2', coeffs: [2, 0, 0] },
-  n2n1: { tex: 'n(2n-1)', coeffs: [2, -1, 0] },
-  nn1over4: { tex: '\\frac{n(n+1)}{4}', coeffs: [0.25, 0.25, 0] },
-  nnminus1over2: { tex: '\\frac{n(n-1)}{2}', coeffs: [0.5, -0.5, 0] },
-  n2over2: { tex: '\\frac{n^2}{2}', coeffs: [0.5, 0, 0] },
-  sq: { tex: '\\frac{n(n+1)(2n+1)}{6}', coeffs: [1 / 3, 0.5, 1 / 6, 0] },
-  sq3: { tex: '\\frac{n(n+1)(2n+1)}{3}', coeffs: [2 / 3, 1, 1 / 3, 0] },
-  cube: { tex: '\\left(\\frac{n(n+1)}{2}\\right)^2', coeffs: [0.25, 0.5, 0.25, 0, 0] },
-  cubeHalf: { tex: '\\frac{n^2(n+1)^2}{2}', coeffs: [0.5, 1, 0.5, 0, 0] },
-  rr1: { tex: '\\frac{n(n+1)(n+2)}{3}', coeffs: [1 / 3, 1, 2 / 3, 0] },
-  rr1over6: { tex: '\\frac{n(n+1)(n+2)}{6}', coeffs: [1 / 6, 0.5, 1 / 3, 0] },
-  n2n1over2: { tex: '\\frac{n^2(n+1)}{2}', coeffs: [0.5, 0.5, 0, 0] },
-  n3over3: { tex: '\\frac{n^3}{3}', coeffs: [1 / 3, 0, 0, 0] },
+function pMul(a: Poly, b: Poly): Poly {
+  const out = new Array(a.length + b.length - 1).fill(0);
+  a.forEach((x, i) => b.forEach((y, j) => { out[i + j] += x * y; }));
+  return out;
+}
+
+/** A candidate closed form: how it is printed, and the polynomial it stands for. */
+interface Form { tex: string; coeffs: Poly }
+
+/** "(2n + 1)", "(n - 3)", "n", "2n" — a linear factor [a, b] meaning a·n + b. */
+function facTex(a: number, b: number): string {
+  const an = a === 1 ? 'n' : a === -1 ? '-n' : `${a}n`;
+  return b === 0 ? an : `(${an} ${b > 0 ? '+' : '-'} ${Math.abs(b)})`;
+}
+
+/** A product of linear factors over a divisor, e.g. [[1,0],[1,1],[2,1]], 6 → n(n+1)(2n+1)/6. */
+function prod(factors: [number, number][], div = 1, tex?: string): Form {
+  let p: Poly = [1];
+  for (const [a, b] of factors) p = pMul(p, [a, b]);
+  const body = factors.map(([a, b]) => facTex(a, b)).join('');
+  return { tex: tex ?? (div === 1 ? body : `\\frac{${body}}{${div}}`), coeffs: p.map((c) => c / div) };
+}
+
+const sameForm = (a: Form, b: Form): boolean =>
+  [1, 2, 3, 4, 5, 6].every((n) => Math.abs(evalPoly(a.coeffs, n) - evalPoly(b.coeffs, n)) < 1e-9);
+
+function evalPoly(c: Poly, n: number): number {
+  return c.reduce((s, k) => s * n + k, 0);
+}
+
+interface FormulaSpec {
+  id: SumId;
+  a: number;
+  b: number;
+  /** limits as [multiple of n, constant]: [0, 1] is r = 1, [2, 0] is r = 2n. */
+  lo: [number, number];
+  hi: [number, number];
+  correct: Form;
+  wrong: { form: Form; trap: string }[];
+}
+
+const limitTex = ([m, c]: [number, number]): string => {
+  if (m === 0) return `${c}`;
+  const mn = m === 1 ? 'n' : `${m}n`;
+  return c === 0 ? mn : `${mn} ${c > 0 ? '+' : '-'} ${Math.abs(c)}`;
 };
 
-/** What each wrong closed form is the answer to. */
-const FORMULA_TRAPS: Record<string, string> = {
-  n2: 'that is Σ(2r − 1)',
-  nn1: 'that is Σ2r: the division by 2 was dropped',
-  nn1over2: 'that is Σr',
-  n2minus1: 'off by one at the top of the sum',
-  twoN2: 'doubled the leading term',
-  n2n1: 'used n times the last term',
-  nn1over4: 'halved one time too many',
-  nnminus1over2: 'off by one: that is the sum to n − 1',
-  n2over2: 'dropped the +1 from n(n + 1)/2',
-  sq: 'that is Σr²',
-  sq3: 'divided by 3 instead of by 6',
-  cube: 'that is Σr³, the square of Σr',
-  cubeHalf: 'halved instead of quartering the square of n(n + 1)',
-  rr1: 'that is Σr(r + 1)',
-  rr1over6: 'divided by 6 instead of by 3',
-  n2n1over2: 'used n² where n(n + 1) belongs',
-  n3over3: 'integrated r² instead of summing it',
-};
+/** Σ(ar + b) with a even, so the closed form n(An + C) with A = a/2, C = a/2 + b stays tidy. */
+function linearFormula(rng: RNG): FormulaSpec {
+  const a = rng.pick([2, 2, 4, 6]);
+  const b = rng.int(1 - a, 3);
+  const A = a / 2, C = A + b;
+  const correct = C === 0
+    ? prod([[A, 0], [1, 0]], 1, A === 1 ? 'n^2' : `${A}n^2`)
+    : prod([[1, 0], [A, C]]);
+  return {
+    id: 'linear', a, b, lo: [0, 1], hi: [1, 0], correct,
+    wrong: [
+      { form: prod([[1, 0], [a, a + b]]), trap: 'forgot the 2 in n(n + 1)/2 when summing ar' },
+      { form: prod([[1, 0], [a, b]]), trap: 'multiplied the last term by n' },
+      { form: prod([[1, 0], [A, C]], 2), trap: 'halved one time too many' },
+      { form: prod([[A, 0], [1, 1]], 1, A === 1 ? 'n(n + 1)' : `${A}n(n + 1)`), trap: 'dropped the constant term' },
+      { form: { tex: `${A === 1 ? '' : A}n^2 ${C > 0 ? '+' : '-'} ${Math.abs(C)}`, coeffs: [A, 0, C] }, trap: 'added the constant once instead of n times' },
+      { form: prod([[1, 0], [A, C + 1]]), trap: 'slip of one inside the bracket' },
+    ],
+  };
+}
 
-const FORMULA_QS: { id: SumId; correct: string; wrong: string[] }[] = [
-  { id: 'odd', correct: 'n2', wrong: ['nn1', 'n2minus1', 'twoN2', 'n2n1', 'nn1over2'] },
-  { id: 'r', correct: 'nn1over2', wrong: ['nn1', 'nnminus1over2', 'n2over2', 'n2', 'nn1over4'] },
-  { id: 'even', correct: 'nn1', wrong: ['nn1over2', 'twoN2', 'n2', 'n2n1', 'nnminus1over2'] },
-  { id: 'sq', correct: 'sq', wrong: ['sq3', 'cube', 'nn1over2', 'n3over3', 'rr1'] },
-  { id: 'cube', correct: 'cube', wrong: ['cubeHalf', 'sq', 'n2n1over2', 'nn1over2', 'rr1'] },
-  { id: 'r-r1', correct: 'rr1', wrong: ['rr1over6', 'sq', 'n2n1over2', 'nn1over2', 'cube'] },
-];
+/** Σ r, Σ r² and Σ r³: the three results that have to be known by heart. */
+function standardFormula(rng: RNG): FormulaSpec {
+  const which = rng.pick(['r', 'sq', 'cube'] as const);
+  if (which === 'r') {
+    return {
+      id: 'r', a: 0, b: 0, lo: [0, 1], hi: [1, 0],
+      correct: prod([[1, 0], [1, 1]], 2),
+      wrong: [
+        { form: prod([[1, 0], [1, 1]]), trap: 'that is Σ2r: the division by 2 was dropped' },
+        { form: prod([[1, 0], [1, 0]], 1, 'n^2'), trap: 'that is Σ(2r − 1)' },
+        { form: prod([[1, 0], [1, -1]], 2), trap: 'off by one: that is the sum to n − 1' },
+        { form: prod([[1, 0], [1, 1]], 4), trap: 'halved one time too many' },
+        { form: prod([[1, 0], [1, 0]], 2, '\\frac{n^2}{2}'), trap: 'dropped the +1 from n(n + 1)/2' },
+      ],
+    };
+  }
+  if (which === 'sq') {
+    return {
+      id: 'sq', a: 0, b: 0, lo: [0, 1], hi: [1, 0],
+      correct: prod([[1, 0], [1, 1], [2, 1]], 6),
+      wrong: [
+        { form: prod([[1, 0], [1, 1], [2, 1]], 3), trap: 'divided by 3 instead of by 6' },
+        { form: prod([[1, 0], [1, 0], [1, 1], [1, 1]], 4, '\\left(\\frac{n(n+1)}{2}\\right)^2'), trap: 'that is Σr³, the square of Σr' },
+        { form: prod([[1, 0], [1, 1]], 2), trap: 'that is Σr' },
+        { form: prod([[1, 0], [1, 0], [1, 0]], 3, '\\frac{n^3}{3}'), trap: 'integrated r² instead of summing it' },
+        { form: prod([[1, 0], [1, 1], [2, 1]], 2), trap: 'divided by 2 instead of by 6' },
+      ],
+    };
+  }
+  return {
+    id: 'cube', a: 0, b: 0, lo: [0, 1], hi: [1, 0],
+    correct: prod([[1, 0], [1, 0], [1, 1], [1, 1]], 4, '\\frac{n^2(n+1)^2}{4}'),
+    wrong: [
+      { form: prod([[1, 0], [1, 0], [1, 1], [1, 1]], 2, '\\frac{n^2(n+1)^2}{2}'), trap: 'halved instead of quartering the square of n(n + 1)' },
+      { form: prod([[1, 0], [1, 1], [2, 1]], 6), trap: 'that is Σr²' },
+      { form: prod([[1, 0], [1, 1]], 2), trap: 'forgot to square: that is Σr' },
+      { form: prod([[1, 0], [1, 0], [1, 1]], 2, '\\frac{n^2(n+1)}{2}'), trap: 'used n² where n(n + 1) belongs' },
+      { form: prod([[1, 0], [1, 1], [1, 2]], 3), trap: 'that is Σr(r + 1)' },
+    ],
+  };
+}
+
+/** Σ r(r + k) for odd k, whose closed form is n(n+1)(n+j)/3 with j = (3k+1)/2. */
+function productFormula(rng: RNG): FormulaSpec {
+  const k = rng.pick([1, 3, 5]);
+  const j = (3 * k + 1) / 2;
+  return {
+    id: 'r-rk', a: k, b: 0, lo: [0, 1], hi: [1, 0],
+    correct: prod([[1, 0], [1, 1], [1, j]], 3),
+    wrong: [
+      { form: prod([[1, 0], [1, 1], [1, j]], 6), trap: 'divided by 6 instead of by 3' },
+      { form: prod([[1, 0], [1, 1], [2, 1]], 6), trap: `that is Σr² alone: the ${k}r term was dropped` },
+      { form: prod([[1, 0], [1, 1], [1, j]], 2), trap: 'divided by 2 instead of by 3' },
+      { form: prod([[1, 0], [1, 1]], 2), trap: 'that is Σr' },
+      { form: prod([[1, 0], [1, 1], [1, j + 1]], 3), trap: 'slip of one inside the last bracket' },
+      { form: prod([[1, 0], [1, 0], [1, 1], [1, 1]], 4, '\\left(\\frac{n(n+1)}{2}\\right)^2'), trap: 'that is Σr³' },
+    ],
+  };
+}
+
+/** Σ (2r)² = 2n(n+1)(2n+1)/3 and Σ (2r − 1)² = n(2n−1)(2n+1)/3. */
+function squareFormula(rng: RNG): FormulaSpec {
+  if (rng.bool(0.5)) {
+    return {
+      id: 'lin-sq', a: 2, b: 0, lo: [0, 1], hi: [1, 0],
+      correct: prod([[2, 0], [1, 1], [2, 1]], 3),
+      wrong: [
+        { form: prod([[1, 0], [1, 1], [2, 1]], 6), trap: 'that is Σr²: the factor of 4 was dropped' },
+        { form: prod([[1, 0], [1, 1], [2, 1]], 3), trap: 'took out a factor of 2 instead of 4' },
+        { form: prod([[4, 0], [1, 1], [2, 1]], 3), trap: 'doubled the whole sum' },
+        { form: prod([[1, 0], [1, 0], [1, 1], [1, 1]], 1, 'n^2(n+1)^2'), trap: 'squared the sum Σ2r instead of summing the squares' },
+        { form: prod([[2, 0], [1, 1], [2, 1]], 6), trap: 'divided by 6 instead of by 3' },
+      ],
+    };
+  }
+  return {
+    id: 'lin-sq', a: 2, b: -1, lo: [0, 1], hi: [1, 0],
+    correct: prod([[1, 0], [2, -1], [2, 1]], 3),
+    wrong: [
+      { form: prod([[1, 0], [2, -1], [2, 1]], 6), trap: 'divided by 6 instead of by 3' },
+      { form: prod([[1, 0], [1, 0], [1, 0], [1, 0]], 1, 'n^4'), trap: 'squared Σ(2r − 1) = n² instead of summing the squares' },
+      { form: prod([[1, 0], [1, 0]], 1, 'n^2'), trap: 'that is Σ(2r − 1): the bracket was never squared' },
+      { form: prod([[1, 0], [1, 1], [2, 1]], 6), trap: 'that is Σr²' },
+      { form: prod([[1, 0], [2, -1], [2, 1]], 2), trap: 'divided by 2 instead of by 3' },
+    ],
+  };
+}
+
+/** Sums whose limits depend on n: Σ_{r=n+1}^{2n} r, Σ_{r=n}^{2n} r and Σ_{r=1}^{2n} r. */
+function rangeFormula(rng: RNG): FormulaSpec {
+  const which = rng.pick([0, 1, 2]);
+  if (which === 0) {
+    return {
+      id: 'r', a: 0, b: 0, lo: [1, 1], hi: [2, 0],
+      correct: prod([[1, 0], [3, 1]], 2),
+      wrong: [
+        { form: prod([[1, 0], [2, 1]]), trap: 'that is the sum all the way from r = 1 to r = 2n' },
+        { form: prod([[1, 0], [1, 1]], 2), trap: 'that is the sum from r = 1 to r = n' },
+        { form: prod([[1, 0], [3, 1]]), trap: 'forgot to halve' },
+        { form: prod([[3, 0], [1, 1]], 2), trap: 'included r = n as well' },
+        { form: prod([[1, 0], [3, -1]], 2), trap: 'subtracted the sum to n + 1 instead of to n' },
+      ],
+    };
+  }
+  if (which === 1) {
+    return {
+      id: 'r', a: 0, b: 0, lo: [1, 0], hi: [2, 0],
+      correct: prod([[3, 0], [1, 1]], 2),
+      wrong: [
+        { form: prod([[1, 0], [3, 1]], 2), trap: 'left out the term r = n' },
+        { form: prod([[1, 0], [2, 1]]), trap: 'that is the sum all the way from r = 1 to r = 2n' },
+        { form: prod([[1, 0], [1, 1]], 2), trap: 'that is the sum from r = 1 to r = n' },
+        { form: prod([[3, 0], [1, 1]]), trap: 'forgot to halve' },
+        { form: prod([[3, 0], [1, -1]], 2), trap: 'slip of one inside the bracket' },
+      ],
+    };
+  }
+  return {
+    id: 'r', a: 0, b: 0, lo: [0, 1], hi: [2, 0],
+    correct: prod([[1, 0], [2, 1]]),
+    wrong: [
+      { form: prod([[2, 0], [2, 1]]), trap: 'forgot to divide 2n(2n + 1) by 2' },
+      { form: prod([[1, 0], [1, 1]], 2), trap: 'summed only to r = n' },
+      { form: prod([[1, 0], [2, 1]], 2), trap: 'halved one time too many' },
+      { form: prod([[1, 0], [2, -1]]), trap: 'off by one at the top of the sum' },
+      { form: prod([[2, 0], [1, 1]]), trap: 'used 2n(n + 1) in place of n(2n + 1)' },
+    ],
+  };
+}
 
 function formulaQ(rng: RNG): Generated | null {
-  const q = rng.pick(FORMULA_QS);
-  const correct = `$${F[q.correct].tex}$`;
-  const wrong = rng.shuffle(q.wrong).slice(0, 4).map((k) => ({ display: `$${F[k].tex}$`, trap: FORMULA_TRAPS[k] }));
-  const options = buildChoiceOptions(rng, correct, wrong);
-  const optionFormulas = options.map((o) => {
-    const key = [q.correct, ...q.wrong].find((k) => `$${F[k].tex}$` === o.display)!;
-    return [o.display, F[key].coeffs] as [string, number[]];
-  });
-  const check = [1, 2, 3].map((n) => {
+  const spec = rng.weighted(
+    [linearFormula, standardFormula, productFormula, squareFormula, rangeFormula],
+    [3, 2, 2, 2, 2],
+  )(rng);
+  // Two forms that are the same polynomial would give two correct options.
+  const pool: { form: Form; trap: string }[] = [];
+  for (const w of spec.wrong) {
+    if (sameForm(w.form, spec.correct) || pool.some((o) => sameForm(o.form, w.form))) continue;
+    pool.push(w);
+  }
+  if (pool.length < 4) return null;
+  const wrongForms = [...pool.slice(0, 2), ...rng.shuffle(pool.slice(2))].slice(0, 4);
+  const correct = `$${spec.correct.tex}$`;
+  const options = buildChoiceOptions(rng, correct, wrongForms.map((w) => ({ display: `$${w.form.tex}$`, trap: w.trap })));
+  const byDisplay = new Map<string, Poly>([[correct, spec.correct.coeffs]]);
+  for (const w of wrongForms) byDisplay.set(`$${w.form.tex}$`, w.form.coeffs);
+  const optionFormulas = options.map((o) => [o.display, byDisplay.get(o.display)!] as [string, number[]]);
+  const sumTo = (n: number) => {
     let s = 0;
-    for (let r = 1; r <= n; r++) s += term(q.id, r);
-    return `$n = ${n}$ gives $${s}$`;
-  }).join(', ');
+    for (let r = spec.lo[0] * n + spec.lo[1]; r <= spec.hi[0] * n + spec.hi[1]; r++) s += term(spec.id, r, spec.a, spec.b);
+    return s;
+  };
+  const check = [1, 2, 3].map((n) => `$n = ${n}$ gives $${sumTo(n)}$`).join(', ');
+  const sum = `${sigma(spec.id, limitTex(spec.lo), limitTex(spec.hi), spec.a, spec.b)}`;
+  const stem = rng.bool(0.5)
+    ? `Which of the following is equal to $${sum}$ for every positive integer $n$?`
+    : `For every positive integer $n$, $${sum}$ is equal to which of the following?`;
   return {
-    stem: `Which of the following is equal to $${sigma(q.id, 1, 'n')}$ for every positive integer $n$?`,
+    stem,
     answer: { kind: 'choice' as const, value: correct },
     options,
-    solution: `Test small values: ${check}. Only $${F[q.correct].tex}$ gives all of these.`,
+    solution: `Test small values: ${check}. Only $${spec.correct.tex}$ gives all of these.`,
     trap: 'Check a formula on n = 1, 2 and 3 before trusting it: most wrong options fail at n = 2.',
     tags: ['series', 'standard-results', 'formula'],
-    params: { variant: 'formula', id: q.id, optionFormulas },
+    params: { variant: 'formula', id: spec.id, a: spec.a, b: spec.b, lo: spec.lo, hi: spec.hi, optionFormulas },
     typedAllowed: false,
   };
 }
@@ -404,7 +577,7 @@ export default defineTemplate({
     2: 'Σ r² and Σ r³ for small n',
     3: 'Σ (ar + b); a sum whose lower limit is not 1',
     4: 'Σ r(r + 1) and Σ (2r + 1)² via Σr² and Σr; Σ_{r=p}^{q} r²',
-    5: 'which closed form equals Σ_{r=1}^{n} f(r)?',
+    5: 'which closed form equals Σ f(r)? — including sums whose limits depend on n',
   },
   generate(rng, level: Level) {
     return retry(rng, () => {
@@ -418,7 +591,7 @@ export default defineTemplate({
     });
   },
   verify(q) {
-    const p = q.params as { variant: string; id: SumId; lo?: number; hi?: number; a?: number; b?: number; optionFormulas?: [string, number[]][] };
+    const p = q.params as { variant: string; id: SumId; lo?: number | [number, number]; hi?: number | [number, number]; a?: number; b?: number; optionFormulas?: [string, number[]][] };
     const sumOf = (id: SumId, lo: number, hi: number, a = 0, b = 0) => {
       let s = 0;
       for (let r = lo; r <= hi; r++) s += term(id, r, a, b);
@@ -426,13 +599,14 @@ export default defineTemplate({
     };
     if (p.variant === 'value') {
       if (q.answer.kind !== 'exact') return false;
-      return Math.abs(q.answer.value.toNumber() - sumOf(p.id, p.lo!, p.hi!, p.a, p.b)) < 1e-9;
+      return Math.abs(q.answer.value.toNumber() - sumOf(p.id, p.lo as number, p.hi as number, p.a, p.b)) < 1e-9;
     }
     if (p.variant === 'formula') {
       if (q.answer.kind !== 'choice') return false;
-      const evalPoly = (c: number[], n: number) => c.reduce((s, k) => s * n + k, 0);
+      const [loM, loC] = p.lo as [number, number];
+      const [hiM, hiC] = p.hi as [number, number];
       // Sum in a loop for n = 1..8 and keep the options that match every time.
-      const sums = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => sumOf(p.id, 1, n));
+      const sums = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => sumOf(p.id, loM * n + loC, hiM * n + hiC, p.a, p.b));
       const matching = p.optionFormulas!.filter(([, c]) =>
         sums.every((s, i) => Math.abs(evalPoly(c, i + 1) - s) < 1e-6));
       return matching.length === 1 && matching[0][0] === q.answer.value;

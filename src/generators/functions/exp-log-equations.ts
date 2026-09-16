@@ -10,7 +10,7 @@ import type { RNG } from '../../core/rng';
  * Level 1: 2^x = 1/8; e^(ln 5); ln(e^3)
  * Level 2: log_2(x − 1) = 3; 3^(2x) = 81; ln x = ln 7 + ln 2
  * Level 3: e^(2 ln 3); ln(x²) = 2 ln 5 + ln 4; log_3 x + log_3(x − 6) = 3 (reject the negative root)
- * Level 4: quadratic in 2^x: 4^x − 5(2^x) + 4 = 0 → {0, 2}
+ * Level 4: quadratic in b^x: 4^x − 5(2^x) + 4 = 0 → {0, 2}; 2(4^x) − 5(2^x) + 2 = 0 → {−1, 1}
  * Level 5: e^(2x) = 7e^x − 12 → x = ln 3 or ln 4 (choice); 2^(x+1) + 2^x = 48;
  *          log_2(x + 1) + log_2(x − 1) = 3 with a root to reject
  *
@@ -23,7 +23,7 @@ interface Params {
   a?: number; b?: number; c?: number; d?: number; k?: number; m?: number;
   shift?: number; op?: string; kn?: number; kd?: number;
   A?: number; B?: number; r1?: number; r2?: number;
-  S?: number; P?: number; p?: number; q?: number;
+  S?: number; P?: number; L?: number; p?: number; q?: number;
   e1?: number; s2?: number; N?: number; x?: number;
 }
 
@@ -424,14 +424,22 @@ function logProduct(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------- level 4
 
+/** The exam writes b^(2x) as 4^x, as 2^{2x} or as (2^x)^2; with a leading coefficient L in front. */
+function leadTex(rng: RNG, b: number, L = 1): string {
+  const which = rng.int(0, 2);
+  const sq = which === 0 ? `${b * b}^{x}` : which === 1 ? `${b}^{2x}` : `\\left(${b}^{x}\\right)^{2}`;
+  if (L === 1) return sq;
+  return which === 2 ? `${L}${sq}` : `${L}\\left(${sq}\\right)`;
+}
+
 interface ExpQuad { b: number; p: number; q: number; S: number; P: number }
 const EXP_QUADS: ExpQuad[] = [];
 for (const b of [2, 3, 4, 5]) {
-  for (let p = 0; p <= 3; p++) {
-    for (let q = p + 1; q <= 4; q++) {
+  for (let p = 0; p <= 4; p++) {
+    for (let q = p + 1; q <= 5; q++) {
       const S = b ** p + b ** q;
       const P = b ** (p + q);
-      if (S <= 14 && P <= 40) EXP_QUADS.push({ b, p, q, S, P });
+      if (S <= 30 && P <= 100) EXP_QUADS.push({ b, p, q, S, P });
     }
   }
 }
@@ -448,15 +456,56 @@ function expQuad(rng: RNG): Generated | null {
     { values: [E(p), E(q + 1)], trap: 'miscounted one of the powers' },
     { values: [E(S), E(P)], trap: 'read the two coefficients off the equation' },
   ];
+  const lead = leadTex(rng, b);
   const coef = `${S}\\left(${b}^{x}\\right)`;
+  const stem = rng.bool()
+    ? `Solve $${lead} - ${coef} + ${P} = 0$.`
+    : `Solve $${lead} + ${P} = ${coef}$.`;
   return {
-    stem: `Solve $${b * b}^{x} - ${coef} + ${P} = 0$.`,
+    stem,
     answer: { kind: 'set', values: roots },
     options: setOptions(rng, roots, cands),
     solution: `Put $t = ${b}^{x}$, so $t^{2} - ${S}t + ${P} = 0$ and $t = ${b ** p}$ or $t = ${b ** q}$. Then $${b}^{x} = ${b ** p}$ or $${b}^{x} = ${b ** q}$, giving $x = ${p}$ or $x = ${q}$.`,
     trap: 'The substitution t = bˣ gives t, not x: convert each value of t back into a power of the base.',
     tags: ['exponentials', 'quadratic', 'substitution', 'solve'],
-    params: { variant: 'exp-quad', b, S, P } satisfies Params,
+    params: { variant: 'exp-quad', b, S, P, L: 1 } satisfies Params,
+    typedAllowed: true,
+  };
+}
+
+/** L b^(2x) − S b^x + P = 0 with L = b^r, roots t = b^p and t = b^(−r): one solution is negative. */
+interface ExpQuadL { b: number; p: number; r: number; L: number; S: number; P: number }
+const EXP_QUADS_L: ExpQuadL[] = [];
+for (const b of [2, 3, 4, 5]) {
+  for (let r = 1; r <= 2; r++) {
+    for (let p = 1; p <= 4; p++) {
+      const L = b ** r, S = b ** (p + r) + 1, P = b ** p;
+      if (L <= 9 && S <= 30 && P <= 27) EXP_QUADS_L.push({ b, p, r, L, S, P });
+    }
+  }
+}
+
+function expQuadLeading(rng: RNG): Generated | null {
+  const { b, p, r, L, S, P } = rng.pick(EXP_QUADS_L);
+  const roots = [E(p), E(-r)];
+  const small = frac(1, b ** r);
+  const cands: { values: Exact[]; trap: string; must?: boolean }[] = [
+    { values: [E(P), small], trap: 'solved for t = bˣ and stopped there', must: true },
+    { values: [E(p), E(r)], trap: 'lost the minus sign: bˣ < 1 gives a negative x', must: true },
+    { values: [E(p), small], trap: 'converted one value of t back to x but not the other' },
+    { values: [E(-p), E(-r)], trap: 'changed the sign of both solutions' },
+    { values: [E(S), E(P)], trap: 'read the two coefficients off the equation' },
+    { values: [E(p), E(-r - 1)], trap: 'miscounted the negative power' },
+    { values: [E(p + 1), E(-r)], trap: 'miscounted one of the powers' },
+  ];
+  return {
+    stem: `Solve $${leadTex(rng, b, L)} - ${S}\\left(${b}^{x}\\right) + ${P} = 0$.`,
+    answer: { kind: 'set', values: roots },
+    options: setOptions(rng, roots, cands),
+    solution: `Put $t = ${b}^{x}$: $${L}t^{2} - ${S}t + ${P} = 0$ factorises as $\\left(${L}t - 1\\right)\\left(t - ${P}\\right) = 0$, so $t = \\frac{1}{${L}}$ or $t = ${P}$. Then $${b}^{x} = ${b}^{-${r}}$ or $${b}^{x} = ${b}^{${p}}$, giving $x = ${-r}$ or $x = ${p}$.`,
+    trap: 'A value of t below 1 is still a valid solution: bˣ = 1/bʳ gives x = −r, not x = r.',
+    tags: ['exponentials', 'quadratic', 'substitution', 'solve'],
+    params: { variant: 'exp-quad', b, S, P, L } satisfies Params,
     typedAllowed: true,
   };
 }
@@ -472,21 +521,38 @@ function eQuadChoice(rng: RNG): Generated | null {
   const lo = Math.min(r1, r2), hi = Math.max(r1, r2);
   const A = lo + hi, B = lo * hi;
   if (A > 12 || B > 30) return null;
+  const ln = Math.log;
   const correct = `$x = ${lnTex(lo)}$ or $x = ${lnTex(hi)}$`;
-  const wrong = [
-    { display: `$x = ${lo}$ or $x = ${hi}$`, trap: 'gave the values of eˣ rather than x' },
-    { display: `$x = ${lnTex(A)}$ or $x = ${lnTex(B)}$`, trap: 'read the roots straight off the coefficients' },
-    ...rng.pickDistinct([
-      { display: `$x = -${lnTex(lo)}$ or $x = -${lnTex(hi)}$`, trap: 'sign error when taking logarithms' },
-      { display: `$x = ${lnTex(B)}$`, trap: 'combined the two solutions into ln(ab)' },
-      { display: `$x = ${lnTex(hi)}$`, trap: 'rejected one root although both are valid' },
-      { display: `$x = ${lnTex(lo)} + ${lnTex(hi)}$`, trap: 'added the two solutions' },
-    ], 2),
+  /** Every option carries the x-values it claims, so no two options can denote the same answer. */
+  interface CC { display: string; trap: string; vals: number[]; must?: boolean }
+  const cands: CC[] = [
+    { display: `$x = ${lo}$ or $x = ${hi}$`, trap: 'gave the values of eˣ rather than x', vals: [lo, hi], must: true },
+    { display: `$x = ${lnTex(A)}$ or $x = ${lnTex(B)}$`, trap: 'read the roots straight off the coefficients', vals: [ln(A), ln(B)], must: true },
+    { display: `$x = -${lnTex(lo)}$ or $x = -${lnTex(hi)}$`, trap: 'sign error when taking logarithms', vals: [-ln(lo), -ln(hi)] },
+    { display: `$x = ${lnTex(B)}$`, trap: 'combined the two solutions into ln(ab)', vals: [ln(B)] },
+    { display: `$x = ${lnTex(hi)}$`, trap: 'rejected one root although both are valid', vals: [ln(hi)] },
+    { display: `$x = ${lnTex(lo)}$`, trap: 'rejected one root although both are valid', vals: [ln(lo)] },
+    { display: `$x = ${lnTex(A)} - ${lnTex(B)}$`, trap: 'took logarithms term by term, as if ln(P − Q) = ln P − ln Q', vals: [ln(A) - ln(B)] },
   ];
+  const key = (vals: number[]) => vals.map((v) => v.toFixed(6)).sort().join(',');
+  const seen = new Set([key([ln(lo), ln(hi)])]);
+  const picked: { display: string; trap: string }[] = [];
+  const take = (c: CC) => {
+    const k = key(c.vals);
+    if (picked.length >= 4 || seen.has(k)) return;
+    seen.add(k);
+    picked.push({ display: c.display, trap: c.trap });
+  };
+  cands.filter((c) => c.must).forEach(take);
+  rng.shuffle(cands.filter((c) => !c.must)).forEach(take);
+  if (picked.length < 4) return null;
+  const stem = rng.bool()
+    ? `Solve $e^{2x} = ${A}e^{x} - ${B}$, giving your answers in terms of natural logarithms.`
+    : `Solve $e^{2x} - ${A}e^{x} + ${B} = 0$, giving your answers in terms of natural logarithms.`;
   return {
-    stem: `Solve $e^{2x} = ${A}e^{x} - ${B}$, giving your answers in terms of natural logarithms.`,
+    stem,
     answer: { kind: 'choice', value: correct },
-    options: buildChoiceOptions(rng, correct, wrong),
+    options: buildChoiceOptions(rng, correct, picked),
     solution: `Put $t = e^{x}$: $t^{2} - ${A}t + ${B} = 0$, so $t = ${lo}$ or $t = ${hi}$. Both are positive, so $x = ${lnTex(lo)}$ or $x = ${lnTex(hi)}$.`,
     trap: 'Solve for t = eˣ first, then take logs of each value; eˣ = t gives x = ln t.',
     tags: ['exponentials', 'logarithms', 'quadratic', 'substitution'],
@@ -557,7 +623,8 @@ function logDiffSquares(rng: RNG): Generated | null {
     { value: E(-x), trap: 'kept the negative root, for which neither logarithm exists', must: true },
     { value: v % 2 === 0 ? E(v / 2) : null, trap: 'used log a + log b = log(a + b)', must: true },
     { value: E(v + a * a), trap: 'forgot to square-root: that is x², not x' },
-    { value: E(v - a * a > 0 ? v - a * a : v + a), trap: 'subtracted a² instead of adding it' },
+    // only offer this one when the mistake really produces a value: v − a² must be positive
+    { value: v - a * a > 0 ? E(v - a * a) : null, trap: 'subtracted a² instead of adding it' },
     { value: E(x + 1), trap: 'arithmetic slip' },
     { value: E(x - 1), trap: 'arithmetic slip' },
     { value: E(a + k), trap: 'combined the numbers in the question at random' },
@@ -578,7 +645,7 @@ const VARIANTS: Record<Level, ((rng: RNG) => Generated | null)[]> = {
   1: [expRecip, cancelSingle, cancelSum],
   2: [logLinear, expMultiple, lnSum],
   3: [eCoefLn, lnSquare, logProduct],
-  4: [expQuad],
+  4: [expQuad, expQuad, expQuadLeading],
   5: [eQuadChoice, sumPowers, logDiffSquares],
 };
 
@@ -591,7 +658,7 @@ export default defineTemplate({
     1: '2^x = 1/8; e^(ln 5); ln(e^3)',
     2: 'log_2(x − 1) = 3; 3^(2x) = 81; ln x = ln 7 + ln 2',
     3: 'e^(2 ln 3); ln(x²) = 2 ln 5 + ln 4; log_3 x + log_3(x − 6) = 3',
-    4: 'quadratic in 2^x: 4^x − 5(2^x) + 4 = 0',
+    4: 'quadratic in b^x: 4^x − 5(2^x) + 4 = 0; 2(4^x) − 5(2^x) + 2 = 0',
     5: 'e^(2x) = 7e^x − 12 (answers in ln); 2^(x+1) + 2^x = 48; log_2(x+1) + log_2(x−1) = 3',
   },
   generate(rng, level: Level) {
@@ -630,12 +697,13 @@ export default defineTemplate({
         return close(logb(p.b!, one) + logb(p.b!, one - p.d!), p.k!);
       }
       case 'exp-quad': {
-        // substitute each root into b^(2x) − S b^x + P = 0
+        // substitute each root into L b^(2x) − S b^x + P = 0
         if (q.answer.kind !== 'set' || q.answer.values.length !== 2) return false;
         if (q.answer.values[0].equals(q.answer.values[1])) return false;
+        const L = p.L ?? 1;
         return q.answer.values.every((r) => {
           const t = Math.pow(p.b!, r.toNumber());
-          return Math.abs(t * t - p.S! * t + p.P!) < 1e-7;
+          return Math.abs(L * t * t - p.S! * t + p.P!) < 1e-6;
         });
       }
       case 'e-quad-choice': {
@@ -650,6 +718,29 @@ export default defineTemplate({
         // the claimed x-values must satisfy the original equation
         for (const x of [Math.log(r1), Math.log(r2)]) {
           if (Math.abs(Math.exp(2 * x) - (p.A! * Math.exp(x) - p.B!)) > 1e-7) return false;
+        }
+        // and no two options may denote the same value, however they are written
+        const numeric = (s: string): number[] | null => {
+          const parts = s.split(' or ').map((t) => t.trim());
+          const out: number[] = [];
+          for (const part of parts) {
+            const m = /^\$x = (-?)(?:\\ln (\d+)(?: - \\ln (\d+))?|(\d+))\$$/.exec(part);
+            if (!m) return null;
+            const sign = m[1] === '-' ? -1 : 1;
+            const val = m[4] !== undefined ? Number(m[4])
+              : m[3] !== undefined ? Math.log(Number(m[2])) - Math.log(Number(m[3]))
+                : Math.log(Number(m[2]));
+            out.push(sign * val);
+          }
+          return out;
+        };
+        const keys = new Set<string>();
+        for (const o of q.options) {
+          const vals = numeric(o.display);
+          if (!vals) return false;
+          const k = vals.map((v) => v.toFixed(6)).sort().join(',');
+          if (keys.has(k)) return false;
+          keys.add(k);
         }
         return q.answer.value === `$x = ${lnTex(r1)}$ or $x = ${lnTex(r2)}$`;
       }

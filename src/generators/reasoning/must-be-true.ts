@@ -1,13 +1,13 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
 import { statementOptions, STATEMENT_COMBOS, buildChoiceOptions } from '../../core/options';
-import { isPrime, factorial } from '../../core/gen-utils';
+import { isPrime, factorial, gcd } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
 
 /**
  * "Which of these statements must be true?" — proof-style reasoning.
  * Level 1: parity and multiples (n odd ⇒ n² odd, n³ − n divisible by 6, …)
  * Level 2: primes, inequalities and a geometry claim
- * Level 3: identify the contrapositive of a given implication (choice)
+ * Level 3: identify the contrapositive, converse or inverse of a given implication (choice)
  * Level 4: statements about a parameter k, where a counterexample decides them
  * Level 5: mixed statements with explicit quantifiers ("for all", "there exists")
  */
@@ -80,7 +80,12 @@ interface Claim {
   why: (m: number) => string;
   /** Parameter values this claim may be used with. */
   ms?: number[];
+  /** Claims that must not appear alongside this one (negations, or one implying the other). */
+  excludes?: string[];
 }
+
+/** The two-digit parameter code m·10 + d used by the "mk is a multiple of d" family. */
+const pairOf = (code: number): [number, number] => [Math.floor(code / 10), code % 10];
 
 /** Brute-force checkers, keyed by claim id: the independent route used only by verify(). */
 const CHECKS: Record<string, (m: number) => boolean> = {
@@ -112,7 +117,10 @@ const CHECKS: Record<string, (m: number) => boolean> = {
   'mk1-odd': (m) => INTS.every((k) => Math.abs((m * k + 1) % 2) === 1),
   'k2-mult-m': (m) => POS.every((k) => ((k * k) % m === 0 ? k % m === 0 : true)),
   'm-div-k3-k': (m) => INTS.every((k) => (k * k * k - k) % m === 0),
-  'mk-mult-m2': (m) => POS.every((k) => ((m * k) % (m * m) === 0 ? k % m === 0 : true)),
+  'mk-mult-d': (code) => {
+    const [m, d] = pairOf(code);
+    return POS.every((k) => ((m * k) % d === 0 ? k % d === 0 : true));
+  },
   'exists-n2-2n': () => INTS.some((n) => n * n === 2 * n),
   'all-n2-ge-n': () => INTS.every((n) => n * n >= n),
   'exists-consec-primes': () => PRIMES.some((p) => isPrime(p + 1)),
@@ -133,12 +141,12 @@ const T = () => true;
 const Fa = () => false;
 
 const POOL_1: Claim[] = [
-  { id: 'odd-sq-odd', text: () => 'For every integer $n$, if $n$ is odd then $n^2$ is odd.', truth: T, why: () => '$(2m+1)^2 = 4m^2 + 4m + 1$ is odd' },
-  { id: 'sq-even-even', text: () => 'For every integer $n$, if $n^2$ is even then $n$ is even.', truth: T, why: () => 'an odd $n$ would give an odd $n^2$' },
-  { id: 'sq-odd-even', text: () => 'For every integer $n$, if $n^2$ is odd then $n$ is even.', truth: Fa, why: () => '$n = 3$ gives $n^2 = 9$, which is odd while $n$ is odd' },
-  { id: 'sq-odd-odd', text: () => 'For every integer $n$, if $n^2$ is odd then $n$ is odd.', truth: T, why: () => 'an even $n$ would give an even $n^2$' },
-  { id: 'consec-odd-4', text: () => 'The sum of any two consecutive odd numbers is a multiple of $4$.', truth: T, why: () => '$(2m+1) + (2m+3) = 4(m+1)$' },
-  { id: 'consec-odd-8', text: () => 'The sum of any two consecutive odd numbers is a multiple of $8$.', truth: Fa, why: () => '$1 + 3 = 4$' },
+  { id: 'odd-sq-odd', text: () => 'For every integer $n$, if $n$ is odd then $n^2$ is odd.', truth: T, why: () => '$(2m+1)^2 = 4m^2 + 4m + 1$ is odd', excludes: ['sq-even-even'] },
+  { id: 'sq-even-even', text: () => 'For every integer $n$, if $n^2$ is even then $n$ is even.', truth: T, why: () => 'an odd $n$ would give an odd $n^2$', excludes: ['odd-sq-odd'] },
+  { id: 'sq-odd-even', text: () => 'For every integer $n$, if $n^2$ is odd then $n$ is even.', truth: Fa, why: () => '$n = 3$ gives $n^2 = 9$, which is odd while $n$ is odd', excludes: ['sq-odd-odd'] },
+  { id: 'sq-odd-odd', text: () => 'For every integer $n$, if $n^2$ is odd then $n$ is odd.', truth: T, why: () => 'an even $n$ would give an even $n^2$', excludes: ['sq-odd-even'] },
+  { id: 'consec-odd-4', text: () => 'The sum of any two consecutive odd numbers is a multiple of $4$.', truth: T, why: () => '$(2m+1) + (2m+3) = 4(m+1)$', excludes: ['consec-odd-8'] },
+  { id: 'consec-odd-8', text: () => 'The sum of any two consecutive odd numbers is a multiple of $8$.', truth: Fa, why: () => '$1 + 3 = 4$', excludes: ['consec-odd-4'] },
   { id: 'n3-n-6', text: () => 'For every integer $n$, $n^3 - n$ is divisible by $6$.', truth: T, why: () => '$n^3 - n = (n-1)n(n+1)$, three consecutive integers' },
   { id: 'n2-n-6', text: () => 'For every integer $n$, $n^2 - n$ is divisible by $6$.', truth: Fa, why: () => '$n = 2$ gives $n^2 - n = 2$' },
   { id: 'two-odds-even', text: () => 'The sum of any two odd numbers is even.', truth: T, why: () => '$(2a+1) + (2b+1) = 2(a+b+1)$' },
@@ -155,11 +163,14 @@ const POOL_2: Claim[] = [
   { id: 'prime-sum-even', text: () => 'If $p$ and $q$ are prime numbers then $p + q$ is even.', truth: Fa, why: () => '$2 + 3 = 5$' },
   { id: 'prime-plus-2', text: () => 'If $p$ is prime then $p + 2$ is prime.', truth: Fa, why: () => '$7 + 2 = 9$' },
   { id: 'prime-sq-odd', text: () => 'If $p$ is a prime number greater than $2$ then $p^2$ is odd.', truth: T, why: () => 'every prime above $2$ is odd, and odd squared is odd' },
-  { id: 'x2-lt-x', text: () => 'If $0 < x < 1$ then $x^2 < x$.', truth: T, why: () => 'dividing $x^2 < x$ by the positive $x$ gives $x < 1$' },
-  { id: 'x2-gt-x', text: () => 'If $x > 1$ then $x^2 > x$.', truth: T, why: () => 'dividing by the positive $x$ gives $x > 1$' },
-  { id: 'inv-ineq', text: () => 'For non-zero $x$ and $y$, if $x < y$ then $\\frac{1}{x} > \\frac{1}{y}$.', truth: Fa, why: () => '$x = -1 < 1 = y$, but $-1 < 1$' },
-  { id: 'sq-order', text: () => 'For real $x$ and $y$, if $x^2 > y^2$ then $x > y$.', truth: Fa, why: () => '$x = -3$, $y = 1$' },
-  { id: 'order-sq', text: () => 'For real $x$ and $y$, if $x > y$ then $x^2 > y^2$.', truth: Fa, why: () => '$x = 1$, $y = -3$' },
+  { id: 'x2-lt-x', text: () => 'If $0 < x < 1$ then $x^2 < x$.', truth: T, why: () => 'multiplying $x < 1$ by the positive number $x$ gives $x^2 < x$' },
+  { id: 'x2-gt-x', text: () => 'If $x > 1$ then $x^2 > x$.', truth: T, why: () => 'multiplying $x > 1$ by the positive number $x$ gives $x^2 > x$' },
+  {
+    id: 'inv-ineq', text: () => 'For non-zero $x$ and $y$, if $x < y$ then $\\frac{1}{x} > \\frac{1}{y}$.', truth: Fa,
+    why: () => 'with $x = -1$ and $y = 1$, $\\frac{1}{x} = -1$ and $\\frac{1}{y} = 1$, so $\\frac{1}{x} < \\frac{1}{y}$',
+  },
+  { id: 'sq-order', text: () => 'For real $x$ and $y$, if $x^2 > y^2$ then $x > y$.', truth: Fa, why: () => '$x = -3$ and $y = 1$ give $x^2 = 9 > 1 = y^2$, but $x < y$' },
+  { id: 'order-sq', text: () => 'For real $x$ and $y$, if $x > y$ then $x^2 > y^2$.', truth: Fa, why: () => '$x = 1$ and $y = -3$ give $x > y$, but $x^2 = 1 < 9 = y^2$' },
   { id: 'equal-diag-rect', text: () => 'A quadrilateral whose diagonals are equal in length must be a rectangle.', truth: Fa, why: () => 'an isosceles trapezium also has equal diagonals' },
   { id: 'rect-equal-diag', text: () => 'The diagonals of a rectangle are equal in length.', truth: T, why: () => 'each diagonal is the hypotenuse of a congruent right-angled triangle' },
 ];
@@ -186,31 +197,44 @@ const POOL_4: Claim[] = [
     truth: (m) => [2, 3, 5, 6].includes(m),
     why: (m) => ([2, 3, 5, 6].includes(m)
       ? `$${m}$ is a product of distinct primes, so each of them must divide $k$`
-      : `$k = ${SQ_MULT_COUNTER[m]}$ gives $k^2 = ${SQ_MULT_COUNTER[m] ** 2}$, a multiple of $${m}$`),
+      : `$k = ${SQ_MULT_COUNTER[m]}$ gives $k^2 = ${SQ_MULT_COUNTER[m] ** 2}$, a multiple of $${m}$, but $${SQ_MULT_COUNTER[m]}$ is not a multiple of $${m}$`),
   },
   {
     id: 'm-div-k3-k', ms: [2, 3, 4, 5, 6],
     text: (m) => `For every integer $k$, $k^3 - k$ is divisible by $${m}$.`,
     truth: (m) => 6 % m === 0,
-    why: (m) => (6 % m === 0 ? '$k^3 - k = (k-1)k(k+1)$ is a product of three consecutive integers' : `$k = 2$ gives $k^3 - k = 6$`),
+    why: (m) => (6 % m === 0 ? '$k^3 - k = (k-1)k(k+1)$ is a product of three consecutive integers' : `$k = 2$ gives $k^3 - k = 6$, which is not divisible by $${m}$`),
   },
   {
-    id: 'mk-mult-m2', ms: [2, 3, 4, 5],
-    text: (m) => `For every positive integer $k$, if $${m}k$ is a multiple of $${m * m}$ then $k$ is a multiple of $${m}$.`,
-    truth: T,
-    why: (m) => `dividing both sides by $${m}$ leaves $k$ as a multiple of $${m}$`,
+    // Parameter-dependent: true exactly when m and d share no factor, so the shape alone decides nothing.
+    id: 'mk-mult-d', ms: [24, 34, 26, 56, 39, 49, 23, 48],
+    text: (code) => {
+      const [m, d] = pairOf(code);
+      return `For every positive integer $k$, if $${m}k$ is a multiple of $${d}$ then $k$ is a multiple of $${d}$.`;
+    },
+    truth: (code) => {
+      const [m, d] = pairOf(code);
+      return gcd(m, d) === 1;
+    },
+    why: (code) => {
+      const [m, d] = pairOf(code);
+      const k = d / gcd(m, d);
+      return gcd(m, d) === 1
+        ? `$${m}$ and $${d}$ share no factor, so every factor of $${d}$ has to come from $k$ itself`
+        : `$k = ${k}$ gives $${m * k}$, a multiple of $${d}$, but $${k}$ is not a multiple of $${d}$`;
+    },
   },
 ];
 
 const POOL_5: Claim[] = [
   { id: 'exists-n2-2n', text: () => 'There is an integer $n$ for which $n^2 = 2n$.', truth: T, why: () => '$n = 0$ and $n = 2$ both work' },
-  { id: 'all-n2-ge-n', text: () => 'For every integer $n$, $n^2 \\ge n$.', truth: T, why: () => '$n^2 - n = n(n-1) \\ge 0$ for every integer' },
+  { id: 'all-n2-ge-n', text: () => 'For every integer $n$, $n^2 \\ge n$.', truth: T, why: () => '$n^2 - n = n(n-1) \\ge 0$ for every integer', excludes: ['exists-int-x2-lt-x'] },
   { id: 'exists-consec-primes', text: () => 'There are prime numbers $p$ and $p + 1$.', truth: T, why: () => '$p = 2$ gives the primes $2$ and $3$' },
   { id: 'all-p2-1-mult8', text: () => 'For every prime $p > 2$, $p^2 - 1$ is a multiple of $8$.', truth: T, why: () => '$p$ is odd, so $(p-1)(p+1)$ is a product of consecutive even numbers, one of them a multiple of $4$' },
   { id: 'exists-3n-2', text: () => 'There is an integer $n$ for which $3n = 2$.', truth: Fa, why: () => '$2$ is not a multiple of $3$' },
   { id: 'all-fact-prime', text: () => 'For every positive integer $n$, $n! + 1$ is prime.', truth: Fa, why: () => '$4! + 1 = 25 = 5 \\times 5$' },
   { id: 'all-n2-n-even', text: () => 'For every integer $n$, $n^2 + n$ is even.', truth: T, why: () => '$n^2 + n = n(n+1)$, a product of consecutive integers' },
-  { id: 'exists-int-x2-lt-x', text: () => 'There is an integer $n$ for which $n^2 < n$.', truth: Fa, why: () => '$n(n-1) \\ge 0$ for every integer' },
+  { id: 'exists-int-x2-lt-x', text: () => 'There is an integer $n$ for which $n^2 < n$.', truth: Fa, why: () => '$n(n-1) \\ge 0$ for every integer', excludes: ['all-n2-ge-n'] },
   { id: 'exists-real-x2-lt-x', text: () => 'There is a real number $x$ for which $x^2 < x$.', truth: T, why: () => '$x = \\tfrac12$ gives $x^2 = \\tfrac14$' },
   { id: 'all-x2-1-gt-x', text: () => 'For every real number $x$, $x^2 + 1 > x$.', truth: T, why: () => '$x^2 - x + 1 = (x - \\tfrac12)^2 + \\tfrac34 > 0$' },
   { id: 'perp-diag-rhombus', text: () => 'A quadrilateral whose diagonals are perpendicular must be a rhombus.', truth: Fa, why: () => 'a kite also has perpendicular diagonals' },
@@ -231,6 +255,10 @@ function comboText(truth: boolean[]): string {
 function statementsQ(rng: RNG, level: Level): Generated | null {
   const pool = POOLS[level];
   const picked = rng.pickDistinct(pool, 3);
+  // Never put a statement next to its own negation (or to one that implies it):
+  // that would decide options for the candidate before any thinking.
+  const ids = picked.map((c) => c.id);
+  if (picked.some((c) => c.excludes?.some((e) => ids.includes(e)))) return null;
   const chosen = picked.map((c) => {
     const m = c.ms ? rng.pick(c.ms) : 0;
     return { id: c.id, m, text: c.text(m), truth: c.truth(m), why: c.why(m) };
@@ -252,27 +280,37 @@ function statementsQ(rng: RNG, level: Level): Generated | null {
   };
 }
 
-// ----------------------------------------------------------------------------- level 3: contrapositive
+// ----------------------------------------------------------------------------- level 3: logical forms
 
-/** "n is a multiple of m" as a predicate, with its negation and a test function. */
-function multPred(m: number): { text: string; neg: string; f: (n: number) => boolean } {
-  if (m === 2) return { text: '$n$ is even', neg: '$n$ is odd', f: (n) => n % 2 === 0 };
-  return { text: `$n$ is a multiple of $${m}$`, neg: `$n$ is not a multiple of $${m}$`, f: (n) => n % m === 0 };
-}
+/** A predicate about a positive integer n, with its negation and a test function. */
+interface Pred { text: string; neg: string; f: (n: number) => boolean }
 
-/** Predicate id "mult:6" or "not:mult:6". */
-function predOf(id: string): (n: number) => boolean {
+/** Predicate ids: "mult:6", "sqmult:12", "gt:4", "sqgt:9", "prime" and "not:<id>". */
+function predFor(id: string): Pred {
   if (id.startsWith('not:')) {
-    const inner = predOf(id.slice(4));
-    return (n) => !inner(n);
+    const inner = predFor(id.slice(4));
+    return { text: inner.neg, neg: inner.text, f: (n) => !inner.f(n) };
   }
-  return multPred(Number(id.split(':').pop())).f;
+  const [kind, arg] = id.split(':');
+  const m = Number(arg);
+  switch (kind) {
+    case 'mult':
+      return m === 2
+        ? { text: '$n$ is even', neg: '$n$ is odd', f: (n) => n % 2 === 0 }
+        : { text: `$n$ is a multiple of $${m}$`, neg: `$n$ is not a multiple of $${m}$`, f: (n) => n % m === 0 };
+    case 'sqmult':
+      return { text: `$n^2$ is a multiple of $${m}$`, neg: `$n^2$ is not a multiple of $${m}$`, f: (n) => (n * n) % m === 0 };
+    case 'gt':
+      return { text: `$n > ${m}$`, neg: `$n \\le ${m}$`, f: (n) => n > m };
+    case 'sqgt':
+      return { text: `$n^2 > ${m}$`, neg: `$n^2 \\le ${m}$`, f: (n) => n * n > m };
+    default:
+      return { text: '$n$ is a prime number', neg: '$n$ is not a prime number', f: (n) => isPrime(n) };
+  }
 }
 
-function textOf(id: string): string {
-  const m = Number(id.split(':').pop());
-  return id.startsWith('not:') ? multPred(m).neg : multPred(m).text;
-}
+const negate = (id: string): string => (id.startsWith('not:') ? id.slice(4) : `not:${id}`);
+const textOf = (id: string): string => predFor(id).text;
 
 /** Pairs (m, d) with d a proper divisor of m: "multiple of m" ⇒ "multiple of d", but not conversely. */
 const DIVISOR_PAIRS: [number, number][] = [
@@ -280,32 +318,77 @@ const DIVISOR_PAIRS: [number, number][] = [
   [12, 6], [14, 7], [15, 3], [15, 5], [16, 4], [18, 6], [18, 9], [20, 4], [20, 5], [20, 10],
 ];
 
-function contrapositiveQ(rng: RNG): Generated | null {
-  const [m, d] = rng.pick(DIVISOR_PAIRS);
-  const P = `mult:${m}`, Q = `mult:${d}`;
-  const nP = `not:mult:${m}`, nQ = `not:mult:${d}`;
+/** (k, d): n² a multiple of k forces n to be a multiple of d, and d is not the whole story. */
+const SQUARE_PAIRS: [number, number][] = [
+  [8, 2], [12, 2], [12, 3], [16, 2], [18, 2], [18, 3], [24, 2], [24, 3], [24, 4], [24, 6],
+  [36, 2], [36, 3], [48, 4], [48, 6], [50, 2], [50, 5],
+];
+
+/** (c, d) with d < c²: n > c forces n² > d, and the converse fails. */
+const SIZE_PAIRS: [number, number][] = [[3, 4], [4, 4], [4, 9], [5, 4], [5, 9], [5, 16], [6, 16], [6, 25], [7, 36], [8, 49]];
+
+/** Composite multipliers: every multiple of m is composite. */
+const COMPOSITE_MS = [4, 6, 8, 9, 10, 12];
+
+/** All the true implications P ⇒ Q available at level 3, as predicate ids. */
+const IMPLICATIONS: [string, string][] = [
+  ...DIVISOR_PAIRS.map(([m, d]) => [`mult:${m}`, `mult:${d}`] as [string, string]),
+  ...SQUARE_PAIRS.map(([k, d]) => [`sqmult:${k}`, `mult:${d}`] as [string, string]),
+  ...SIZE_PAIRS.map(([c, d]) => [`gt:${c}`, `sqgt:${d}`] as [string, string]),
+  ...COMPOSITE_MS.map((m) => [`mult:${m}`, 'not:prime'] as [string, string]),
+];
+
+type Ask = 'contrapositive' | 'converse' | 'inverse';
+const ASKS: Ask[] = ['contrapositive', 'contrapositive', 'converse', 'inverse'];
+
+const HOW: Record<Ask, string> = {
+  contrapositive: 'The contrapositive of "if $A$ then $B$" is "if not $B$ then not $A$": negate both parts and swap them',
+  converse: 'The converse of "if $A$ then $B$" is "if $B$ then $A$": swap the two parts, leaving each of them as it is',
+  inverse: 'The inverse of "if $A$ then $B$" is "if not $A$ then not $B$": negate both parts, keeping them in the same order',
+};
+
+function implicationQ(rng: RNG): Generated | null {
+  const [P, Q] = rng.pick(IMPLICATIONS);
+  const ask = rng.pick(ASKS);
+  const nP = negate(P), nQ = negate(Q);
   const imp = (a: string, b: string) => `If ${textOf(a)}, then ${textOf(b)}.`;
-  const correct = imp(nQ, nP);
-  const candidates: { display: string; trap: string; pair: [string, string] }[] = [
-    { display: imp(Q, P), trap: 'that is the converse, not the contrapositive', pair: [Q, P] },
-    { display: imp(nP, nQ), trap: 'that is the inverse: both parts negated but not swapped', pair: [nP, nQ] },
-    { display: imp(nQ, P), trap: 'only the first part was negated', pair: [nQ, P] },
-    { display: imp(P, nQ), trap: 'only the second part was negated', pair: [P, nQ] },
-    { display: imp(nP, Q), trap: 'the parts were swapped and only one negated', pair: [nP, Q] },
+  const forms: { name: Ask | 'original' | null; pair: [string, string] }[] = [
+    { name: 'original', pair: [P, Q] },
+    { name: 'converse', pair: [Q, P] },
+    { name: 'inverse', pair: [nP, nQ] },
+    { name: 'contrapositive', pair: [nQ, nP] },
+    { name: null, pair: [nQ, P] },
+    { name: null, pair: [P, nQ] },
+    { name: null, pair: [nP, Q] },
+    { name: null, pair: [Q, nP] },
   ];
-  const wrong = rng.shuffle(candidates).slice(0, 4);
+  const correctPair = forms.find((f) => f.name === ask)!.pair;
+  const correct = imp(correctPair[0], correctPair[1]);
+  const named = forms.filter((f) => f.name && f.name !== ask);
+  const mixed = forms.filter((f) => f.name === null);
+  // The three other named forms are the headline traps: they always appear, then one mixed form.
+  const wrongForms = [...named, ...rng.shuffle(mixed).slice(0, 1)];
+  const wrong = wrongForms.map((f) => ({
+    display: imp(f.pair[0], f.pair[1]),
+    trap: f.name === 'original'
+      ? `that is the original statement, not its ${ask}`
+      : f.name
+        ? `that is the ${f.name}, not the ${ask}`
+        : 'one part was negated and the other left alone',
+  })).filter((w) => w.display !== correct);
+  if (wrong.length < 4) return null;
   const options = buildChoiceOptions(rng, correct, wrong);
-  const pairs: Record<string, [string, string]> = { [correct]: [nQ, nP] };
-  for (const c of candidates) pairs[c.display] = c.pair;
+  const pairs: Record<string, [string, string]> = {};
+  for (const f of forms) pairs[imp(f.pair[0], f.pair[1])] = f.pair;
   const optionPairs = options.map((o) => [o.display, pairs[o.display][0], pairs[o.display][1]] as [string, string, string]);
   return {
-    stem: `Let $n$ be a positive integer. Consider the statement\n\n"If ${textOf(P)}, then ${textOf(Q)}."\n\nWhich of the following is the contrapositive of this statement?`,
+    stem: `Let $n$ be a positive integer. Consider the statement\n\n"${imp(P, Q)}"\n\nWhich of the following is the ${ask} of this statement?`,
     answer: { kind: 'choice' as const, value: correct },
     options,
-    solution: `The contrapositive of "if $A$ then $B$" is "if not $B$ then not $A$": negate both parts and swap them. Here that gives "${correct}" — the only one of the five that is also true.`,
+    solution: `${HOW[ask]}. Here that gives "${correct}"`,
     trap: 'The contrapositive negates and swaps; negating without swapping gives the inverse, swapping without negating gives the converse.',
-    tags: ['reasoning', 'logic', 'contrapositive'],
-    params: { variant: 'implication', optionPairs },
+    tags: ['reasoning', 'logic', ask],
+    params: { variant: 'implication', ask, p: P, q: Q, optionPairs },
     typedAllowed: false,
   };
 }
@@ -320,16 +403,16 @@ export default defineTemplate({
   levels: {
     1: 'parity and multiples: n odd ⇒ n² odd, n³ − n divisible by 6, sums of consecutive numbers',
     2: 'primes, inequalities and a claim about diagonals of a quadrilateral',
-    3: 'identify the contrapositive of a given implication',
+    3: 'identify the contrapositive (or the converse, or the inverse) of a given implication',
     4: 'statements about a parameter k that a counterexample decides',
     5: 'mixed statements with explicit quantifiers ("for all", "there exists")',
   },
   generate(rng, level: Level) {
-    return retry(rng, () => (level === 3 ? contrapositiveQ(rng) : statementsQ(rng, level)));
+    return retry(rng, () => (level === 3 ? implicationQ(rng) : statementsQ(rng, level)));
   },
   verify(q) {
     if (q.answer.kind !== 'choice') return false;
-    const p = q.params as { variant: string; claims?: [string, number][]; truth?: boolean[]; optionPairs?: [string, string, string][] };
+    const p = q.params as { variant: string; claims?: [string, number][]; truth?: boolean[]; ask?: Ask; p?: string; q?: string; optionPairs?: [string, string, string][] };
     if (p.variant === 'statements') {
       // Machine-check each statement independently, then rebuild the expected option text.
       const truth = p.claims!.map(([id, m]) => {
@@ -343,13 +426,29 @@ export default defineTemplate({
         && q.options.filter((o) => o.correct).length === 1;
     }
     if (p.variant === 'implication') {
-      // Exactly one of the five implications is true over the positive integers: it is the contrapositive.
-      const holds = ([, a, b]: [string, string, string]) => {
-        const fa = predOf(a), fb = predOf(b);
-        return POS.every((n) => (fa(n) ? fb(n) : true));
+      // Identify the wanted form by the *meaning* of each option's two parts, tested over 1..60,
+      // rather than by the strings generate() built.
+      const fnOf = (id: string) => predFor(id).f;
+      const equiv = (a: string, b: string) => {
+        const fa = fnOf(a), fb = fnOf(b);
+        return POS.every((n) => fa(n) === fb(n));
       };
-      const trueOnes = p.optionPairs!.filter(holds);
-      return trueOnes.length === 1 && trueOnes[0][0] === q.answer.value;
+      const P = p.p!, Q = p.q!;
+      // The original implication must hold, and P must be strictly stronger than Q
+      // (otherwise "the converse" and "the contrapositive" could not be told apart).
+      const fP = fnOf(P), fQ = fnOf(Q);
+      if (!POS.every((n) => (fP(n) ? fQ(n) : true))) return false;
+      if (POS.every((n) => fP(n) === fQ(n))) return false;
+      const want: [string, string] = p.ask === 'converse' ? [Q, P]
+        : p.ask === 'inverse' ? [negate(P), negate(Q)]
+          : [negate(Q), negate(P)];
+      const matching = p.optionPairs!.filter(([, a, b]) => equiv(a, want[0]) && equiv(b, want[1]));
+      if (matching.length !== 1 || matching[0][0] !== q.answer.value) return false;
+      // A contrapositive says exactly the same thing as the original; a converse or an inverse does not.
+      const [, ca, cb] = matching[0];
+      const fa = fnOf(ca), fb = fnOf(cb);
+      const same = POS.every((n) => (fP(n) ? fQ(n) : true) === (fa(n) ? fb(n) : true));
+      return p.ask === 'contrapositive' ? same : !same;
     }
     return false;
   },

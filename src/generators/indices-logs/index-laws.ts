@@ -31,16 +31,33 @@ function cleanOnly(ds: Cand[]): Distractor[] {
   return out;
 }
 
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Choose the distractors so that the answer is not always in the same place once the options are
+ * sorted by value: a random number of them is taken from below the answer and the rest from above.
+ * (At level 1 every mistake — m + n, m × n, 2k — overshoots k, which put the answer in the middle
+ * three positions in every question.) No trap string is used twice, so a matched pair of "slip of
+ * one" options cannot both appear. `must` candidates are offered first, then the extras at random.
+ */
+function spread(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const traps = new Set<string>();
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (!Number.isFinite(d.value.toNumber())) continue;
+    if (seen.some((s) => s.equals(d.value))) continue;
+    if (d.trap && traps.has(d.trap)) continue;
     seen.push(d.value);
-    out.push(d);
-  };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+    if (d.trap) traps.add(d.trap);
+    pool.push(d);
+  }
+  const below = pool.filter((d) => d.value.cmp(answer) < 0);
+  const above = pool.filter((d) => d.value.cmp(answer) > 0);
+  const want = rng.weighted(Array.from({ length: count + 1 }, (_, i) => i), Array.from({ length: count + 1 }, (_, i) => (i === 0 || i === count ? 1 : 2)));
+  const out: Distractor[] = [];
+  const take = (d: Distractor) => { if (out.length < count && !out.includes(d)) out.push(d); };
+  for (const d of below.slice(0, want)) take(d);
+  for (const d of above) take(d);
+  for (const d of below) take(d);
   return out;
 }
 
@@ -87,17 +104,20 @@ function sameBase(rng: RNG): Generated | null {
   const ans = E(k);
   const must = cleanOnly([
     { value: divide ? E(m + n) : E(m * n), trap: divide ? 'added the indices when dividing' : 'multiplied the indices when multiplying' },
+    // always at least one candidate below k, or the answer can never be one of the two largest options
+    { value: divide ? E(n) : E(Math.abs(m - n)), trap: divide ? `gave the index of the divisor, ${n}` : 'subtracted the indices instead of adding them' },
   ]);
   const extra = cleanOnly([
-    { value: divide ? E(m * n) : E(Math.abs(m - n)), trap: divide ? 'multiplied the indices' : 'subtracted the indices' },
+    { value: divide ? E(m * n) : E(m), trap: divide ? 'multiplied the indices' : `gave the index of the first power, ${m}` },
+    { value: divide ? E(n - m) : E(n), trap: divide ? 'subtracted the wrong way round' : `gave the index of the second power, ${n}` },
     { value: divide && m % n === 0 ? E(m / n) : null, trap: 'divided the indices' },
-    { value: divide ? E(n - m) : E(m + n + 1), trap: divide ? 'subtracted the wrong way round' : 'arithmetic slip' },
-    { value: E(k + 1), trap: 'arithmetic slip' },
-    { value: E(k - 1), trap: 'arithmetic slip' },
+    { value: divide ? E(m) : E(m + n + 1), trap: divide ? `gave the index of the first power, ${m}` : 'arithmetic slip in the addition' },
+    { value: E(k + 1), trap: 'arithmetic slip of one' },
+    { value: E(k - 1), trap: 'arithmetic slip of one' },
     { value: !divide ? E(2 * (m + n)) : E(2 * k), trap: 'doubled the index' },
   ]);
   const op = divide ? '\\div' : '\\times';
-  return pack(rng, `Given that $${pw(a, m)} ${op} ${pw(a, n)} = ${pw(a, 'k')}$, find the value of $k$.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Given that $${pw(a, m)} ${op} ${pw(a, n)} = ${pw(a, 'k')}$, find the value of $k$.`, ans, spread(rng, ans, must, extra),
     `Same base, so ${divide ? 'subtract' : 'add'} the indices: $k = ${m} ${divide ? '-' : '+'} ${n} = ${k}$.`,
     'Multiplying powers of the same base adds the indices and dividing subtracts them; the indices are never multiplied.',
     ['indices', 'index-laws'],
@@ -128,7 +148,7 @@ function powerOfPower(rng: RNG): Generated | null {
     { value: E(2 * m * n), trap: 'doubled the index' },
   ]);
   const expr = withExtra ? `(${pw(a, m)})^{${n}} ${divide ? '\\div' : '\\times'} ${pw(a, p)}` : `(${pw(a, m)})^{${n}}`;
-  return pack(rng, `Given that $${expr} = ${pw(a, 'k')}$, find the value of $k$.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Given that $${expr} = ${pw(a, 'k')}$, find the value of $k$.`, ans, spread(rng, ans, must, extra),
     `$(${pw(a, m)})^{${n}} = ${pw(a, m * n)}$ (multiply the indices)${withExtra ? `, then ${divide ? 'subtract' : 'add'} $${p}$` : ''}: $k = ${k}$.`,
     'A power of a power multiplies the indices: (a^m)^n = a^{mn}, not a^{m+n}.',
     ['indices', 'power-of-power'],
@@ -164,7 +184,7 @@ function mixedBase(rng: RNG): Generated | null {
   const stem = rng.bool(0.6)
     ? `Given that $${expr} = ${pw(a, 'k')}$, find the value of $k$.`
     : `Write $${expr}$ as a power of $${a}$, i.e. in the form $${pw(a, 'k')}$. Find $k$.`;
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `$${big} = ${pw(a, j)}$, so $${B} = ${pw(a, j * n)}$; then ${divide ? 'subtract' : 'add'} the indices: $k = ${divide ? (bigFirst ? `${j * n} - ${m}` : `${m} - ${j * n}`) : `${m} + ${j * n}`} = ${k}$.`,
     'Convert to a common base first: 4^n = (2²)^n = 2^{2n}, not 2^{n+2}; only then add or subtract indices.',
     ['indices', 'mixed-bases'],
@@ -195,7 +215,7 @@ function collapses(rng: RNG): Generated | null {
   ]);
   const denTex = t === 1 ? `${big}` : pw(big, t);
   const stem = `Find the value of $\\frac{${pw(a, m)} \\times ${pw(a, n)}}{${denTex}}$.`;
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `Numerator $${pw(a, m + n)}$; denominator $${denTex} = ${pw(a, j * t)}$; so the value is $${pw(a, `${m + n} - ${j * t}`)} = ${pw(a, target)} = ${ans.toLatex(FR)}$.`,
     'Anything (non-zero) to the power 0 is 1, not 0; and a^{-1} is 1/a.',
     ['indices', 'zero-index'],
@@ -225,7 +245,7 @@ function solvePower(rng: RNG): Generated | null {
     { value: E(k), trap: 'ignored the different bases' },
     { value: E(x + 1), trap: 'arithmetic slip' },
   ]);
-  return pack(rng, `Solve $${pw(big, 'x')} = ${pw(a, k)}$.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Solve $${pw(big, 'x')} = ${pw(a, k)}$.`, ans, spread(rng, ans, must, extra),
     `$${big} = ${pw(a, j)}$, so $${pw(big, 'x')} = ${pw(a, `${j}x`)}$; equating indices, $${j}x = ${k}$ and $x = ${ans.toLatex(FR)}$.`,
     'Write both sides as powers of the same prime and equate the indices: 8^x = 2^{3x}, so 3x = 12.',
     ['indices', 'equations'],
@@ -257,7 +277,7 @@ function fractionalIndex(rng: RNG): Generated | null {
     { value: E(k - 1), trap: 'arithmetic slip' },
   ]);
   const expr = `${pwFrac(big, u, v)} ${divide ? '\\div' : '\\times'} ${pw(a, n)}`;
-  return pack(rng, `Given that $${expr} = ${pw(a, 'k')}$, find the value of $k$.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Given that $${expr} = ${pw(a, 'k')}$, find the value of $k$.`, ans, spread(rng, ans, must, extra),
     `$${big} = ${pw(a, j)}$, so $${pwFrac(big, u, v)} = ${pw(a, e1)}$; then $k = ${e1} ${divide ? '-' : '+'} ${n < 0 ? `(${n})` : n} = ${k}$.`,
     'A fractional index is a root: 9^{1/2} = 3 = 3^1; convert to the prime base first, then add or subtract indices keeping every sign.',
     ['indices', 'fractional-index', 'negative-index'],
@@ -310,7 +330,7 @@ function writeAsPower(rng: RNG): Generated | null {
     { value: k.mulRat(2), trap: 'doubled the index (root taken as a square)' },
     { value: k.mulRat(frac(1, 2).toRat()), trap: 'halved the index' },
   ]);
-  return pack(rng, `Write $${shown}$ in the form $${pw(a, 'k')}$. Find $k$.`, k, ranked(rng, k, must, extra),
+  return pack(rng, `Write $${shown}$ in the form $${pw(a, 'k')}$. Find $k$.`, k, spread(rng, k, must, extra),
     solution,
     'A reciprocal gives a negative index and a root gives a fractional one: 1/8 = 2^{-3}, √32 = 2^{5/2}, 1/√2 = 2^{-1/2}.',
     ['indices', 'negative-index', 'fractional-index'],
@@ -343,30 +363,83 @@ function parseLin(s: string): [number, number] | null {
   return null;
 }
 
+/** A factor written as base^(cn·n + c0); the params carry these so verify() can rebuild the expression. */
+type Lin = [number, number];
+
+/**
+ * Five arrangements of the same idea (a power of n over a power of n, with constants), so a candidate
+ * drilling level 4 does not meet the same stem every few attempts.
+ */
 function simplifyInN(rng: RNG): Generated | null {
-  const a = rng.pick([2, 2, 3]);
+  const a = rng.pick([2, 2, 3, 3, 5]);
+  const maxC = a === 2 ? 6 : a === 3 ? 4 : 3;
+  const shape = rng.pick(['const', 'const', 'shift', 'two-const', 'big-base', 'shift-den']);
   const p = rng.pick([2, 3]); // (a^n)^p
-  const q = rng.pick([1, 2, 3]); // divided by (a^q)^n written as a^n, 4^n / 8^n (or 9^n / 27^n)
-  const c = rng.int(2, 5); // × a^c, written as a number (4, 8, 16, 32 or 9, 27, 81, 243)
-  const c1 = p - q, c0 = c;
-  const numerConst = a ** c;
-  const denBase = a ** q;
-  const denTex = q === 1 ? pw(a, 'n') : pw(denBase, 'n');
-  const expr = `\\frac{(${pw(a, 'n')})^{${p}} \\times ${numerConst}}{${denTex}}`;
+  const q = rng.pick([1, 2, 3]); // ÷ (a^q)^n, written as a^n, 4^n, 8^n …
+  const c = rng.int(2, maxC); // × a^c, written as the number 4, 8, 16 …
+  const nTex = pw(a, 'n');
+  const powerOf = (e: number) => `${a ** e}`;
+  /** a^(cn·n + c0) with the index written the way the exam would: a^{3n+2}, a^{n-1}, a^{2n}. */
+  const lin = (cn: number, c0: number) => pw(a, linTex(cn, c0));
+  /** (…)^k, but a bare power when k = 1: (2^n)^1 is not exam register. */
+  const raise = (inner: string, k: number) => (k === 1 ? inner : `(${inner})^{${k}}`);
+  const num: Lin[] = [];
+  const den: Lin[] = [];
+  let numTex: string, denTex: string, c1: number, c0: number, steps: string;
+  if (shape === 'shift') {
+    numTex = raise(pw(a, 'n+1'), p);
+    denTex = q === 1 ? nTex : pw(a ** q, 'n');
+    num.push([p, p]); den.push([q, 0]);
+    c1 = p - q; c0 = p;
+    steps = `$${numTex} = ${lin(p, p)}$ and $${denTex} = ${lin(q, 0)}$`;
+  } else if (shape === 'two-const') {
+    const d = rng.int(1, maxC - 1);
+    numTex = `${raise(nTex, p)} \\times ${powerOf(c)}`;
+    denTex = `${q === 1 ? nTex : pw(a ** q, 'n')} \\times ${powerOf(d)}`;
+    num.push([p, 0], [0, c]); den.push([q, 0], [0, d]);
+    c1 = p - q; c0 = c - d;
+    steps = `$${raise(nTex, p)} = ${lin(p, 0)}$, $${powerOf(c)} = ${pw(a, c)}$, $${powerOf(d)} = ${pw(a, d)}$ and $${q === 1 ? nTex : pw(a ** q, 'n')} = ${lin(q, 0)}$`;
+  } else if (shape === 'big-base') {
+    const j = rng.pick([2, 3]);
+    if (j === q) return null;
+    numTex = `${pw(a ** j, 'n')} \\times ${powerOf(c)}`;
+    denTex = raise(nTex, q);
+    num.push([j, 0], [0, c]); den.push([q, 0]);
+    c1 = j - q; c0 = c;
+    steps = `$${pw(a ** j, 'n')} = ${lin(j, 0)}$, $${powerOf(c)} = ${pw(a, c)}$ and $${denTex} = ${lin(q, 0)}$`;
+  } else if (shape === 'shift-den') {
+    if (p === q) return null;
+    numTex = raise(nTex, p);
+    denTex = raise(pw(a, 'n-1'), q);
+    num.push([p, 0]); den.push([q, -q]);
+    c1 = p - q; c0 = q;
+    steps = `$${numTex} = ${lin(p, 0)}$ and $${denTex} = ${lin(q, -q)}$`;
+  } else {
+    numTex = `${raise(nTex, p)} \\times ${powerOf(c)}`;
+    denTex = q === 1 ? nTex : pw(a ** q, 'n');
+    num.push([p, 0], [0, c]); den.push([q, 0]);
+    c1 = p - q; c0 = c;
+    steps = `$${raise(nTex, p)} = ${lin(p, 0)}$, $${powerOf(c)} = ${pw(a, c)}$ and $${denTex} = ${lin(q, 0)}$`;
+  }
+  if (c1 === 0 && c0 === 0) return null; // the whole thing collapses to 1
+  const expr = `\\frac{${numTex}}{${denTex}}`;
   const correct = `$${pw(a, linTex(c1, c0))}$`;
-  const cands: { c: [number, number]; trap: string }[] = [
-    { c: [1 - q, p + c], trap: 'added the indices when raising a power to a power' },
-    { c: [p * c - q, 0], trap: 'multiplied the indices when multiplying' },
-    { c: [q - p, -c], trap: 'subtracted the numerator index from the denominator index' },
-    { c: [p - 1, c - q], trap: q === 1 ? 'arithmetic slip' : `wrote ${pw(denBase, 'n')} as ${pw(a, `n+${q}`)} instead of ${pw(a, `${q}n`)}` },
-    { c: [p - 1, c], trap: `treated ${pw(denBase, 'n')} as ${pw(a, 'n')}` },
-    { c: [p + q, c], trap: 'added the indices when dividing' },
-    { c: [p - q, c + 1], trap: 'arithmetic slip in the constant' },
-    { c: [p - q, numerConst], trap: `used ${numerConst} itself as the index instead of writing ${numerConst} as a power of ${a}` },
+  const denBase = a ** q;
+  const cands: { c: Lin; trap: string }[] = [
+    { c: [1 - q, p + c0], trap: 'added the indices when raising a power to a power' },
+    { c: [-c1, -c0], trap: 'subtracted the numerator index from the denominator index' },
+    { c: [c1 + 2 * q, c0], trap: 'added the indices when dividing instead of subtracting' },
+    { c: [c1 + q - 1, c0 - q], trap: q === 1 ? 'slipped by one in the constant' : `wrote ${pw(denBase, 'n')} as ${pw(a, `n+${q}`)} instead of ${pw(a, `${q}n`)}` },
+    { c: [c1 + q - 1, c0], trap: q === 1 ? 'dropped the denominator altogether' : `treated ${pw(denBase, 'n')} as ${pw(a, 'n')}` },
+    { c: [c1, c0 + 1], trap: 'arithmetic slip in the constant' },
+    { c: [c1, a ** Math.abs(c0 || c)], trap: `used ${powerOf(Math.abs(c0) || c)} itself as the index instead of writing it as a power of ${a}` },
+    { c: [c1 * (shape === 'shift' ? p : c), c0], trap: 'multiplied the indices where they should be added' },
+    { c: [c1, -c0], trap: 'sign error on the constant index' },
   ];
   const wrong: { display: string; trap: string }[] = [];
   const seen = new Set([correct]);
   for (const w of rng.shuffle(cands)) {
+    if (w.c[0] === 0 && w.c[1] === 0) continue;
     const d = `$${pw(a, linTex(w.c[0], w.c[1]))}$`;
     if (seen.has(d)) continue;
     seen.add(d);
@@ -378,10 +451,10 @@ function simplifyInN(rng: RNG): Generated | null {
     stem: `Which of the following is equal to $${expr}$ for all positive integers $n$?`,
     answer: { kind: 'choice', value: correct },
     options: buildChoiceOptions(rng, correct, wrong),
-    solution: `$(${pw(a, 'n')})^{${p}} = ${pw(a, `${p}n`)}$, $${numerConst} = ${pw(a, c)}$ and $${denTex} = ${pw(a, q === 1 ? 'n' : `${q}n`)}$, so the index is $${p}n + ${c} - ${q === 1 ? 'n' : `${q}n`} = ${linTex(c1, c0)}$.`,
+    solution: `${steps}, so the index is $${linTex(c1, c0)}$.`,
     trap: 'Write every factor as a power of the same base first (8 = 2³, 4^n = 2^{2n}); then powers of powers multiply the indices, products add them and quotients subtract them.',
     tags: ['indices', 'algebraic-indices', 'simplify'],
-    params: { variant: 'in-n', base: a, p, q, c },
+    params: { variant: 'in-n', base: a, num, den },
     typedAllowed: false,
   };
 }
@@ -411,9 +484,11 @@ function factorOut(rng: RNG): Generated | null {
     { value: E(2 * x), trap: 'doubled the index' },
     { value: E(x + 2 * a), trap: `counted the shift of ${a} twice` },
     { value: E(factor), trap: `gave the common factor ${factor}` },
+    { value: x - a >= 1 ? E(x - a) : null, trap: `took the shift of ${a} off x as well as out of the bracket` },
+    { value: E(b ** x), trap: `gave the value of ${pw(b, 'x')} instead of x` },
   ]);
   const sign = plus ? '+' : '-';
-  return pack(rng, `Solve $${pw(b, `x+${a}`)} ${sign} ${pw(b, 'x')} = ${N}$.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Solve $${pw(b, `x+${a}`)} ${sign} ${pw(b, 'x')} = ${N}$.`, ans, spread(rng, ans, must, extra),
     `Factorise: $${pw(b, 'x')}(${pw(b, a)} ${sign} 1) = ${factor} \\times ${pw(b, 'x')} = ${N}$, so $${pw(b, 'x')} = ${b ** x} = ${pw(b, x)}$ and $x = ${x}$.`,
     'Take out the common factor b^x: b^{x+a} ± b^x = b^x (b^a ± 1); the powers cannot be combined by subtracting indices.',
     ['indices', 'equations', 'factorise'],
@@ -443,11 +518,14 @@ function bothSides(rng: RNG): Generated | null {
     { value: p - q !== 0 ? frac(d + j - c, p - q) : null, trap: `added ${j} instead of multiplying by it` },
     { value: ans.neg(), trap: 'sign error' },
     { value: frac(j * d + c, denom), trap: `sign slip with the constant ${c}` },
+    { value: j * p - q !== 0 ? frac(d - c, j * p - q) : null, trap: `multiplied the left-hand index by ${j} instead of the right-hand one` },
+    { value: ans.mulRat(frac(1, j).toRat()), trap: `divided by ${j} once too often` },
+    { value: ans.mulRat(j), trap: `multiplied the solution by ${j} instead of dividing by it` },
     { value: ans.add(E(1)), trap: 'arithmetic slip of one' },
     { value: ans.sub(E(1)), trap: 'arithmetic slip of one' },
   ]);
   const lhs = pw(b, lin(p, c)), rhs = pw(big, lin(q, d));
-  return pack(rng, `Solve $${lhs} = ${rhs}$.`, ans, ranked(rng, ans, must, extra),
+  return pack(rng, `Solve $${lhs} = ${rhs}$.`, ans, spread(rng, ans, must, extra),
     `$${big} = ${pw(b, j)}$, so the right-hand side is $${pw(b, `${j}(${lin(q, d)})`)}$. Equating indices: $${lin(p, c)} = ${lin(j * q, j * d)}$, giving $x = ${ans.toLatex(FR)}$.`,
     'Write both sides with the same base and multiply the whole index in the bracket by the conversion power: 27^{x−1} = 3^{3(x−1)} = 3^{3x−3}.',
     ['indices', 'equations', 'common-base'],
@@ -488,15 +566,15 @@ export default defineTemplate({
     const value = (num: F[], den: F[]) => num.reduce((p, f) => p * Math.pow(f.b, f.e), 1) / den.reduce((p, f) => p * Math.pow(f.b, f.e), 1);
     if (variant === 'in-n') {
       if (q.answer.kind !== 'choice') return false;
-      const { base, p, q: qq, c } = P as { base: number; p: number; q: number; c: number };
+      const { base, num, den } = P as { base: number; num: [number, number][]; den: [number, number][] };
       const m = /^\$(\d+)\^\{(.*)\}\$$/.exec(q.answer.value);
       if (!m || Number(m[1]) !== base) return false;
       const lin = parseLin(m[2]);
       if (!lin) return false;
-      // numerically identical for n = 1, 2, 3
+      // numerically identical for n = 1, 2, 3, rebuilt factor by factor from the params
+      const prod = (fs: [number, number][], n: number) => fs.reduce((t, [cn, c0]) => t * Math.pow(base, cn * n + c0), 1);
       for (const n of [1, 2, 3]) {
-        const lhs = (Math.pow(Math.pow(base, n), p) * Math.pow(base, c)) / Math.pow(Math.pow(base, qq), n);
-        if (!close(lhs, Math.pow(base, lin[0] * n + lin[1]))) return false;
+        if (!close(prod(num, n) / prod(den, n), Math.pow(base, lin[0] * n + lin[1]))) return false;
       }
       return true;
     }

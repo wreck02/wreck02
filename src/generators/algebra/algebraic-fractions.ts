@@ -2,16 +2,17 @@ import { defineTemplate, retry, type Generated, type Level } from '../../core/te
 import { E, frac, Exact } from '../../core/exact';
 import { buildChoiceOptions, buildSetOptions } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
-import { linear, poly } from '../../core/gen-utils';
+import { gcd, linear, poly } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
 
 /**
  * Algebraic fractions.
  * Level 1: (3x + 6)/3, 6x²/(2x) (kind 'choice')
- * Level 2: (x² − 9)/(x + 3), (x² + 5x + 6)/(x + 2)
+ * Level 2: (x² − 9)/(x + 3), (4x² − 9)/(2x + 3), (x² + 5x + 6)/(x + 2)
  * Level 3: (x² − 9)/(x² + 3x) → (x − 3)/x, (x² + 5x + 6)/(x² − 4) → (x + 3)/(x − 2)
  * Level 4: 1/x + 1/(x + 1), 2/(x − 1) − 1/(x + 1) as a single fraction
- * Level 5: x + 1/x = 5/2 → {2, 1/2}; p/(x + a) + q/(x + b) = c with clean roots (kind 'set')
+ * Level 5: x + 1/x = 5/2 → {2, 1/2}, x + 9/x = 6 → {3} (repeated root);
+ *          p/(x + a) + q/(x + b) = c with clean roots (kind 'set')
  *
  * Answers are stored as a numerator polynomial over a product of linear factors, rendered
  * canonically. generate() finds the simplified form by cancelling/combining symbolically;
@@ -107,16 +108,28 @@ type Variant = 'lin-over-const' | 'monomial' | 'dots-over-linear' | 'quad-over-l
 
 const VARIANTS: Record<Level, Variant[]> = {
   1: ['lin-over-const', 'monomial'],
-  2: ['dots-over-linear', 'dots-over-linear', 'quad-over-linear'],
+  2: ['dots-over-linear', 'quad-over-linear'],
   3: ['dots-over-quad', 'quad-over-quad'],
   4: ['add-sub'],
   5: ['x-plus-k-over-x', 'two-fractions'],
 };
 
+/**
+ * An option printed as a fraction but equal to a constant (0/(x + 3), (x + 5)/(x + 5) = 1,
+ * 5/(−1)) is eliminable on sight in a "simplify fully" item: never offer one.
+ */
+function isConstantFraction(f: RF): boolean {
+  if (f.den.length === 0) return false;
+  if (f.num.every((c) => c === 0)) return true;
+  const vals = POINTS.map((x) => evalRF(f, x)).filter((v): v is number => v !== null);
+  if (vals.length < 3) return false;
+  return vals.every((v) => Math.abs(v - vals[0]) <= 1e-9 * Math.max(1, Math.abs(v)));
+}
+
 function choiceQ(rng: RNG, stem: string, orig: Term[], ans: RF, wrong: { f: RF; trap: string }[], solution: string, trap: string, tags: string[]): Generated | null {
   const origF = (x: number) => evalTerms(orig, x);
   if (!agree(origF, (x) => evalRF(ans, x))) return null;
-  const distinct = wrong.filter((w) => !agree((x) => evalRF(w.f, x), (x) => evalRF(ans, x)));
+  const distinct = wrong.filter((w) => !isConstantFraction(w.f) && !agree((x) => evalRF(w.f, x), (x) => evalRF(ans, x)));
   const correct = render(ans);
   let options;
   try { options = buildChoiceOptions(rng, correct, distinct.map((w) => ({ display: render(w.f), trap: w.trap }))); } catch { return null; }
@@ -167,15 +180,19 @@ function build(rng: RNG, variant: Variant): Generated | null {
       ], `Divide the coefficients and subtract the indices: $${fr(monoTex(p, i), monoTex(qv, j))} = ${k}x^{${i} - ${j}} = ${monoTex(k, i - j)}$.`, 'Divide the numbers and subtract the powers (x^i / x^j = x^(i−j)); do not subtract the numbers or divide the powers.', ['indices']);
     }
     case 'dots-over-linear': {
-      const a = rng.int(1, 9), s = rng.sign();
-      const stem = `Simplify $${fr(poly([1, 0, -a * a]), linear(1, s * a))}$.`;
-      return choiceQ(rng, stem, [{ num: [1, 0, -a * a], den: [1, s * a] }], { num: [1, -s * a], den: [] }, [
-        { f: { num: [1, s * a], den: [] }, trap: 'sign error: the other factor of x² − a² is x − a' },
-        { f: { num: [1, -s * a * a], den: [] }, trap: 'cancelled x² with x and left the constants: terms cannot be cancelled' },
-        { f: { num: [1, 0], den: [] }, trap: 'cancelled term by term' },
-        { f: { num: [-1, s * a], den: [] }, trap: 'sign of the whole expression wrong' },
-        { f: { num: [1, -s * a], den: [[1, s * a]] }, trap: 'factorised x² − a² as (x − a)² so nothing cancelled' },
-      ], `Factorise the numerator: $x^2 - ${a * a} = (${linear(1, a)})(${linear(1, -a)})$, then cancel the $(${linear(1, s * a)})$: the result is $${linear(1, -s * a)}$.`, 'Only common factors cancel, never individual terms: (x² − 9)/(x + 3) is not x − 9.', ['difference-of-squares']);
+      // (c²x² − a²)/(cx ± a): c = 1 gives the classic shape, c ≥ 2 widens the pool.
+      const c = rng.pick([1, 1, 2, 3, 4, 5]), a = rng.int(1, 9), s = rng.sign();
+      if (gcd(c, a) !== 1) return null;
+      const num = [c * c, 0, -a * a];
+      const stem = `Simplify $${fr(poly(num), linear(c, s * a))}$.`;
+      return choiceQ(rng, stem, [{ num, den: [c, s * a] }], { num: [c, -s * a], den: [] }, [
+        { f: { num: [c, s * a], den: [] }, trap: `sign error: the other factor is ${linear(c, -a)}` },
+        { f: { num: [c, -s * a * a], den: [] }, trap: 'cancelled x² with x and left the constants: terms cannot be cancelled' },
+        { f: { num: [c, 0], den: [] }, trap: 'cancelled term by term' },
+        { f: { num: [-c, s * a], den: [] }, trap: 'sign of the whole expression wrong' },
+        { f: { num: [c, -s * a], den: [[c, s * a]] }, trap: `factorised the numerator as (${linear(c, -a)})² so nothing cancelled` },
+        ...(c === 1 ? [] : [{ f: { num: [1, -s * a], den: [] }, trap: 'did not square-root the x² coefficient when factorising' }]),
+      ], `Factorise the numerator: $${poly(num)} = (${linear(c, a)})(${linear(c, -a)})$, then cancel the $(${linear(c, s * a)})$: the result is $${linear(c, -s * a)}$.`, 'Only common factors cancel, never individual terms: (x² − 9)/(x + 3) is not x − 9.', ['difference-of-squares']);
     }
     case 'quad-over-linear': {
       const p = rng.nonZeroInt(-6, 6), q = rng.nonZeroInt(-6, 6);
@@ -211,7 +228,13 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { f: { num: [1, q], den: [[1, -r]] }, trap: 'sign error in the denominator factor' },
         { f: { num: [1, r], den: [[1, q]] }, trap: 'fraction inverted' },
         { f: { num: [1, p], den: [[1, r]] }, trap: 'cancelled the wrong factor of the numerator' },
-        { f: { num: [q], den: [[0, r]] }, trap: 'cancelled the x terms and the x² terms' },
+        { f: { num: [1, q], den: [[1, p]] }, trap: 'cancelled the shared bracket against the wrong bracket of the denominator' },
+        ...(p + q !== 0 && p + r !== 0 ? [{
+          f: p + r > 0
+            ? { num: [p + q, p * q], den: [[p + r, p * r]] }
+            : { num: [-(p + q), -p * q], den: [[-(p + r), -p * r]] },
+          trap: 'cancelled the x² terms and kept the rest: terms cannot be cancelled',
+        }] : []),
         { f: { num: [1, -q], den: [[1, -r]] }, trap: 'both signs wrong' },
       ], `Factorise: $${fr(`(${linear(1, p)})(${linear(1, q)})`, `(${linear(1, p)})(${linear(1, r)})`)}$; cancel $(${linear(1, p)})$ to leave $${fr(linear(1, q), linear(1, r))}$.`, 'Factorise both quadratics and cancel the shared bracket; the x² terms themselves never cancel.', ['factorise']);
     }
@@ -233,10 +256,38 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { f: { num: [p + s * qv], den: [[2, a + b]] }, trap: 'added the numerators and added the denominators' },
         { f: { num: [p + s * qv], den: [[1, a], [1, b]] }, trap: 'found the common denominator but did not multiply the numerators up' },
         { f: { num, den: [[1, a]] }, trap: 'kept only one factor in the denominator' },
+        { f: { num: wrongNum(p, p * b + s * qv), den: [[1, a], [1, b]] }, trap: 'multiplied only the first numerator up over the common denominator' },
         { f: { num: wrongNum(p + s * qv, p * b - s * qv * a), den: [[1, a], [1, b]] }, trap: 'sign error in the constant term of the numerator' },
       ], `Common denominator $${denTex([[1, a], [1, b]])}$: numerator $${p}(${b === 0 ? 'x' : linear(1, b)}) ${s < 0 ? '-' : '+'} ${qv}(${a === 0 ? 'x' : linear(1, a)}) = ${poly(num)}$, so the answer is ${render(ans)}.`, 'Multiply each numerator by the other denominator; a minus sign applies to the whole of the second numerator.', ['add', 'single-fraction']);
     }
     case 'x-plus-k-over-x': {
+      if (rng.bool(0.3)) {
+        // Perfect square: x + t²/x = 2t has the single (repeated) root x = t.
+        const t = rng.int(2, 6) * rng.sign();
+        const kk = t * t, cc = 2 * t;
+        const quadT = poly([1, -cc, kk]);
+        let options;
+        try {
+          options = buildSetOptions(rng, [E(t)], cleanSets([
+            { values: [E(t), E(-t)], trap: 'assumed ± : here the quadratic is a perfect square with one repeated root' },
+            { values: [E(-t)], trap: 'sign error in the root' },
+            { values: [E(t), E(kk)], trap: 'took the two numbers in the equation as the roots' },
+            { values: [E(kk)], trap: 'gave the numerator k instead of the root' },
+            { values: [E(cc)], trap: 'gave the right-hand side instead of the root' },
+            { values: [E(t), E(cc)], trap: 'added the sum of the roots as a second root' },
+          ]));
+        } catch { return null; }
+        return {
+          stem: `Solve $x + ${fr(`${kk}`, 'x')} = ${cc}$.`,
+          answer: { kind: 'set', values: [E(t)] },
+          options,
+          solution: `Multiply through by $x$: $${quadT} = 0$, which is $(${linear(1, -t)})^2 = 0$, so $x = ${t}$ is a repeated root: the only solution.`,
+          trap: 'Multiply every term by x to get a quadratic; a perfect square has one repeated root, so do not invent a second value.',
+          tags: ['algebraic-fractions', 'solve', 'quadratic'],
+          params: { kind: 'set', terms: [{ num: [1, 0], den: [1] }, { num: [kk], den: [1, 0] }], rhs: [cc, 1], quad: [1, -cc, kk] },
+          typedAllowed: true,
+        };
+      }
       const d = rng.pick([2, 3, 4, 5, 6]), m = rng.pick([1, 1, 2, 3]), s1 = rng.sign(), s2 = rng.sign();
       const r1 = E(s1 * d), r2 = frac(s2 * m, d);
       if (r1.equals(r2) || r2.isInteger()) return null;
@@ -250,8 +301,9 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { values: [r1, r2.neg()], trap: 'sign error in one root' },
           { values: [r1.neg(), r2], trap: 'sign error in one root' },
           { values: [r1.neg(), r2.neg()], trap: 'read both roots with the wrong sign' },
-          { values: [r1], trap: 'forgot the second root' },
-          { values: [r2], trap: 'forgot the second root' },
+          // at most one "only one root" option, and not in every question: two of them
+          // would make both free eliminations, since a set answer here has two values
+          ...(rng.bool(0.6) ? [{ values: [rng.bool(0.5) ? r1 : r2], trap: 'forgot the second root' }] : []),
           { values: [c, c.inv()], trap: 'guessed x = c and x = 1/c' },
           { values: [r1, r2.inv()], trap: 'inverted the fractional root' },
         ]));
@@ -288,9 +340,10 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { values: [E(r1), E(-r2)], trap: 'sign error in one root' },
           { values: [E(-r1), E(r2)], trap: 'sign error in one root' },
           { values: [E(-r1), E(-r2)], trap: 'read both roots with the wrong sign' },
-          { values: [E(r1)], trap: 'forgot the second root' },
-          { values: [E(r2)], trap: 'forgot the second root' },
+          // at most one "only one root" option, and not in every question (see above)
+          ...(rng.bool(0.6) ? [{ values: [E(rng.bool(0.5) ? r1 : r2)], trap: 'forgot the second root' }] : []),
           { values: [E(-a), E(-b)], trap: 'gave the excluded values (where the denominators vanish)' },
+          { values: [E(r1 + r2), E(r1 * r2)], trap: 'read off the sum and product of the roots instead of solving' },
         ]));
       } catch { return null; }
       const quad = [c, c * (a + b) - p - qv, c * a * b - p * b - qv * a];
@@ -316,10 +369,10 @@ export default defineTemplate({
   title: 'Algebraic fractions',
   levels: {
     1: '(3x + 6)/3, 6x²/(2x)',
-    2: '(x² − 9)/(x + 3), (x² + 5x + 6)/(x + 2)',
+    2: '(x² − 9)/(x + 3), (4x² − 9)/(2x + 3), (x² + 5x + 6)/(x + 2)',
     3: '(x² − 9)/(x² + 3x) → (x − 3)/x',
     4: '1/x + 1/(x + 1), 2/(x − 1) − 1/(x + 1) as a single fraction',
-    5: 'x + 1/x = 5/2; p/(x + a) + q/(x + b) = c with clean roots',
+    5: 'x + 1/x = 5/2 (or x + 9/x = 6, one repeated root); p/(x + a) + q/(x + b) = c',
   },
   generate(rng, level: Level) {
     const variant = rng.pick(VARIANTS[level]);
@@ -336,7 +389,8 @@ export default defineTemplate({
     }
     if (q.answer.kind !== 'set' || !p.terms || !p.rhs || !p.quad) return false;
     const vals = q.answer.values;
-    if (vals.length !== 2 || vals[0].equals(vals[1])) return false;
+    if (vals.length < 1 || vals.length > 2) return false;
+    if (vals.length === 2 && vals[0].equals(vals[1])) return false;
     // (1) exact substitution into the original equation
     for (const x of vals) {
       let lhs = Exact.ZERO;
@@ -347,8 +401,9 @@ export default defineTemplate({
       }
       if (!lhs.equals(frac(p.rhs[0], p.rhs[1]))) return false;
     }
-    // (2) Vieta on the cleared quadratic: sum = −b/a, product = c/a
+    // (2) Vieta on the cleared quadratic: sum = −b/a, product = c/a (a single value is a repeated root)
     const [A, B, C] = p.quad;
-    return vals[0].add(vals[1]).equals(frac(-B, A)) && vals[0].mul(vals[1]).equals(frac(C, A));
+    const [u, v] = vals.length === 2 ? vals : [vals[0], vals[0]];
+    return u.add(v).equals(frac(-B, A)) && u.mul(v).equals(frac(C, A));
   },
 });

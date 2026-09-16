@@ -87,6 +87,8 @@ function build(rng: RNG, variant: Variant): Generated | null {
       const ds = power === 1
         ? [
           { value: a * b, trap: 'gave the constant term instead of the x coefficient' },
+          { value: a * b + a + b, trap: 'added the constant term into the x coefficient' },
+          { value: 2 * (a + b), trap: 'doubled the cross terms as in (x + a)²' },
           { value: a - b, trap: 'sign error in one cross term' },
           { value: b - a, trap: 'sign error in one cross term' },
           { value: -(a + b), trap: 'sign of both cross terms flipped' },
@@ -98,6 +100,8 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { value: -a * b, trap: 'sign error multiplying the constants' },
           { value: Math.abs(a * b), trap: 'ignored the signs' },
           { value: a * b + a + b, trap: 'added the cross terms into the constant' },
+          { value: 2 * a * b, trap: 'doubled the product as though it were a cross term' },
+          { value: a * a, trap: 'squared the first number instead of multiplying the two' },
           { value: a - b, trap: 'subtracted the constants' },
         ];
       const sol = power === 1
@@ -135,7 +139,8 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { value: a, trap: 'forgot to double the cross term' },
           { value: -2 * a, trap: 'sign error in the cross term' },
           { value: a * a, trap: 'gave the constant term' },
-          { value: 2 * a + (a > 0 ? 1 : -1), trap: 'arithmetic slip' },
+          { value: 2 * a * a, trap: 'doubled a² instead of doubling a' },
+          { value: a * a + 2 * a, trap: 'added the constant term into the x coefficient' },
         ]
         : [
           { value: 2 * a, trap: 'gave the x coefficient' },
@@ -206,12 +211,13 @@ function build(rng: RNG, variant: Variant): Generated | null {
           { value: a * a, trap: 'squared instead of tripling' },
         ]
         : [
-          { value: 3 * a, trap: 'gave the x² coefficient' },
+          { value: 3 * a, trap: 'gave the x² coefficient (forgot to square a)' },
           { value: a * a, trap: 'forgot the binomial coefficient 3' },
           { value: -3 * a * a, trap: 'a negative squared is positive' },
-          { value: 3 * a, trap: 'forgot to square a' },
+          { value: a * a + 3, trap: 'added the binomial coefficient instead of multiplying by it' },
           { value: a * a * a, trap: 'gave the constant term' },
           { value: 2 * a * a, trap: 'used 2 instead of 3' },
+          { value: 6 * a * a, trap: 'used the row of Pascal\'s triangle for (x + a)⁴' },
         ];
       return finish(rng, ask(rng, expr, power), answer, ds, `Binomial: $(x + a)^3 = x^3 + 3ax^2 + 3a^2x + a^3$ with $a = ${a}$, so ${NAME[power]} is $${answer}$.`, 'The coefficients of (x + a)³ are 1, 3a, 3a², a³ — remember the 3 and that a² is positive.', ['binomial', 'cube'], [lin(1, a), lin(1, a), lin(1, a)], power);
     }

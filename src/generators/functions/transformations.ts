@@ -315,7 +315,7 @@ function stretchXPoint(rng: RNG): Generated | null {
       ];
   return pointQuestion(rng, ops, p, q, wrongs, {
     solution: squash
-      ? `$y = f(${m}x)$ halves the distance to the $y$-axis in the ratio $1 : ${m}$, so $x$ is divided by $${m}$: $(${correct[0]}, ${correct[1]})$.`
+      ? `$y = f(${m}x)$ squashes the curve towards the $y$-axis in the ratio $1 : ${m}$, so every $x$-coordinate is divided by $${m}$: $(${correct[0]}, ${correct[1]})$.`
       : `$y = f\\left(\\frac{x}{${m}}\\right)$ multiplies every $x$-coordinate by $${m}$: $(${correct[0]}, ${correct[1]})$.`,
     trap: 'f(mx) divides the x-coordinates by m; only f(x/m) multiplies them.',
     tags: ['transformations', 'stretch', 'graphs'],
@@ -402,12 +402,21 @@ function quadTransform(rng: RNG): Generated | null {
   const f = compose(ops);
   const eq = (g: Form) => quadEqn(g.A, g.H, g.C);
   const correct = eq(f);
+  const has = (t: Op['t']) => ops.some((o) => o.t === t);
+  const reflected = has('rx') || has('ry');
+  /** Flip the sign of just one of the two translations. */
+  const negateOne = (t: 'tx' | 'ty') => ops.map((o) => (o.t === t ? negateShift(o) : o));
   const cands: { display: string; trap: string; must?: boolean }[] = [
     { display: eq(compose([o2, o1])), trap: 'applied the two transformations in the other order', must: true },
     { display: eq(compose(ops.map(negateShift))), trap: 'translated the wrong way: moving a units right gives (x − a)²', must: true },
     { display: eq(compose(ops.map(swapAxis))), trap: 'translated along the wrong axis' },
-    { display: quadEqn(-f.A, f.H, f.C), trap: 'reflected the wrong way round' },
-    { display: quadEqn(f.A, f.H, -f.C), trap: 'forgot that the reflection also changes the constant' },
+    ...(has('tx') ? [{ display: eq(compose(negateOne('tx'))), trap: 'translated the wrong way horizontally: a units in the positive x-direction gives (x − a)²' }] : []),
+    ...(has('ty') ? [{ display: eq(compose(negateOne('ty'))), trap: 'translated the wrong way vertically' }] : []),
+    // Reflection traps only make sense when the question contains a reflection.
+    ...(reflected ? [
+      { display: quadEqn(-f.A, f.H, f.C), trap: 'forgot to change the sign of the x² term when reflecting in the x-axis' },
+      { display: quadEqn(f.A, f.H, -f.C), trap: 'forgot that the reflection also changes the constant' },
+    ] : []),
     { display: eq(compose([o1])), trap: 'applied only the first transformation' },
     { display: eq(compose([o2])), trap: 'applied only the second transformation' },
   ];
@@ -554,6 +563,9 @@ export default defineTemplate({
         const f = transformed(p.ops, (x) => x ** n);
         const claimed = (x: number) => p.a! * (x - p.h!) ** n + p.c!;
         if (![1.7, -0.3, 2.5].every((x) => Math.abs(f(x) - claimed(x)) < 1e-9)) return false;
+        // a reflection trap must not be pinned on a question with no reflection in it
+        const reflects = p.ops.some((o) => o.t === 'rx' || o.t === 'ry');
+        if (!reflects && q.options.some((o) => /reflect/i.test(o.trap ?? ''))) return false;
         return q.answer.value === quadEqn(p.a!, p.h!, p.c!);
       }
       case 'turning-point': {

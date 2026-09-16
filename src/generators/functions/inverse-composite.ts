@@ -10,7 +10,7 @@ import type { RNG } from '../../core/rng';
  * Level 2: f^-1(5) for a linear f
  * Level 3: f(x) = (x + 1)/(x − 2): f^-1(3), or the value excluded from the domain of f^-1
  * Level 4: solve f(x) = f^-1(x) for a linear f, or ff(x) = k
- * Level 5: f^-1 as a formula for a rational f (choice), or the range of x² − 4x + 1 on x ≥ 2
+ * Level 5: f^-1 as a formula for a rational f (choice), or the domain of f^-1 for a restricted quadratic
  *
  * verify() evaluates the compositions numerically from params, and checks a claimed inverse
  * formula by testing f(f^-1(t)) = t at sample values of t.
@@ -71,6 +71,18 @@ const fr = (n: number, d: number): Exact | null => (d === 0 ? null : frac(n, d))
 /** LaTeX for (Ax + B)/(Cx + D). */
 function ratTex(A: number, B: number, C: number, D: number, v = 'x'): string {
   return `\\frac{${lin(A, B, v)}}{${lin(C, D, v)}}`;
+}
+
+/** (Ax + B)/(Cx + D) is really a constant when the numerator and denominator are proportional. */
+type Rat4 = [number, number, number, number];
+const isConstantRat = (u: Rat4): boolean => u[0] * u[3] - u[1] * u[2] === 0;
+
+/** Two such expressions are the same function when the coefficient vectors are proportional. */
+function sameRat(u: Rat4, w: Rat4): boolean {
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) if (u[i] * w[j] - u[j] * w[i] !== 0) return false;
+  }
+  return true;
 }
 
 // ----------------------------------------------------------------- level 1
@@ -162,12 +174,17 @@ function rationalInverseValue(rng: RNG): Generated | null {
   if (Math.abs(v) > 25 || v === t) return null;
   const answer = E(v);
   const ft = t - q !== 0 ? frac(a * t + b, t - q) : null;
+  // Every distractor is the value a named mistake produces, so the builder never has to pad.
   const ds: Cand[] = [
     { value: ft, trap: 'worked out f(t) instead of f^-1(t)', must: true },
-    { value: fr(t - a, q * t + b), trap: 'used the reciprocal as the inverse', must: true },
+    // 1/f(t) only exists when f(t) does
+    { value: ft !== null ? fr(t - q, a * t + b) : null, trap: 'used 1/f(t) as the inverse', must: true },
     { value: frac(q * t - b, t - a), trap: 'sign error on the constant when rearranging' },
     { value: fr(q * t + b, t + a), trap: 'sign error in the denominator when rearranging' },
-    { value: fr(a * t + b, t + q), trap: 'never swapped x and y' },
+    { value: fr(q * t - b, t + a), trap: 'both signs wrong when rearranging' },
+    { value: fr(b * t + q, t - a), trap: 'swapped the two constants when rearranging' },
+    { value: fr(q * t, t - a), trap: 'dropped the constant from the numerator when rearranging' },
+    { value: fr(t - a, q * t + b), trap: 'turned the answer upside down at the last step' },
     { value: E(v + 1), trap: 'arithmetic slip' },
   ];
   return {
@@ -194,7 +211,8 @@ function excludedValue(rng: RNG): Generated | null {
     { value: E(b), trap: 'quoted the constant in the numerator' },
     { value: E(-q), trap: 'sign error' },
     { value: E(0), trap: 'assumed the excluded value is always 0' },
-    { value: frac(b, a), trap: 'used the x-intercept instead of the asymptote' },
+    // the x-intercept of (ax + b)/(x − q) is x = −b/a
+    { value: frac(-b, a), trap: 'used the x-intercept of f instead of its horizontal asymptote' },
   ];
   return {
     stem: `The function $f$ is defined by $f(x) = ${ratTex(a, b, 1, -q)}$, $x \\ne ${q}$. Write down the value of $x$ that must be excluded from the domain of $f^{-1}$.`,
@@ -273,17 +291,27 @@ function inverseFormula(rng: RNG): Generated | null {
   const a = rng.int(1, 5);
   const q = rng.intExcluding(1, 6, [a]);
   const b = rng.nonZeroInt(-9, 9);
-  if (b === q || b + a * q === 0) return null;
-  const inv: [number, number, number, number] = [q, b, 1, -a];
+  // b = ±aq would make f — or one of the distractors — collapse to a constant function
+  if (b === q || b + a * q === 0 || b === a * q) return null;
+  const inv: Rat4 = [q, b, 1, -a];
   const correct = `$f^{-1}(x) = ${ratTex(...inv)}$`;
-  const cands = [
-    { display: `$f^{-1}(x) = ${ratTex(1, -a, q, b)}$`, trap: 'took the reciprocal of f instead of its inverse', must: true },
-    { display: `$f^{-1}(x) = ${ratTex(a, b, 1, -q)}$`, trap: 'never swapped x and y — that is f(x) again', must: true },
-    { display: `$f^{-1}(x) = ${ratTex(q, -b, 1, -a)}$`, trap: 'sign error on the constant when rearranging', must: true },
-    { display: `$f^{-1}(x) = ${ratTex(q, b, 1, a)}$`, trap: 'sign error in the denominator when rearranging' },
-    { display: `$f^{-1}(x) = ${ratTex(b, q, 1, -a)}$`, trap: 'swapped the two constants' },
+  const cands: { v: Rat4; trap: string; must?: boolean }[] = [
+    { v: [1, -q, a, b], trap: 'took the reciprocal of f instead of its inverse', must: true },
+    { v: [a, b, 1, -q], trap: 'never swapped x and y — that is f(x) again', must: true },
+    { v: [q, -b, 1, -a], trap: 'sign error on the constant when rearranging', must: true },
+    { v: [q, b, 1, a], trap: 'sign error in the denominator when rearranging' },
+    { v: [b, q, 1, -a], trap: 'swapped the two constants' },
+    { v: [1, -a, q, b], trap: 'turned the inverse upside down at the last step' },
   ];
-  const options = choiceOptions(rng, correct, cands);
+  // No option may be a disguised constant, and no two options may be the same function.
+  const kept: Rat4[] = [inv];
+  const usable: { display: string; trap: string; must?: boolean }[] = [];
+  for (const c of cands) {
+    if (isConstantRat(c.v) || kept.some((k) => sameRat(k, c.v))) continue;
+    kept.push(c.v);
+    usable.push({ display: `$f^{-1}(x) = ${ratTex(...c.v)}$`, trap: c.trap, must: c.must });
+  }
+  const options = choiceOptions(rng, correct, usable);
   if (!options) return null;
   return {
     stem: `The function $f$ is defined by $f(x) = ${ratTex(a, b, 1, -q)}$, $x \\ne ${q}$. Find $f^{-1}(x)$.`,
@@ -297,35 +325,37 @@ function inverseFormula(rng: RNG): Generated | null {
   };
 }
 
-/** Range of x² + bx + c on the restricted domain x ≥ t. */
-function restrictedRange(rng: RNG): Generated | null {
+/** f(x) = x² + bx + c on x ≥ t with t at or beyond the vertex: the domain of f^-1. */
+function inverseDomain(rng: RNG): Generated | null {
   const u = rng.nonZeroInt(-4, 5);          // vertex x
   const w = rng.nonZeroInt(-9, 9);          // vertex y
   const b = -2 * u, c = u * u + w;
   if (Math.abs(c) > 30) return null;
-  const t = rng.bool(0.6) ? u : u + rng.int(1, 3);
+  // t ≥ u keeps f one-to-one on the given domain, so f^-1 exists
+  const t = rng.bool(0.5) ? u : u + rng.int(1, 3);
   const at = (x: number) => x * x + b * x + c;
-  const lo = t <= u ? w : at(t);
+  const lo = at(t);
   if (Math.abs(lo) > 60) return null;
-  const correct = `$f(x) \\ge ${lo}$`;
-  const cands = [
-    { display: `$f(x) \\le ${lo}$`, trap: 'the inequality is the wrong way round', must: true },
-    { display: `$f(x) \\ge ${t > u ? w : at(t + 1)}$`, trap: t > u ? 'used the vertex although it is outside the domain' : 'used a point inside the domain rather than the vertex', must: true },
-    { display: `$f(x) \\ge ${t}$`, trap: 'gave the domain instead of the range' },
-    { display: `$f(x) \\ge ${-lo}$`, trap: 'sign error in the minimum value' },
-    { display: `$f(x) \\ge ${lo + 1}$`, trap: 'arithmetic slip when evaluating the minimum' },
-    { display: `$f(x) > ${lo}$`, trap: 'the minimum is attained, so the inequality is not strict' },
+  const correct = `$x \\ge ${lo}$`;
+  const cands: { display: string; trap: string; must?: boolean }[] = [
+    { display: `$x \\ge ${t}$`, trap: 'gave the domain of f, which is the range of f^-1', must: true },
+    { display: `$x \\le ${lo}$`, trap: 'the inequality is the wrong way round', must: true },
+    ...(t > u ? [{ display: `$x \\ge ${w}$`, trap: 'used the value at the vertex, which lies outside the domain of f' }] : []),
+    { display: `$x > ${lo}$`, trap: 'the least value of f is attained, so the inequality is not strict' },
+    { display: `$x \\ge ${-lo}$`, trap: 'sign error in the least value of f' },
+    { display: `$x \\ge ${u}$`, trap: 'gave the line of symmetry rather than the least value of f' },
+    { display: `$x \\ge ${lo + 1}$`, trap: 'arithmetic slip when evaluating the least value of f' },
   ];
   const options = choiceOptions(rng, correct, cands);
   if (!options) return null;
   return {
-    stem: `The function $f$ is defined by $f(x) = x^{2} ${b > 0 ? `+ ${b}` : `- ${-b}`}x${c === 0 ? '' : c > 0 ? ` + ${c}` : ` - ${-c}`}$ for $x \\ge ${t}$. Find the range of $f$.`,
+    stem: `The function $f$ is defined by $f(x) = x^{2} ${b > 0 ? `+ ${b}` : `- ${-b}`}x${c === 0 ? '' : c > 0 ? ` + ${c}` : ` - ${-c}`}$ for $x \\ge ${t}$. State the domain of $f^{-1}$.`,
     answer: { kind: 'choice', value: correct },
     options,
-    solution: `Completing the square, $f(x) = (x ${u > 0 ? '-' : '+'} ${Math.abs(u)})^{2} ${w > 0 ? `+ ${w}` : `- ${-w}`}$, so the vertex is at $x = ${u}$. ${t <= u ? `That lies in the domain, so the least value is $${lo}$` : `The curve is increasing for $x \\ge ${t}$, so the least value is $f(${t}) = ${lo}$`}.`,
-    trap: 'Check whether the vertex is inside the restricted domain: if it is not, the minimum is at the endpoint.',
-    tags: ['functions', 'range', 'quadratic'],
-    params: { variant: 'restricted-range', b, c, t, lo },
+    solution: `The domain of $f^{-1}$ is the range of $f$. Completing the square, $f(x) = (x ${u > 0 ? '-' : '+'} ${Math.abs(u)})^{2} ${w > 0 ? `+ ${w}` : `- ${-w}`}$, so on $x \\ge ${t}$ the function increases from $f(${t}) = ${lo}$: the range of $f$, and hence the domain of $f^{-1}$, is $x \\ge ${lo}$.`,
+    trap: 'The domain of f^-1 is the range of f (and its range is the domain of f) — the two are easily swapped.',
+    tags: ['functions', 'inverse', 'domain', 'quadratic'],
+    params: { variant: 'inverse-domain', b, c, t, lo },
     typedAllowed: false,
   };
 }
@@ -335,7 +365,7 @@ const VARIANTS: Record<Level, ((rng: RNG) => Generated | null)[]> = {
   2: [inverseLinear],
   3: [rationalInverseValue, excludedValue],
   4: [selfInverseSolve, doubleComposite],
-  5: [inverseFormula, inverseFormula, restrictedRange],
+  5: [inverseFormula, inverseFormula, inverseDomain],
 };
 
 export default defineTemplate({
@@ -348,7 +378,7 @@ export default defineTemplate({
     2: 'f^-1(5) for a linear f',
     3: 'f(x) = (x + 1)/(x − 2): f^-1(3) or the value excluded from the domain of f^-1',
     4: 'f(x) = f^-1(x) for a linear f; ff(x) = k',
-    5: 'f^-1(x) as a formula for a rational f; the range of a quadratic on x ≥ t',
+    5: 'f^-1(x) as a formula for a rational f; the domain of f^-1 for a quadratic on x ≥ t',
   },
   generate(rng, level: Level) {
     return retry(rng, () => pickVariant(rng, VARIANTS[level]));
@@ -356,7 +386,7 @@ export default defineTemplate({
   verify(q) {
     const p = q.params as unknown as {
       variant: string; a: number; b: number; n?: number; ask?: string; t?: number; q?: number; k?: number;
-      inv?: [number, number, number, number]; c?: number; lo?: number;
+      inv?: Rat4; c?: number; lo?: number;
     };
     const close = (x: number, y: number) => Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 1e-7 * Math.max(1, Math.abs(y));
     const v = q.answer.kind === 'exact' ? q.answer.value.toNumber() : NaN;
@@ -409,13 +439,19 @@ export default defineTemplate({
         }
         return q.answer.value === `$f^{-1}(x) = ${ratTex(A, B, C, D)}$`;
       }
-      case 'restricted-range': {
+      case 'inverse-domain': {
+        // sample f over the given domain: it must be one-to-one there, with least value lo
         if (q.answer.kind !== 'choice') return false;
         const f = (x: number) => x * x + p.b * x + p.c!;
-        let min = Infinity;
-        for (let x = p.t!; x <= p.t! + 14; x += 0.01) min = Math.min(min, f(x));
-        if (Math.abs(min - p.lo!) > 1e-3) return false;
-        return q.answer.value === `$f(x) \\ge ${p.lo}$`;
+        let min = Infinity, prev = -Infinity;
+        for (let i = 0; i <= 1600; i++) {
+          const y = f(p.t! + i / 100);
+          if (y <= prev) return false;        // not one-to-one: f^-1 would not exist
+          prev = y;
+          min = Math.min(min, y);
+        }
+        if (Math.abs(min - p.lo!) > 1e-9) return false;
+        return q.answer.value === `$x \\ge ${p.lo}$`;
       }
       default:
         return false;

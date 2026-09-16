@@ -118,20 +118,27 @@ function build(rng: RNG, variant: Variant): Generated | null {
   switch (variant) {
     case 'numeric-dots': {
       // a² − b² with a = m + k, b = m − k: (a − b)(a + b) = 2k · 2m
-      const decimal = rng.bool(0.25);
-      const m = decimal ? rng.pick([5, 10]) : rng.pick([10, 20, 25, 30, 40, 50, 60, 75, 100]);
-      const k = decimal ? rng.pick([1.5, 2.5, 3.5]) : rng.pick([1, 1, 2, 2, 3, 4, 5]);
+      const decimal = rng.bool(0.2);
+      const m = decimal ? rng.pick([5, 10, 15, 20]) : rng.pick([10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]);
+      const k = decimal ? rng.pick([1.5, 2.5, 3.5]) : rng.int(1, 6);
       const a = m + k, b = m - k;
       if (b <= 0) return null;
       const answer = E(a).mul(E(a)).sub(E(b).mul(E(b)));
       if (!answer.isInteger() && !isCleanExact(answer).ok) return null;
+      // Every distractor is a wrong way of finishing (a − b)(a + b) = 2k × 2m, and stays within a
+      // small factor of the answer: 2k or (a − b)² are one or two orders of magnitude out, so a
+      // candidate who can bound the answer at roughly 2a(a − b) discards them without any work.
+      const nearSquare = !decimal && (m + k) * (m + k) <= 48 * k * m;
       const ds = clean([
-        { value: E(4 * k * k), trap: 'treated a² − b² as (a − b)²' },
-        { value: E(2 * m), trap: 'found a + b but forgot to multiply by a − b' },
-        { value: E(2 * k * m), trap: 'used k instead of 2k for a − b' },
         { value: E(8 * k * m), trap: 'doubled the product' },
-        { value: E(2 * k), trap: 'found a − b only' },
-        { value: E(4 * k * m + 4 * k * k), trap: 'arithmetic slip' },
+        { value: E(2 * k * (2 * m + 2 * k)), trap: 'used a + a for the second bracket instead of a + b' },
+        { value: E(2 * k * (2 * m - 2 * k)), trap: 'used b + b for the second bracket instead of a + b' },
+        { value: E(2 * k * (m + k)), trap: 'multiplied a − b by a instead of by a + b' },
+        { value: E(2 * k * m), trap: 'used k instead of 2k for a − b' },
+        ...(nearSquare ? [
+          { value: E(a * a - b), trap: 'forgot to square b' },
+          { value: E(a * a), trap: 'squared a but never subtracted b²' },
+        ] : []),
       ]);
       return {
         stem: `Evaluate $${num(a)}^2 - ${num(b)}^2$.`,
@@ -226,6 +233,8 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { value: E(c * c - k), trap: 'subtracted k instead of k²' },
         { value: E(c * c - 2 * k), trap: 'subtracted 2k instead of k²' },
         { value: E(c * c - 2 * k * k), trap: 'subtracted 2k² instead of k²' },
+        { value: E(c * c - 4 * k * k), trap: 'subtracted (m − n)² instead of k²' },
+        { value: E(c * n), trap: 'multiplied c by the smaller number instead of using c² − k²' },
         { value: E(n * n), trap: 'squared the smaller number' },
       ]);
       return {
@@ -242,7 +251,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
     case 'quartic': {
       // (bx)⁴ − a⁴ = (b²x² + a²)(bx − a)(bx + a)
       const b = rng.pick([1, 1, 2, 3]);
-      const a = rng.pick([1, 2, 3]);
+      const a = rng.pick([1, 2, 3, 4, 5]);
       if (gcd(a, b) !== 1 || (a === 1 && b === 1 && rng.bool(0.5))) return null;
       const poly = [b ** 4, 0, 0, 0, -(a ** 4)];
       const form = F(1, [[[b * b, 0, a * a]], [[b, -a]], [[b, a]]]);
@@ -260,9 +269,9 @@ function build(rng: RNG, variant: Variant): Generated | null {
     }
     case 'common-dots': {
       // k(bx − a)(bx + a) from k b² x² − k a²
-      const k = rng.pick([2, 2, 3, 5]);
+      const k = rng.pick([2, 2, 3, 3, 5, 6, 7, 10]);
       const b = rng.pick([1, 1, 2, 3]);
-      const a = rng.pick([1, 2, 3, 4, 5]);
+      const a = rng.pick([1, 2, 3, 4, 5, 6]);
       if (gcd(a, b) !== 1 || (b === 1 && a === 1)) return null;
       const poly = [k * b * b, 0, -k * a * a];
       if (poly[0] > 50 || -poly[2] > 100) return null;
@@ -280,15 +289,24 @@ function build(rng: RNG, variant: Variant): Generated | null {
         'Take out the common factor before the difference of two squares; "fully" means both steps.', ['difference-of-squares', 'common-factor']);
     }
     case 'numeric-root': {
-      const [a, b, c] = rng.pick(ROOT_TRIPLES);
+      const [small, large, c] = rng.pick(ROOT_TRIPLES);
+      // Either leg may be the one subtracted, which doubles the pool of stems and stops the
+      // answer sitting in the same place in the ordering every time.
+      const big = rng.bool(0.5);
+      const b = big ? small : large, a = big ? large : small;
       const answer = E(a);
       const ds = clean([
         { value: E(c - b), trap: 'treated √(c² − b²) as c − b' },
-        { value: E(c + b), trap: 'gave c + b' },
+        { value: E(2 * (c - b)), trap: 'doubled c − b' },
+        { value: E(b), trap: 'gave the number already squared in the question' },
+        { value: E(c), trap: 'gave c, the number the root is just below' },
+        { value: E(c + b), trap: 'gave c + b instead of √((c − b)(c + b))' },
         { value: E((c - b) * (c + b)), trap: 'forgot to take the square root' },
-        { value: E(a + 1), trap: 'arithmetic slip' },
-        { value: E(a - 1), trap: 'arithmetic slip' },
-        { value: E(Math.round(Math.sqrt(c * c + b * b))), trap: 'added the squares' },
+        // when c − b is a perfect square so is c + b: √(c−b)·√(c+b) is the fast route, and
+        // adding the two roots instead of multiplying them lands close to the answer
+        ...(Number.isInteger(Math.sqrt(c - b))
+          ? [{ value: E(Math.sqrt(c - b) + Math.sqrt(c + b)), trap: 'added √(c − b) and √(c + b) instead of multiplying them' }]
+          : []),
       ]);
       return {
         stem: `Evaluate $\\sqrt{${c}^2 - ${b}^2}$.`,

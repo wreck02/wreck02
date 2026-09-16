@@ -72,11 +72,11 @@ function render(r: Region): string {
   return `$x ${r.closed ? '\\le' : '<'} ${tex(r.a)}$ or $x ${r.closed ? '\\ge' : '>'} ${tex(r.b)}$`;
 }
 
-/** Test points: the critical values, half a unit and a unit either side, midpoints, 0 and far out. */
+/** Test points: the critical values, a quarter/half/one unit either side, midpoints, 0 and far out. */
 function samples(crit: Rat[]): Exact[] {
   const out: Exact[] = [E(0), E(-1000), E(1000)];
   const cs = crit.map(X);
-  for (const c of cs) for (const d of [0, 0.5, -0.5, 1, -1]) out.push(c.add(E(d)));
+  for (const c of cs) for (const d of [0, 0.25, -0.25, 0.5, -0.5, 1, -1, 2, -2]) out.push(c.add(E(d)));
   for (let i = 0; i < cs.length; i++) for (let j = i + 1; j < cs.length; j++) out.push(cs[i].add(cs[j]).mulRat(0.5));
   return out;
 }
@@ -164,7 +164,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         { r: { kind: 'ray', op: FLIP[op], v: R(-t) }, trap: 'flipped the inequality and sign error in the value' },
         { r: { kind: 'ray', op, v: R(c + b, a) }, trap: 'added b instead of subtracting it' },
         { r: { kind: 'ray', op: TOGGLE[op], v }, trap: closedOp(op) ? 'made the inequality strict' : 'made the inequality non-strict' },
-        { r: { kind: 'ray', op, v: R((c - b) * a) }, trap: 'multiplied by a instead of dividing' },
+        { r: { kind: 'ray', op, v: R(c, a) }, trap: 'divided by a before subtracting b' },
       ];
       return choiceQ(rng, ineq, [v], { kind: 'ray', op, v }, wrong,
         `$${a}x ${OPTEX[op]} ${c - b}$, and dividing by the positive number $${a}$ keeps the sign: $x ${OPTEX[op]} ${t}$.`,
@@ -356,35 +356,52 @@ function build(rng: RNG, variant: Variant): Generated | null {
         const last = Number.isInteger(hiV) && strict ? hiV - 1 : Math.floor(hiV);
         if (last < first) return null;
         answer = ask === 'largest' ? last : first;
+        // Candidates on both sides of the answer: "the second largest option" must not be a
+        // reliable guess for the largest-integer ask (nor the second smallest for the smallest).
+        const up = ask === 'largest';
         ds = clean([
-          { value: E(answer + 1), trap: ask === 'largest' ? 'went past the upper root' : 'off by one' },
-          { value: E(answer - 1), trap: ask === 'largest' ? 'off by one' : 'went below the lower root' },
-          { value: E(ask === 'largest' ? first : last), trap: 'used the wrong end of the interval' },
-          { value: E(Math.round(ask === 'largest' ? hiV : loV)), trap: 'rounded the root instead of taking the integer inside the interval' },
-          { value: E(-answer), trap: 'sign error' },
+          { value: E(answer + 1), trap: up ? 'went past the upper root' : 'off by one' },
+          { value: E(answer - 1), trap: up ? 'off by one' : 'went below the lower root' },
+          { value: E(up ? answer + 2 : answer - 2), trap: 'went two integers outside the interval' },
+          { value: E(up ? first : last), trap: 'used the wrong end of the interval' },
+          { value: E(Math.round(up ? hiV : loV)), trap: 'rounded the root instead of taking the integer inside the interval' },
+          { value: E(up ? Math.ceil(hiV) : Math.floor(loV)), trap: 'rounded outwards, to an integer outside the interval' },
+          { value: E(Math.round((loV + hiV) / 2)), trap: 'gave the midpoint of the interval' },
+          { value: E(up ? Math.floor(-loV) : Math.ceil(-hiV)), trap: 'read the roots off the factors with the wrong signs' },
+          ...(fractional ? [{ value: E(Math.round(-a / b)), trap: 'inverted the fractional root: (ax + b) = 0 gives x = −b/a, not −a/b' }] : []),
         ]);
       } else {
         ask = 'smallest-positive';
         if (loV > 0.5 || hiV < 0) return null; // positives must come only from the right branch
         answer = Number.isInteger(hiV) && strict ? hiV + 1 : Math.ceil(hiV) === hiV ? hiV : Math.ceil(hiV);
         if (answer < 1) return null;
+        // Every candidate must itself be a positive integer: an option that the stem rules out
+        // (a negative, a fraction) is eliminated without solving anything.
         ds = clean([
           { value: E(answer + 1), trap: 'off by one' },
+          { value: E(answer + 2), trap: 'went two integers past the root' },
           { value: E(answer - 1), trap: strict ? 'the root itself does not satisfy a strict inequality' : 'off by one' },
           { value: E(Math.floor(hiV)), trap: 'rounded the root down' },
+          { value: E(Math.round(hiV)), trap: 'rounded the root to the nearest integer' },
           { value: E(Math.max(1, Math.ceil(loV))), trap: 'used the lower root' },
+          { value: E(Math.ceil(-loV)), trap: 'used the lower root with its sign dropped' },
           { value: E(1), trap: 'assumed 1 works without checking' },
-        ]);
+        ]).filter((d) => d.value.isInteger() && d.value.toNumber() >= 1);
       }
       if (answer === 0 && ask !== 'smallest-positive') return null;
       const region = quadRegion(lo, hi, op);
       const stem = ask === 'largest' ? `Find the largest integer $x$ satisfying $${ineqTex(ineq)}$.`
         : ask === 'smallest' ? `Find the smallest integer $x$ satisfying $${ineqTex(ineq)}$.`
           : `Find the smallest positive integer $x$ for which $${ineqTex(ineq)}$.`;
+      // Last-resort padding: nearby integers of a sign the stem allows, so the generic
+      // −answer / answer÷2 perturbations (a negative or a fraction) can never be reached.
+      const fallback = [answer + 2, answer - 2, answer + 3, answer - 3, answer + 4, answer - 4, answer + 5]
+        .filter((v) => ask !== 'smallest-positive' || v >= 1)
+        .map((v) => E(v));
       return {
         stem,
         answer: { kind: 'exact', value: E(answer) },
-        options: buildOptions(rng, E(answer), ds),
+        options: buildOptions(rng, E(answer), ds, { fallback }),
         solution: `$${factored} ${OPTEX[op]} 0$: roots $${tex(lo)}$ and $${tex(hi)}$, so ${render(region)}. The ${ask === 'smallest-positive' ? 'smallest positive integer in that set' : `${ask} integer in that interval`} is $${answer}$.`,
         trap: 'Solve the inequality fully first, then read off the integer: watch strict versus non-strict at a root and round the right way for a fractional root.',
         tags: ['inequality', 'quadratic', 'integer'],

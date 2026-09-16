@@ -44,16 +44,32 @@ function keep(ds: Cand[]): Distractor[] {
   return out;
 }
 
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Choose the distractors so that the answer is bracketed rather than always the biggest (or always the
+ * second smallest): a random number of them is taken from below the answer and the rest from above.
+ * Compound growth is the bad case — simple interest, one period short, the wrong multiplier and the
+ * interest alone all undershoot, so "pick the largest" used to score 57%. No trap string is repeated.
+ */
+function spread(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const traps = new Set<string>();
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (!Number.isFinite(d.value.toNumber())) continue;
+    if (seen.some((s) => s.equals(d.value))) continue;
+    if (d.trap && traps.has(d.trap)) continue;
     seen.push(d.value);
-    out.push(d);
-  };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+    if (d.trap) traps.add(d.trap);
+    pool.push(d);
+  }
+  const below = pool.filter((d) => d.value.cmp(answer) < 0);
+  const above = pool.filter((d) => d.value.cmp(answer) > 0);
+  const want = rng.weighted(Array.from({ length: count + 1 }, (_, i) => i), Array.from({ length: count + 1 }, (_, i) => (i === 0 || i === count ? 1 : 2)));
+  const out: Distractor[] = [];
+  const take = (d: Distractor) => { if (out.length < count && !out.includes(d)) out.push(d); };
+  for (const d of below.slice(0, want)) take(d);
+  for (const d of above) take(d);
+  for (const d of below) take(d);
   return out;
 }
 
@@ -114,7 +130,7 @@ function overall(rng: RNG): Generated | null {
     { value: E(Math.abs(spp - sq)), trap: 'subtracted the percentages' },
     { value: ans.add(E(1)), trap: 'arithmetic slip of one' },
   ]);
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `Multiply the multipliers: $${mtex(spp)} \\times ${mtex(sq)} = ${dec(m)}$, which is ${up ? 'an increase' : 'a decrease'} of $${dec(ans)}\\%$.`,
     'Successive changes multiply: 1.1 × 1.1 = 1.21, so two 10% rises are a 21% rise (not 20%); 10% up then 10% down is a 1% fall, not no change.',
     ['percentage', 'compound', 'multiplier'],
@@ -148,19 +164,31 @@ function compound(rng: RNG, decrease: boolean): Generated | null {
   else if (ctx === 'population') stem = `The population of a colony of bacteria is ${P}. It increases by $${r}\\%$ every hour. What is the population after ${n} hours?`;
   else stem = `The price of a ticket is £${P}. It rises by $${r}\\%$ each year for ${yrs}. Find the price, in pounds, after the ${n === 2 ? 'second' : 'third'} rise.`;
   const simple = E(P).mul(mult(sr * n));
-  const must = keep([
-    { value: simple, trap: `applied ${r}% of the original each time (simple interest)` },
-  ]);
+  // Mistakes that overshoot as well as undershoot, or the answer is simply the biggest number on the page.
+  const over = keep([
+    { value: E(P).mul(m.pow(n + 1)), trap: `went on for ${n + 1} periods` },
+    { value: ans.add(E(P).mulRat(frac(Math.abs(sr) * n, 100).toRat())), trap: 'added simple interest on top of the compounded value' },
+    { value: ans.add(E(P).mulRat(frac(Math.abs(sr), 100).toRat())), trap: 'counted one extra period of change on the original amount' },
+    { value: E(P).mul(mult(-sr).pow(n)), trap: decrease ? `used the multiplier ${mtex(r)} for a decrease` : `used the multiplier ${mtex(-r)} for an increase` },
+    { value: E(P).mul(m.pow(n - 1)), trap: `stopped after ${n - 1} ${n - 1 === 1 ? 'period' : 'periods'}` },
+  ].filter((c) => c.value !== null && c.value.cmp(ans) > 0));
+  if (over.length === 0) return null; // no overshooting mistake available: redraw rather than give the game away
+  const must = [
+    ...keep([{ value: simple, trap: `applied ${r}% of the original each time (simple interest)` }]),
+    rng.pick(over),
+  ];
   const extra = keep([
     { value: E(P).mul(m.pow(n - 1)), trap: `stopped after ${n - 1} ${n - 1 === 1 ? 'period' : 'periods'}` },
     { value: E(P).mul(m.pow(n + 1)), trap: `went on for ${n + 1} periods` },
+    { value: ans.add(E(P).mulRat(frac(Math.abs(sr) * n, 100).toRat())), trap: 'added simple interest on top of the compounded value' },
+    { value: ans.add(E(P).mulRat(frac(Math.abs(sr), 100).toRat())), trap: 'counted one extra period of change on the original amount' },
     { value: E(P).mul(mult(-sr).pow(n)), trap: decrease ? `used the multiplier ${mtex(r)} for a decrease` : `used the multiplier ${mtex(-r)} for an increase` },
     { value: E(P).sub(ans).abs(), trap: decrease ? 'found the loss in value, not the value' : 'found the interest, not the total value' },
     { value: E(Math.abs(P - simple.toNumber())), trap: 'found the total change using simple interest' },
     { value: E(P).mul(m).mul(frac(100 + Math.abs(sr) * (n - 1), 100)), trap: 'compounded only once' },
   ]);
   const steps = Array.from({ length: n }, () => mtex(sr)).join(' \\times ');
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `Multiplier $${mtex(sr)}$ each ${ctx === 'population' ? 'hour' : 'year'}: $${P} \\times ${steps} = ${P} \\times ${dec(m.pow(n))} = ${F}$.`,
     decrease
       ? 'A 20% fall is a multiplier of 0.8 applied each year: 500 × 0.8² = 320, not 500 − 2 × 100 = 300.'
@@ -197,7 +225,7 @@ function percentOfPercent(rng: RNG): Generated | null {
     { value: E(100 - (p * q) / 100), trap: 'found the complementary percentage' },
     { value: E(Math.max(p, q)), trap: 'kept the larger percentage' },
   ]);
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `$${q}\\%$ of $${p}\\%$ is $${dec(frac(q, 100))} \\times ${p}\\% = ${dec(ans)}\\%$.`,
     'A percentage of a percentage multiplies: 40% of 30% is 0.4 × 30% = 12%, not 70% or 10%.',
     ['percentage', 'percent-of-percent'],
@@ -225,7 +253,7 @@ function discountVat(rng: RNG): Generated | null {
     { value: E(P).mul(mult(vat)), trap: 'applied VAT to the full price and forgot the discount' },
     { value: E(P).mul(mult(-d)).mul(mult(-d)), trap: 'applied the discount twice' },
   ]);
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `Sale price $${P} \\times ${mtex(-d)} = ${dec(sale)}$; with VAT, $${dec(sale)} \\times ${mtex(vat)} = ${dec(ans)}$.`,
     'Apply the multipliers in turn (0.75 then 1.2); a 25% cut followed by 20% VAT is not a net 5% cut.',
     ['percentage', 'compound', 'vat'],
@@ -251,18 +279,30 @@ function findRate(rng: RNG): Generated | null {
   const ctx = rng.pick(['price', 'population', 'value']);
   const noun = ctx === 'price' ? `The price of a train ticket` : ctx === 'population' ? 'The number of members of a club' : 'The value of an antique';
   const stem = `${noun} ${decrease ? 'falls' : 'rises'} by the same percentage in each of two years, from ${ctx === 'population' ? P : `£${P}`} to ${ctx === 'population' ? F : `£${F}`}. Find the percentage ${decrease ? 'decrease' : 'increase'} per year.`;
-  const must = keep([
-    { value: overallPct, trap: 'gave the overall percentage change for the two years' },
-    { value: overallPct.mulRat(frac(1, 2).toRat()), trap: 'halved the overall percentage change' },
-  ]);
-  const extra = keep([
-    { value: E(100 * (decrease ? 100 - r : 100 + r) / 100), trap: 'forgot to subtract 100 from the percentage multiplier' },
+  // A change in value is only offered when it could be read as a percentage: "5000%" per year is
+  // discarded on sight and turns a five-option question into a three-option one.
+  const change = Math.abs(F - P);
+  const rootOfPct = Math.sqrt(overallPct.toNumber());
+  // Every other mistake overshoots the rate, so one that undershoots it is always offered.
+  const under = keep([
     { value: m, trap: 'gave the yearly multiplier, not a percentage' },
-    { value: E(Math.abs(F - P)), trap: 'gave the total change in value' },
-    { value: E(Math.abs(F - P) / 2), trap: 'halved the total change in value' },
+    { value: Number.isInteger(rootOfPct * 10) ? E(rootOfPct) : null, trap: 'square-rooted the percentage change instead of the multiplier' },
+    { value: frac(r, 2), trap: 'halved the rate as well as taking the root of the multiplier' },
+    { value: E(r).mulRat(frac(1, 100).toRat()), trap: 'gave the rate as a decimal, not a percentage' },
+  ].filter((c) => c.value !== null && c.value.cmp(ans) < 0));
+  if (under.length === 0) return null;
+  const must = [
+    ...keep([{ value: overallPct, trap: 'gave the overall percentage change for the two years' }]),
+    rng.pick(under),
+  ];
+  const extra = [...under, ...keep([
+    { value: overallPct.mulRat(frac(1, 2).toRat()), trap: 'halved the overall percentage change' },
+    { value: E(100 * (decrease ? 100 - r : 100 + r) / 100), trap: 'forgot to subtract 100 from the percentage multiplier' },
+    { value: change <= 100 ? E(change) : null, trap: 'gave the total change in value' },
+    { value: change <= 200 ? E(change / 2) : null, trap: 'halved the total change in value' },
     { value: E(2 * r), trap: 'doubled the rate' },
-  ]);
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  ])];
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `Two years give a multiplier of $${F} \\div ${P} = ${dec(m.pow(2))}$; its square root is $${mtex(sr)}$, so the change is $${r}\\%$ per year.`,
     'The rate comes from the square root of the two-year multiplier (√1.21 = 1.1 ⇒ 10%), not from halving the overall 21%.',
     ['percentage', 'compound', 'reverse'],
@@ -306,7 +346,7 @@ function findPeriods(rng: RNG): Generated | null {
     { value: E(2 * n), trap: 'doubled the number of periods' },
   ]);
   const values = Array.from({ length: n }, (_, i) => dec(E(P).mul(m.pow(i + 1)))).join(', ');
-  return pack(rng, stem, ans, ranked(rng, ans, must, extra),
+  return pack(rng, stem, ans, spread(rng, ans, must, extra),
     `Multiply by $${dec(m)}$ repeatedly: ${values}. The value first ${decrease ? 'drops below' : 'passes'} ${T} after ${n} ${ctx === 'drug' ? 'hours' : ctx === 'population' ? 'weeks' : 'years'}.`,
     'Compound change multiplies each period, so list the values (1.2, 1.44, 1.728 …) rather than dividing the required change by the yearly change.',
     ['percentage', 'compound', 'periods'],

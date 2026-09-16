@@ -96,17 +96,51 @@ function cleanOnly(ds: Cand[], sig = 3): Distractor[] {
   return out;
 }
 
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Choose the distractors so that the answer moves around the sorted option list: a random number of
+ * them is taken from below the answer and the rest from above, so the rank histogram is flat instead
+ * of pinning the answer near the bottom. At most `maxPow10` options may be the answer's own digits at
+ * another scale (the decimal-point ladder is one mistake, not four), and no trap string is repeated.
+ * `must` candidates are offered first, then the extras in random order.
+ */
+function spread(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], opts: { count?: number; maxPow10?: number } = {}): Distractor[] {
+  const count = opts.count ?? 4;
+  const maxPow10 = opts.maxPow10 ?? 1;
+  const a = answer.toNumber();
+  const near = (v: Exact) => { const r = v.toNumber() / a; return r > 1e-3 && r < 1e3; };
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const near = (v: Exact) => { const r = v.toNumber() / answer.toNumber(); return r > 1e-3 && r < 1e3; };
-  const take = (d: Distractor) => {
-    if (out.length >= count || !near(d.value) || seen.some((s) => s.equals(d.value))) return;
+  const traps = new Set<string>();
+  const pool: Distractor[] = [];
+  for (const d of [...must, ...rng.shuffle(extra)]) {
+    if (!Number.isFinite(d.value.toNumber()) || !near(d.value)) continue;
+    if (seen.some((s) => s.equals(d.value))) continue;
+    if (d.trap && traps.has(d.trap)) continue;
     seen.push(d.value);
-    out.push(d);
+    if (d.trap) traps.add(d.trap);
+    pool.push(d);
+  }
+  const isPow10 = (v: Exact) => {
+    const r = Math.log10(Math.abs(v.toNumber() / a));
+    return Number.isFinite(r) && Math.abs(r - Math.round(r)) < 1e-9 && Math.round(r) !== 0;
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const below = pool.filter((d) => d.value.cmp(answer) < 0);
+  const above = pool.filter((d) => d.value.cmp(answer) > 0);
+  const want = rng.weighted(Array.from({ length: count + 1 }, (_, i) => i), Array.from({ length: count + 1 }, (_, i) => (i === 0 || i === count ? 1 : 2)));
+  const out: Distractor[] = [];
+  let tens = 0;
+  const take = (d: Distractor, cap: number) => {
+    if (out.length >= count || out.includes(d)) return false;
+    const ten = isPow10(d.value);
+    if (ten && tens >= cap) return false;
+    out.push(d);
+    if (ten) tens++;
+    return true;
+  };
+  let n = 0;
+  for (const d of below) { if (n >= want) break; if (take(d, maxPow10)) n++; }
+  for (const d of above) take(d, maxPow10);
+  for (const d of below) take(d, maxPow10);
+  for (const d of pool) take(d, Infinity); // last resort: a second point slip beats an unlabelled pad
   return out;
 }
 
@@ -120,6 +154,10 @@ function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generat
 }
 
 const TENTH = E(0.1).toRat();
+/** 1/d as a Rat, for mulRat. */
+const recip = (d: number) => Exact.rat(1, d).toRat();
+/** x rounded to one decimal place, exactly. */
+const round1dp = (x: Exact) => Exact.decimal((Math.round(x.toNumber() * 10) / 10).toFixed(1));
 
 function pack(rng: RNG, tree: Node, ans: Exact, ds: Distractor[], solution: string, trap: string, tags: string[], variant: string, verb = 'Work out'): Generated | null {
   if (ds.length < 4) return null;
@@ -153,24 +191,40 @@ function multiply(rng: RNG, A: string[], B: string[], variant: string, sig = 3):
   const ans = evalExact(tree);
   if (!mental(ans, sig) || ans.equals(D(a)) || ans.equals(D(b))) return null;
   const x = D(a), y = D(b);
-  const must = cleanOnly(shifts(ans), sig);
-  const extra = cleanOnly([
-    { value: ans.mulRat(100), trap: 'decimal point two places out' },
-    { value: x.add(y), trap: 'added instead of multiplying' },
-    { value: tryE(() => x.div(y)), trap: 'divided instead of multiplying' },
-    { value: tryE(() => y.div(x)), trap: 'divided instead of multiplying' },
-    { value: x.sub(y).abs(), trap: 'subtracted instead of multiplying' },
-  ], sig);
-  // fastest route: whole-number product then place the point, or a fraction spotted
   const da = (a.split('.')[1] ?? '').length, db = (b.split('.')[1] ?? '').length;
   const ia = a.replace('.', '').replace(/^0+/, ''), ib = b.replace('.', '').replace(/^0+/, '');
   const whole = Number(ia) * Number(ib);
-  const FRACS: Record<string, string> = { '0.125': '\\tfrac18', '0.25': '\\tfrac14', '0.375': '\\tfrac38', '0.5': '\\tfrac12', '0.625': '\\tfrac58', '0.75': '\\tfrac34', '0.875': '\\tfrac78', '0.2': '\\tfrac15', '0.4': '\\tfrac25', '0.6': '\\tfrac35', '0.8': '\\tfrac45', '1.5': '\\tfrac32', '2.5': '\\tfrac52', '1.25': '\\tfrac54' };
-  const fa = FRACS[a], fb = FRACS[b];
-  const solution = (fa || fb) && variant === 'fraction'
-    ? `Spot the fraction: $${a} = ${fa ?? a}$, so $${a} \\times ${b} = ${fa ?? a} \\times ${b} = ${dec(ans)}$.`.replace(`$${a} = ${fa ?? a}$`, fa ? `$${a} = ${fa}$` : `$${b} = ${fb}$`)
+  const FRACS: Record<string, [string, number, number]> = {
+    '0.125': ['\\tfrac18', 1, 8], '0.25': ['\\tfrac14', 1, 4], '0.375': ['\\tfrac38', 3, 8], '0.5': ['\\tfrac12', 1, 2],
+    '0.625': ['\\tfrac58', 5, 8], '0.75': ['\\tfrac34', 3, 4], '0.875': ['\\tfrac78', 7, 8], '0.2': ['\\tfrac15', 1, 5],
+    '0.4': ['\\tfrac25', 2, 5], '0.6': ['\\tfrac35', 3, 5], '0.8': ['\\tfrac45', 4, 5], '1.5': ['\\tfrac32', 3, 2],
+    '2.5': ['\\tfrac52', 5, 2], '1.25': ['\\tfrac54', 5, 4],
+  };
+  // whichever factor is the "nice" fraction: n/d, with `other` the factor it multiplies
+  const niceStr = FRACS[a] ? a : FRACS[b] ? b : null;
+  const nice = niceStr ? FRACS[niceStr] : null;
+  const otherStr = niceStr === null ? null : niceStr === a ? b : a;
+  const other = otherStr === null ? null : D(otherStr);
+  const must = cleanOnly([
+    { value: x.add(y), trap: 'added instead of multiplying' },
+    { value: nice && other ? other.mulRat(nice[1]) : null, trap: nice ? `multiplied by the numerator ${nice[1]} but forgot to divide by ${nice[2]}` : '' },
+  ], sig);
+  const extra = cleanOnly([
+    ...shifts(ans),
+    { value: nice && other ? tryE(() => other.mulRat(recip(nice[2]))) : null, trap: nice ? `divided by ${nice[2]} but forgot to multiply by ${nice[1]}` : '' },
+    { value: nice && other ? other.mulRat(nice[2]) : null, trap: nice ? `multiplied by ${nice[2]} instead of dividing by it` : '' },
+    { value: tryE(() => x.div(y)), trap: 'divided the first number by the second' },
+    { value: tryE(() => y.div(x)), trap: 'divided the second number by the first' },
+    { value: x.sub(y).abs(), trap: 'subtracted instead of multiplying' },
+    { value: round1dp(x).mul(round1dp(y)), trap: 'rounded the factors to one decimal place before multiplying' },
+    { value: x.mul(x), trap: 'squared the first number instead of multiplying by the second' },
+    { value: y.mul(y), trap: 'squared the second number instead of multiplying by the first' },
+  ], sig);
+  // fastest route: a fraction spotted, or the whole-number product with the decimal places counted
+  const solution = nice && niceStr && otherStr && variant === 'fraction'
+    ? `Spot the fraction: $${niceStr} = ${nice[0]}$, so $${a} \\times ${b} = ${nice[0]} \\times ${otherStr} = ${dec(ans)}$.`
     : `$${ia} \\times ${ib} = ${whole}$, and there are $${da} + ${db} = ${da + db}$ decimal places in total, so the answer is $${dec(ans)}$.`;
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra), solution,
+  return pack(rng, tree, ans, spread(rng, ans, must, extra), solution,
     'Multiply the digits as whole numbers, then count the decimal places (the count adds); or recognise 0.75 = ¾, 0.125 = ⅛.',
     ['decimals', 'multiplication'], variant);
 }
@@ -194,8 +248,10 @@ function addition(rng: RNG): Generated | null {
     { value: x.sub(y).abs(), trap: 'subtracted instead of adding' },
     { value: x.mul(y), trap: 'multiplied instead of adding' },
     { value: ans.add(E(1)), trap: 'carried twice' },
+    { value: x.add(y.mulRat(10)), trap: 'columns misaligned: the second number shifted one place the other way' },
+    { value: round1dp(x).add(round1dp(y)), trap: 'rounded both numbers to one decimal place first' },
   ]);
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra),
+  return pack(rng, tree, ans, spread(rng, ans, must, extra),
     `Line up the decimal points: $${a} + ${b} = ${s}$.`,
     'Line up the decimal points (write 1.2 as 1.20 if it helps) before adding column by column.',
     ['decimals', 'addition'], 'add');
@@ -219,8 +275,11 @@ function subtraction(rng: RNG): Generated | null {
     { value: ans.add(E(1)), trap: 'forgot to borrow from the units' },
     { value: x.add(y), trap: 'added instead of subtracting' },
     { value: x.sub(y.mulRat(TENTH)), trap: 'columns misaligned' },
+    { value: ans.sub(E(1)), trap: 'borrowed a whole unit that was not needed' },
+    { value: x.sub(y).sub(bFrac), trap: 'subtracted the decimal part twice' },
+    { value: round1dp(x).sub(round1dp(y)), trap: 'rounded both numbers to one decimal place first' },
   ]);
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra),
+  return pack(rng, tree, ans, spread(rng, ans, must, extra),
     `Count up from $${b}$: to the next whole number is $${dec(E(Math.ceil(Number(b))).sub(y))}$, then $${dec(x.sub(E(Math.ceil(Number(b)))))}$ more, total $${dec(ans)}$.`,
     'Subtract by counting up to the next whole number, or write 3 as 3.00 and borrow carefully; 3 − 1.45 is 1.55, not 1.65 or 2.55.',
     ['decimals', 'subtraction'], 'sub');
@@ -231,24 +290,28 @@ function subtraction(rng: RNG): Generated | null {
 // ---------------------------------------------------------------------------
 
 function division(rng: RNG): Generated | null {
-  const a = rng.pick(['0.6', '0.8', '1.2', '4.5', '0.36', '0.9', '2.4', '3', '0.72', '1.5', '0.04', '6']);
-  const b = rng.pick(['0.05', '0.2', '0.4', '0.5', '0.06', '0.03', '1.5', '0.15', '0.08', '0.02', '0.3', '0.12']);
+  const a = rng.pick(['0.6', '0.8', '1.2', '4.5', '0.36', '0.9', '2.4', '3', '0.72', '1.5', '0.04', '6', '0.06', '0.12', '0.05', '0.25', '0.08', '0.18']);
+  const b = rng.pick(['0.05', '0.2', '0.4', '0.5', '0.06', '0.03', '1.5', '0.15', '0.08', '0.02', '0.3', '0.12', '0.6', '0.8', '2.5', '0.25', '1.2', '0.9']);
   const tree = div(N(a), N(b));
   const ans = evalExact(tree);
   if (!mental(ans) || ans.toNumber() < 0.1 || ans.toNumber() > 200 || ans.equals(D(a))) return null;
   const x = D(a), y = D(b);
-  const must = cleanOnly(shifts(ans));
-  const extra = cleanOnly([
-    { value: ans.mulRat(100), trap: 'decimal point two places out' },
-    { value: ans.mulRat(E(0.01).toRat()), trap: 'decimal point two places out' },
+  const bWhole = Math.floor(Number(b)), bFrac = y.sub(E(bWhole));
+  const must = cleanOnly([
     { value: x.mul(y), trap: 'multiplied instead of dividing' },
     { value: tryE(() => y.div(x)), trap: 'divided the wrong way round' },
+  ]);
+  const extra = cleanOnly([
+    ...shifts(ans),
+    { value: bWhole >= 1 && bFrac.sign() > 0 ? tryE(() => x.div(bFrac)) : null, trap: 'divided by the decimal part of the divisor only' },
+    { value: tryE(() => x.div(round1dp(y))), trap: 'rounded the divisor to one decimal place first' },
     { value: x.sub(y).abs(), trap: 'subtracted instead of dividing' },
+    { value: tryE(() => x.div(y).div(y)), trap: 'divided by the divisor twice' },
   ]);
   const shift = Math.max((a.split('.')[1] ?? '').length, (b.split('.')[1] ?? '').length);
   const scale = 10 ** shift;
   const A = dec(x.mulRat(scale)), B = dec(y.mulRat(scale));
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra),
+  return pack(rng, tree, ans, spread(rng, ans, must, extra),
     `Multiply both numbers by $${scale}$: $${a} \\div ${b} = ${A} \\div ${B} = ${dec(ans)}$.`,
     'Scale numerator and denominator by the same power of ten until the divisor is a whole number: 0.6 ÷ 0.05 = 60 ÷ 5 = 12, not 1.2.',
     ['decimals', 'division'], 'div');
@@ -264,22 +327,23 @@ function square(rng: RNG, bases: string[], variant: string, sig = 3): Generated 
   const v = Number(a);
   const must = cleanOnly([
     { value: x.mulRat(2), trap: 'doubled instead of squaring' },
-    { value: ans.mulRat(10), trap: 'decimal point one place too far right (0.3² is 0.09, not 0.9)' },
+    { value: v > 1 ? E(1).add(x.sub(E(1)).pow(2)) : x.pow(3), trap: v > 1 ? 'dropped the middle term of (1 + x)²' : 'cubed instead of squaring' },
   ], sig);
   const extra = cleanOnly([
+    { value: ans.mulRat(10), trap: 'decimal point one place too far right (0.3² is 0.09, not 0.9)' },
     { value: ans.mulRat(TENTH), trap: 'decimal point one place too far left' },
-    { value: v > 1 ? E(1).add(x.sub(E(1)).pow(2)) : null, trap: 'dropped the middle term of (1 + x)²' },
     { value: v > 1 ? E(1).add(x.sub(E(1)).mulRat(2)) : null, trap: 'dropped the x² term of (1 + x)²' },
     { value: v < 1 ? x.mulRat(TENTH) : null, trap: 'squared the decimal part only' },
-    { value: ans.mulRat(100), trap: 'decimal point two places out' },
     { value: x.add(x.mul(x)), trap: 'added the number to its square' },
+    { value: round1dp(x).pow(2), trap: 'rounded to one decimal place before squaring' },
+    { value: x.mulRat(recip(2)), trap: 'halved instead of squaring' },
   ], sig);
   const ia = a.replace('.', '').replace(/^0+/, '');
   const dp = (a.split('.')[1] ?? '').length;
   const solution = v > 1 && v < 2
     ? `$(1 + ${dec(x.sub(E(1)))})^2 = 1 + 2 \\times ${dec(x.sub(E(1)))} + ${dec(x.sub(E(1)).pow(2))} = ${dec(ans)}$.`
     : `$${ia}^2 = ${Number(ia) ** 2}$ with $2 \\times ${dp} = ${2 * dp}$ decimal places: $${dec(ans)}$.`;
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra), solution,
+  return pack(rng, tree, ans, spread(rng, ans, must, extra), solution,
     'Squaring doubles the number of decimal places: 0.3² = 0.09, 1.2² = 1.44 (not 1.4 or 2.4).',
     ['decimals', 'squares'], variant);
 }
@@ -315,18 +379,20 @@ function twoStep(rng: RNG): Generated | null {
   const sq = t1.op === '/' && t1.a.op === 'pow' && t1.a.a.op === 'num' ? { base: D(t1.a.a.v), divisor: evalExact(t1.b) } : null;
   const must = cleanOnly([
     { value: sq ? tryE(() => combine(sq.base.mulRat(2).div(sq.divisor), v2)) : null, trap: 'doubled instead of squaring in the first term' },
-    { value: combine(v1.mulRat(10), v2), trap: 'decimal point slip in the first term' },
-    { value: combine(v1, v2.mulRat(10)), trap: 'decimal point slip in the second term' },
+    { value: op === '+' ? v1.sub(v2).abs() : v1.add(v2), trap: op === '+' ? 'subtracted the terms' : 'added the terms' },
   ]);
   const extra = cleanOnly([
-    { value: combine(v1.mulRat(TENTH), v2), trap: 'decimal point slip in the first term' },
-    { value: combine(v1, v2.mulRat(TENTH)), trap: 'decimal point slip in the second term' },
-    { value: op === '+' ? v1.sub(v2).abs() : v1.add(v2), trap: op === '+' ? 'subtracted the terms' : 'added the terms' },
+    { value: combine(v1.mulRat(10), v2), trap: 'decimal point slip in the first term (ten times too big)' },
+    { value: combine(v1.mulRat(TENTH), v2), trap: 'decimal point slip in the first term (ten times too small)' },
+    { value: combine(v1, v2.mulRat(10)), trap: 'decimal point slip in the second term (ten times too big)' },
+    { value: combine(v1, v2.mulRat(TENTH)), trap: 'decimal point slip in the second term (ten times too small)' },
     { value: v1.mul(v2), trap: 'multiplied the two terms' },
+    { value: tryE(() => v1.div(v2)), trap: 'divided the two terms' },
     { value: ans.mulRat(10), trap: 'decimal point slip at the end' },
     { value: sq ? tryE(() => combine(sq.base.div(sq.divisor), v2)) : null, trap: 'forgot to square' },
+    { value: sq ? tryE(() => combine(sq.base.pow(2).mul(sq.divisor), v2)) : null, trap: 'multiplied instead of dividing in the first term' },
   ]);
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra),
+  return pack(rng, tree, ans, spread(rng, ans, must, extra),
     `First term: $${tex(t1)} = ${dec(v1)}$; second term: $${tex(t2)} = ${dec(v2)}$; so the value is $${dec(v1)} ${op} ${dec(v2)} = ${dec(ans)}$.`,
     'Evaluate each product/quotient separately, watching the decimal point in each, and only then add or subtract.',
     ['decimals', 'two-step', 'order-of-operations'], 'two-step', 'Evaluate');
@@ -337,29 +403,31 @@ function twoStep(rng: RNG): Generated | null {
 // ---------------------------------------------------------------------------
 
 function cubeOverSquare(rng: RNG): Generated | null {
-  const a = rng.pick(['0.2', '0.3', '0.4', '0.5', '0.6', '1.2', '0.1']);
-  const b = rng.pick(['0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.05']);
+  const a = rng.pick(['0.2', '0.3', '0.4', '0.5', '0.6', '1.2', '0.1', '0.8', '0.9', '1.5']);
+  const b = rng.pick(['0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.05', '0.8', '1.2', '0.15', '0.25']);
   const tree = div(pow(N(a), 3), pow(N(b), 2));
   const ans = evalExact(tree);
   if (!mental(ans) || a === b) return null;
   const x = D(a), y = D(b);
-  const must = cleanOnly(shifts(ans));
-  const extra = cleanOnly([
-    { value: tryE(() => x.mulRat(3).div(y.mulRat(2))), trap: 'multiplied by the indices instead of raising to the powers' },
+  const must = cleanOnly([
     { value: tryE(() => x.pow(2).div(y.pow(2))), trap: 'squared the numerator instead of cubing' },
     { value: tryE(() => x.pow(3).div(y.pow(3))), trap: 'cubed the denominator too' },
-    { value: x.pow(3).mul(y.pow(2)), trap: 'multiplied instead of dividing' },
-    { value: ans.mulRat(100), trap: 'decimal point two places out' },
-    { value: ans.mulRat(E(0.01).toRat()), trap: 'decimal point two places out' },
   ]);
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra),
+  const extra = cleanOnly([
+    ...shifts(ans),
+    { value: tryE(() => x.mulRat(3).div(y.mulRat(2))), trap: 'multiplied by the indices instead of raising to the powers' },
+    { value: tryE(() => x.pow(2).div(y.pow(3))), trap: 'swapped the two indices' },
+    { value: x.pow(3).mul(y.pow(2)), trap: 'multiplied instead of dividing' },
+    { value: tryE(() => x.pow(3).div(y)), trap: 'forgot to square the denominator' },
+  ]);
+  return pack(rng, tree, ans, spread(rng, ans, must, extra),
     `$${a}^3 = ${dec(x.pow(3))}$ and $${b}^2 = ${dec(y.pow(2))}$, so the value is $${dec(x.pow(3))} \\div ${dec(y.pow(2))} = ${dec(ans)}$.`,
     'Cubing triples the decimal places and squaring doubles them; write both out before dividing, then scale the division to whole numbers.',
     ['decimals', 'powers', 'division'], 'cube-over-square', 'Evaluate');
 }
 
 function cube(rng: RNG): Generated | null {
-  const a = rng.pick(['1.5', '0.5', '1.2', '0.4', '0.3', '1.1', '0.2', '0.6', '2.5', '0.9']);
+  const a = rng.pick(['1.5', '0.5', '1.2', '0.4', '0.3', '1.1', '0.2', '0.6', '2.5', '0.9', '0.7', '0.8', '1.3', '1.4', '1.6', '2.1']);
   const tree = pow(N(a), 3);
   const ans = evalExact(tree);
   if (!mental(ans, 4)) return null;
@@ -375,16 +443,17 @@ function cube(rng: RNG): Generated | null {
     { value: sq.add(x), trap: 'added the last factor instead of multiplying by it' },
     { value: sq.mulRat(3), trap: 'multiplied the square by 3 instead of by the number' },
     { value: sq.mulRat(2), trap: 'doubled the square' },
+    { value: sq.mul(sq), trap: 'squared the square instead of multiplying by the number again' },
   ], 4);
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra),
+  return pack(rng, tree, ans, spread(rng, ans, must, extra),
     `$${a}^2 = ${dec(sq)}$, then $${dec(sq)} \\times ${a} = ${dec(ans)}$.`,
     'Cube by squaring first and multiplying again; the decimal places triple (1.5³ = 3.375, not 4.5).',
     ['decimals', 'cubes'], 'cube', 'Evaluate');
 }
 
 function differenceOfSquares(rng: RNG): Generated | null {
-  const c = rng.pick(['1', '1', '1', '2', '3', '5', '4', '10']);
-  const x = rng.pick(['0.1', '0.2', '0.3', '0.01', '0.05', '0.02', '0.4']);
+  const c = rng.pick(['1', '1', '1', '2', '3', '5', '4', '10', '6', '8', '20', '2.5']);
+  const x = rng.pick(['0.1', '0.2', '0.3', '0.01', '0.05', '0.02', '0.4', '0.5', '0.03', '0.6']);
   const C = D(c), X = D(x);
   if (X.cmp(C) >= 0) return null;
   const lo = C.sub(X), hi = C.add(X);
@@ -402,7 +471,7 @@ function differenceOfSquares(rng: RNG): Generated | null {
     { value: C.mul(C).sub(X.mulRat(2)), trap: 'subtracted 2x instead of x²' },
     { value: lo.add(hi), trap: 'added instead of multiplying' },
   ], 4);
-  return pack(rng, tree, ans, ranked(rng, ans, must, extra),
+  return pack(rng, tree, ans, spread(rng, ans, must, extra),
     `Spot $(${c} - ${x})(${c} + ${x}) = ${c}^2 - ${x}^2 = ${dec(C.mul(C))} - ${dec(X.mul(X))} = ${dec(ans)}$.`,
     'Numbers equally spaced either side of a round value are a difference of two squares: 0.9 × 1.1 = 1 − 0.01 = 0.99.',
     ['decimals', 'difference-of-squares'], 'dots');

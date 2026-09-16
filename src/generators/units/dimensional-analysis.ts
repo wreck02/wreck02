@@ -12,6 +12,11 @@ import type { RNG } from '../../core/rng';
  * Level 5: which formula is dimensionally consistent (v = √(gL) against v = gL, v = √(g/L) …);
  *          the units of the gradient or the area of a described graph
  *
+ * Every distractor carries the mistake it comes from: "these are the units of an energy", "one power of
+ * m too many", "the two powers the wrong way round", "N m is an energy, not a force". The level-4
+ * proportion and the level-5 consistency questions draw both the relation and which symbol is called
+ * `a`, so the correct answer is not the same pair (or the same equation) every time.
+ *
  * Units are held as exponent vectors [kg, m, s, A]. verify() recomputes the correct vector from the
  * quantities named in params and parses every option's LaTeX back into a vector with its own symbol
  * table, so it never trusts the strings generate() built: it checks that exactly one option carries
@@ -45,6 +50,16 @@ const QTY: Record<string, Vec> = {
   charge: [0, 0, 1, 1],
   voltage: [1, 2, -3, -1],
   linearDensity: [1, -1, 0, 0],
+};
+
+/** How a wrong unit vector is named when it happens to be a standard quantity. */
+const QTY_NAME: Record<string, string> = {
+  mass: 'a mass', length: 'a length', time: 'a time', current: 'a current',
+  area: 'an area', volume: 'a volume', speed: 'a speed', accel: 'an acceleration',
+  force: 'a force', energy: 'an energy', power: 'a power', pressure: 'a pressure',
+  density: 'a density', momentum: 'a momentum', spring: 'a spring constant',
+  freq: 'a frequency', charge: 'a charge', voltage: 'a potential difference',
+  linearDensity: 'a mass per unit length',
 };
 
 /** Unit symbols that may appear in an option, as [kg, m, s, A] exponents. */
@@ -95,35 +110,40 @@ function specVec(spec: Spec): Vec | null {
   return out;
 }
 
+/** A wrong unit vector together with the mistake it represents. */
+interface WrongVec { v: Vec; trap: string }
+
+const SYM_TEX = (i: number) => `$\\text{${BASE_SYMS[i]}}$`;
+
 /** Realistic wrong unit vectors: the other standard quantities first, then exponent slips. */
-function wrongVecs(rng: RNG, target: Vec): Vec[] {
-  const others = rng.shuffle(Object.keys(QTY)).map((k) => QTY[k]);
-  const slips: Vec[] = [];
+function wrongVecs(rng: RNG, target: Vec): WrongVec[] {
+  const others: WrongVec[] = rng.shuffle(Object.keys(QTY)).map((k) => ({ v: QTY[k], trap: `these are the units of ${QTY_NAME[k]}` }));
+  const slips: WrongVec[] = [];
   for (let i = 0; i < 4; i++) {
     for (const d of [1, -1]) {
       const v = target.slice() as Vec;
       v[i] += d;
-      slips.push(v);
+      slips.push({ v, trap: `one power of ${SYM_TEX(i)} too ${d > 0 ? 'many' : 'few'}` });
     }
   }
-  const swapped = [target[0], target[2], target[1], target[3]] as Vec;
-  const negated = [target[0], target[1], -target[2], target[3]] as Vec;
+  const swapped: WrongVec = { v: [target[0], target[2], target[1], target[3]] as Vec, trap: 'the powers of $\\text{m}$ and $\\text{s}$ swapped' };
+  const negated: WrongVec = { v: [target[0], target[1], -target[2], target[3]] as Vec, trap: 'the sign of the $\\text{s}$ power flipped: multiplied by a time instead of dividing' };
   const all = [...others, negated, swapped, ...rng.shuffle(slips)].filter(
-    (v) => !sameVec(v, target) && v.every((e) => Math.abs(e) <= 4) && v.some((e) => e !== 0),
+    (w) => !sameVec(w.v, target) && w.v.every((e) => Math.abs(e) <= 4) && w.v.some((e) => e !== 0),
   );
   // a unit nothing like the answer gives the game away: offer the near misses first
   const dist = (v: Vec) => v.reduce((s, e, i) => s + Math.abs(e - target[i]), 0);
-  return [...all.filter((v) => dist(v) <= 3), ...all.filter((v) => dist(v) > 3)];
+  return [...all.filter((w) => dist(w.v) <= 3), ...all.filter((w) => dist(w.v) > 3)];
 }
 
-function vecOptions(rng: RNG, target: Vec, extras: Vec[] = []): Option[] | null {
+function vecOptions(rng: RNG, target: Vec, extras: WrongVec[] = []): Option[] | null {
   const seen: Vec[] = [target];
-  const wrongs: string[] = [];
+  const wrongs: { display: string; trap: string }[] = [];
   for (const w of [...extras, ...wrongVecs(rng, target)]) {
     if (wrongs.length >= 4) break;
-    if (seen.some((s) => sameVec(s, w))) continue;
-    seen.push(w);
-    wrongs.push(vecTex(w));
+    if (seen.some((s) => sameVec(s, w.v))) continue;
+    seen.push(w.v);
+    wrongs.push({ display: vecTex(w.v), trap: w.trap });
   }
   if (wrongs.length < 4) return null;
   return buildChoiceOptions(rng, vecTex(target), wrongs);
@@ -233,10 +253,16 @@ function constantUnitsQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 3
 
-const ODD_SETS: { q: string; name: string; right: string[]; odd: { display: string; why: string }[] }[] = [
+const ODD_SETS: { q: string; name: string; right: { display: string; why: string }[]; odd: { display: string; why: string }[] }[] = [
   {
     q: 'energy', name: 'energy',
-    right: ['$\\text{J}$', '$\\text{N}\\,\\text{m}$', '$\\text{W}\\,\\text{s}$', '$\\text{kg}\\,\\text{m}^{2}\\,\\text{s}^{-2}$', '$\\text{Pa}\\,\\text{m}^{3}$'],
+    right: [
+      { display: '$\\text{J}$', why: 'the joule is the SI unit of energy' },
+      { display: '$\\text{N}\\,\\text{m}$', why: 'a force times a distance is work done, i.e. an energy' },
+      { display: '$\\text{W}\\,\\text{s}$', why: 'a power times a time is an energy (a watt second is a joule)' },
+      { display: '$\\text{kg}\\,\\text{m}^{2}\\,\\text{s}^{-2}$', why: 'these are the base units of energy, from $\\tfrac12 mv^{2}$' },
+      { display: '$\\text{Pa}\\,\\text{m}^{3}$', why: 'a pressure times a volume is an energy' },
+    ],
     odd: [
       { display: '$\\text{N}\\,\\text{s}$', why: 'N s is momentum (an impulse), not energy' },
       { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-2}$', why: 'that is a force, one power of m short' },
@@ -245,7 +271,13 @@ const ODD_SETS: { q: string; name: string; right: string[]; odd: { display: stri
   },
   {
     q: 'power', name: 'power',
-    right: ['$\\text{W}$', '$\\text{J}\\,\\text{s}^{-1}$', '$\\text{N}\\,\\text{m}\\,\\text{s}^{-1}$', '$\\text{kg}\\,\\text{m}^{2}\\,\\text{s}^{-3}$', '$\\text{V}\\,\\text{A}$'],
+    right: [
+      { display: '$\\text{W}$', why: 'the watt is the SI unit of power' },
+      { display: '$\\text{J}\\,\\text{s}^{-1}$', why: 'a power is an energy per second' },
+      { display: '$\\text{N}\\,\\text{m}\\,\\text{s}^{-1}$', why: 'a force times a speed is a power' },
+      { display: '$\\text{kg}\\,\\text{m}^{2}\\,\\text{s}^{-3}$', why: 'these are the base units of power' },
+      { display: '$\\text{V}\\,\\text{A}$', why: 'a potential difference times a current is a power' },
+    ],
     odd: [
       { display: '$\\text{J}$', why: 'that is an energy: a power is an energy per second' },
       { display: '$\\text{W}\\,\\text{s}$', why: 'W s is an energy (a joule), not a power' },
@@ -254,7 +286,12 @@ const ODD_SETS: { q: string; name: string; right: string[]; odd: { display: stri
   },
   {
     q: 'force', name: 'force',
-    right: ['$\\text{N}$', '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-2}$', '$\\text{J}\\,\\text{m}^{-1}$', '$\\text{Pa}\\,\\text{m}^{2}$'],
+    right: [
+      { display: '$\\text{N}$', why: 'the newton is the SI unit of force' },
+      { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-2}$', why: 'these are the base units of force, from $F = ma$' },
+      { display: '$\\text{J}\\,\\text{m}^{-1}$', why: 'an energy per unit distance is a force' },
+      { display: '$\\text{Pa}\\,\\text{m}^{2}$', why: 'a pressure times an area is a force' },
+    ],
     odd: [
       { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-1}$', why: 'that is a momentum, not a force' },
       { display: '$\\text{N}\\,\\text{m}$', why: 'N m is a moment or an energy, not a force' },
@@ -263,7 +300,13 @@ const ODD_SETS: { q: string; name: string; right: string[]; odd: { display: stri
   },
   {
     q: 'pressure', name: 'pressure',
-    right: ['$\\text{Pa}$', '$\\text{N}\\,\\text{m}^{-2}$', '$\\text{J}\\,\\text{m}^{-3}$', '$\\text{kg}\\,\\text{m}^{-1}\\,\\text{s}^{-2}$', '$\\text{W}\\,\\text{s}\\,\\text{m}^{-3}$'],
+    right: [
+      { display: '$\\text{Pa}$', why: 'the pascal is the SI unit of pressure' },
+      { display: '$\\text{N}\\,\\text{m}^{-2}$', why: 'a pressure is a force per unit area' },
+      { display: '$\\text{J}\\,\\text{m}^{-3}$', why: 'an energy per unit volume has exactly the units of a pressure' },
+      { display: '$\\text{kg}\\,\\text{m}^{-1}\\,\\text{s}^{-2}$', why: 'these are the base units of pressure' },
+      { display: '$\\text{W}\\,\\text{s}\\,\\text{m}^{-3}$', why: 'W s is an energy, so this is again an energy per volume' },
+    ],
     odd: [
       { display: '$\\text{N}\\,\\text{m}^{-1}$', why: 'that is a force per length (a spring constant), not a pressure' },
       { display: '$\\text{J}\\,\\text{m}^{-2}$', why: 'an energy per area is not a pressure — energy per volume is' },
@@ -272,7 +315,13 @@ const ODD_SETS: { q: string; name: string; right: string[]; odd: { display: stri
   },
   {
     q: 'momentum', name: 'momentum',
-    right: ['$\\text{N}\\,\\text{s}$', '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-1}$', '$\\text{J}\\,\\text{s}\\,\\text{m}^{-1}$', '$\\text{Pa}\\,\\text{m}^{2}\\,\\text{s}$', '$\\text{W}\\,\\text{s}^{2}\\,\\text{m}^{-1}$'],
+    right: [
+      { display: '$\\text{N}\\,\\text{s}$', why: 'an impulse, force × time, is a change of momentum' },
+      { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-1}$', why: 'these are the base units of momentum, from $p = mv$' },
+      { display: '$\\text{J}\\,\\text{s}\\,\\text{m}^{-1}$', why: 'an energy × time ÷ length reduces to kg m s⁻¹' },
+      { display: '$\\text{Pa}\\,\\text{m}^{2}\\,\\text{s}$', why: 'Pa m² is a force, and a force × time is a momentum' },
+      { display: '$\\text{W}\\,\\text{s}^{2}\\,\\text{m}^{-1}$', why: 'W s² is an energy × time, which ÷ length is a momentum' },
+    ],
     odd: [
       { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-2}$', why: 'that is a force: momentum has one power of s more' },
       { display: '$\\text{N}\\,\\text{m}\\,\\text{s}^{-1}$', why: 'that is a power, not a momentum' },
@@ -290,7 +339,7 @@ function oddOneOutQ(rng: RNG): Generated | null {
   const set = rng.pick(ODD_SETS);
   const odd = rng.pick(set.odd);
   const right = rng.pickDistinct(set.right, 4);
-  const options = buildChoiceOptions(rng, odd.display, right);
+  const options = buildChoiceOptions(rng, odd.display, right.map((r) => ({ display: r.display, trap: r.why })));
   const g = finish(
     options,
     `In base units a ${set.name} is ${vecTex(QTY[set.q])}; every other option reduces to that, but ${odd.display} does not — ${odd.why}.`,
@@ -346,123 +395,220 @@ function comboQ(rng: RNG): Generated | null {
   return { ...g, stem: `A quantity $Q$ is given by $${item.expr}$, where ${item.where}.\n\nWhich of the following gives the SI base units of $Q$?` };
 }
 
-const PROPORTIONS: { intro: string; target: string; symA: string; symB: string; qA: string; qB: string; a: [number, number]; b: [number, number]; note: string }[] = [
+type Pow = [number, number];
+
+/**
+ * A proportionality between one quantity and two others, with determined powers. `intro` carries the
+ * token {rel}, which becomes "m^{a} k^{b}" or "k^{a} m^{b}" — the two symbols are drawn in either
+ * order, so the correct pair is not the same every time.
+ */
+const PROPORTIONS: {
+  target: string;
+  intro: string;
+  x: { sym: string; qty: string; exp: Pow };
+  y: { sym: string; qty: string; exp: Pow };
+  note: string;
+}[] = [
   {
-    intro: 'The period $T$ of a mass $m$ oscillating on a spring of stiffness $k$ (in $\\text{N m}^{-1}$) satisfies $T \\propto m^{a} k^{b}$.',
-    target: 'time', symA: 'm', symB: 'k', qA: 'mass', qB: 'spring', a: [1, 2], b: [-1, 2],
-    note: '$[m^{a}k^{b}] = \\text{kg}^{a}(\\text{kg s}^{-2})^{b}$; matching kg gives $a + b = 0$ and matching s gives $-2b = 1$',
+    target: 'time',
+    intro: 'The period $T$ of a mass $m$ oscillating on a spring of stiffness $k$ (in $\\text{N m}^{-1}$) satisfies $T \\propto {rel}$.',
+    x: { sym: 'm', qty: 'mass', exp: [1, 2] },
+    y: { sym: 'k', qty: 'spring', exp: [-1, 2] },
+    note: '$[m] = \\text{kg}$ and $[k] = \\text{kg s}^{-2}$: the kg must cancel, and $(\\text{s}^{-2})^{-1/2} = \\text{s}$, so $T \\propto \\sqrt{m/k}$',
   },
   {
-    intro: 'The period $T$ of a pendulum of length $L$ in a gravitational field $g$ satisfies $T \\propto L^{a} g^{b}$.',
-    target: 'time', symA: 'L', symB: 'g', qA: 'length', qB: 'accel', a: [1, 2], b: [-1, 2],
-    note: '$[L^{a}g^{b}] = \\text{m}^{a}(\\text{m s}^{-2})^{b}$; matching m gives $a + b = 0$ and matching s gives $-2b = 1$',
+    target: 'time',
+    intro: 'The period $T$ of a pendulum of length $L$ in a field of gravitational field strength $g$ satisfies $T \\propto {rel}$.',
+    x: { sym: 'L', qty: 'length', exp: [1, 2] },
+    y: { sym: 'g', qty: 'accel', exp: [-1, 2] },
+    note: '$[L] = \\text{m}$ and $[g] = \\text{m s}^{-2}$: the m must cancel, and $(\\text{s}^{-2})^{-1/2} = \\text{s}$, so $T \\propto \\sqrt{L/g}$',
   },
   {
-    intro: 'The speed $v$ of a wave on a string of tension $T$ and mass per unit length $\\mu$ satisfies $v \\propto T^{a} \\mu^{b}$.',
-    target: 'speed', symA: 'T', symB: '\\mu', qA: 'force', qB: 'linearDensity', a: [1, 2], b: [-1, 2],
-    note: '$[T^{a}\\mu^{b}] = (\\text{kg m s}^{-2})^{a}(\\text{kg m}^{-1})^{b}$; matching kg gives $a + b = 0$ and matching s gives $-2a = -1$',
+    target: 'speed',
+    intro: 'The speed $v$ of a wave on a string of tension $T$ and mass per unit length $\\mu$ satisfies $v \\propto {rel}$.',
+    x: { sym: 'T', qty: 'force', exp: [1, 2] },
+    y: { sym: '\\mu', qty: 'linearDensity', exp: [-1, 2] },
+    note: '$[T] = \\text{kg m s}^{-2}$ and $[\\mu] = \\text{kg m}^{-1}$: the kg cancels and $(\\text{s}^{-2})^{1/2} = \\text{s}^{-1}$, so $v \\propto \\sqrt{T/\\mu}$',
+  },
+  {
+    target: 'energy',
+    intro: 'The kinetic energy $E$ of a body of mass $m$ moving at speed $v$ satisfies $E \\propto {rel}$.',
+    x: { sym: 'm', qty: 'mass', exp: [1, 1] },
+    y: { sym: 'v', qty: 'speed', exp: [2, 1] },
+    note: '$[E] = \\text{kg m}^{2}\\text{s}^{-2}$: one power of kg, and $\\text{m}^{2}\\text{s}^{-2}$ is the square of a speed',
+  },
+  {
+    target: 'pressure',
+    intro: 'The pressure $p$ on a flat plate held across a stream of fluid of density $\\rho$ moving at speed $v$ satisfies $p \\propto {rel}$.',
+    x: { sym: '\\rho', qty: 'density', exp: [1, 1] },
+    y: { sym: 'v', qty: 'speed', exp: [2, 1] },
+    note: '$[p] = \\text{kg m}^{-1}\\text{s}^{-2}$ and $[\\rho] = \\text{kg m}^{-3}$: one power of $\\rho$ fixes the kg, and $v^{2}$ then fixes the s',
+  },
+  {
+    target: 'power',
+    intro: 'The power $P$ developed by a force $F$ whose point of application moves at speed $v$ satisfies $P \\propto {rel}$.',
+    x: { sym: 'F', qty: 'force', exp: [1, 1] },
+    y: { sym: 'v', qty: 'speed', exp: [1, 1] },
+    note: '$[P] = \\text{kg m}^{2}\\text{s}^{-3} = (\\text{kg m s}^{-2})(\\text{m s}^{-1})$: one power of each',
+  },
+  {
+    target: 'speed',
+    intro: 'The speed $v$ of a wave in deep water of wavelength $\\lambda$, in a field of gravitational field strength $g$, satisfies $v \\propto {rel}$.',
+    x: { sym: 'g', qty: 'accel', exp: [1, 2] },
+    y: { sym: '\\lambda', qty: 'length', exp: [1, 2] },
+    note: '$[g\\lambda] = \\text{m s}^{-2} \\times \\text{m} = \\text{m}^{2}\\text{s}^{-2}$, the square of a speed, so $v \\propto \\sqrt{g\\lambda}$',
+  },
+  {
+    target: 'spring',
+    intro: 'The stiffness $k$ (in $\\text{N m}^{-1}$) of a spring on which a mass $m$ oscillates with period $T$ satisfies $k \\propto {rel}$.',
+    x: { sym: 'm', qty: 'mass', exp: [1, 1] },
+    y: { sym: 'T', qty: 'time', exp: [-2, 1] },
+    note: '$[k] = \\text{kg s}^{-2}$: one power of the mass gives the kg, and $T^{-2}$ gives the $\\text{s}^{-2}$',
   },
 ];
 
-const fracTex = (p: [number, number]): string => {
+const fracTex = (p: Pow): string => {
   const [nu, de] = p;
   if (de === 1) return `${nu}`;
   return `${nu < 0 ? '-' : ''}\\tfrac{${Math.abs(nu)}}{${de}}`;
 };
-const pairTex = (a: [number, number], b: [number, number]): string => `$a = ${fracTex(a)},\\ b = ${fracTex(b)}$`;
+const pairTex = (a: Pow, b: Pow): string => `$a = ${fracTex(a)},\\ b = ${fracTex(b)}$`;
+const powVal = (p: Pow): number => p[0] / p[1];
+const halve = (p: Pow): Pow => [p[0], p[1] * 2];
+const dbl = (p: Pow): Pow => (p[1] % 2 === 0 ? [p[0], p[1] / 2] : [p[0] * 2, p[1]]);
 
 function proportionQ(rng: RNG): Generated | null {
   const item = rng.pick(PROPORTIONS);
-  const correct = pairTex(item.a, item.b);
-  const wrongPairs: [[number, number], [number, number]][] = [
-    [item.b, item.a],
-    [[-item.a[0], item.a[1]], [-item.b[0], item.b[1]]],
-    [[1, 1], [-1, 1]],
-    [[1, 2], [1, 2]],
-    [[-1, 2], [-1, 2]],
-    [[1, 1], [1, 1]],
+  // which symbol is called `a` is drawn too, so the answer is not the same pair every time
+  const [first, second] = rng.bool(0.5) ? [item.x, item.y] : [item.y, item.x];
+  const A = QTY[first.qty], B = QTY[second.qty];
+  const target = QTY[item.target];
+  if (!A || !B || !target) return null;
+  const a = first.exp, b = second.exp;
+  const correct = pairTex(a, b);
+  const candidates: { pair: [Pow, Pow]; trap: string }[] = [
+    { pair: [b, a], trap: 'the two powers the wrong way round' },
+    { pair: [[-a[0], a[1]], [-b[0], b[1]]], trap: 'the whole relation inverted: every power has the wrong sign' },
+    { pair: [a, [-b[0], b[1]]], trap: 'the sign of the second power slipped' },
+    { pair: [[-a[0], a[1]], b], trap: 'the sign of the first power slipped' },
+    { pair: [dbl(a), dbl(b)], trap: 'forgot that a square root halves both powers' },
+    { pair: [halve(a), halve(b)], trap: 'took a square root that is not there' },
+    { pair: [[1, 2], [-1, 2]], trap: 'assumed the usual $\\sqrt{x/y}$ shape without matching the units' },
+    { pair: [[1, 1], [-1, 1]], trap: 'guessed one power up, one power down' },
+    { pair: [[1, 1], [1, 1]], trap: 'assumed simple proportionality to both quantities' },
+    { pair: [[1, 1], [2, 1]], trap: 'borrowed the $mv^{2}$ shape' },
+    { pair: [[1, 2], [1, 2]], trap: 'assumed the square root of the product' },
   ];
   const seen = new Set([correct]);
-  const wrongs: string[] = [];
-  const pairs: { display: string; a: [number, number]; b: [number, number] }[] = [{ display: correct, a: item.a, b: item.b }];
-  for (const [a, b] of wrongPairs) {
+  const wrongs: { display: string; trap: string }[] = [];
+  const pairs: { display: string; a: Pow; b: Pow }[] = [{ display: correct, a, b }];
+  for (const c of candidates) {
     if (wrongs.length >= 4) break;
-    const d = pairTex(a, b);
+    const [pa, pb] = c.pair;
+    // a "wrong" pair that is dimensionally right would make the question unanswerable
+    const v = add(add([0, 0, 0, 0], A, powVal(pa)), B, powVal(pb));
+    if (sameVec(v, target)) continue;
+    const d = pairTex(pa, pb);
     if (seen.has(d)) continue;
     seen.add(d);
-    wrongs.push(d);
-    pairs.push({ display: d, a, b });
+    wrongs.push({ display: d, trap: c.trap });
+    pairs.push({ display: d, a: pa, b: pb });
   }
   if (wrongs.length < 4) return null;
   const options = buildChoiceOptions(rng, correct, wrongs);
   const g = finish(
     options,
-    `${item.note}, so $a = ${fracTex(item.a)}$ and $b = ${fracTex(item.b)}$.`,
+    `${item.note}, so $a = ${fracTex(a)}$ and $b = ${fracTex(b)}$.`,
     'Match the powers of kg, m and s separately: two equations fix a and b, and a square root means a power of ½.',
     ['units', 'dimensional analysis', 'proportion'],
-    { shape: 'ab', target: item.target, qA: item.qA, qB: item.qB, pairs },
+    { shape: 'ab', target: item.target, qA: first.qty, qB: second.qty, pairs },
   );
-  return { ...g, stem: `${item.intro}\n\nWhich of the following gives $a$ and $b$?` };
+  const rel = `${first.sym}^{a} ${second.sym}^{b}`;
+  return { ...g, stem: `${item.intro.replace('{rel}', rel)}\n\nWhich of the following gives $a$ and $b$?` };
 }
 
 // ----------------------------------------------------------------------------- level 5
 
 interface ExprOption { display: string; factors: [string, number, number][] }
 
-const CONSISTENCY: { intro: string; lhs: string; correct: ExprOption; wrong: ExprOption[]; note: string }[] = [
+/**
+ * Dimensional consistency. Each scenario carries several consistent equations (one is drawn as the
+ * answer) and a longer list of inconsistent ones, so the correct equation varies from instance to
+ * instance. Every symbol used in an option is given a quantity in `given`.
+ */
+const CONSISTENCY: {
+  given: string;
+  lhs: string;
+  consistent: { expr: ExprOption; note: string }[];
+  wrong: (ExprOption & { why: string })[];
+}[] = [
   {
-    intro: '$v$ is a speed, $g$ is an acceleration and $L$ is a length.',
+    given: '$v$ is a speed, $g$ is an acceleration, $L$ is a length and $t$ is a time',
     lhs: 'speed',
-    correct: { display: '$v = \\sqrt{gL}$', factors: [['accel', 1, 2], ['length', 1, 2]] },
-    wrong: [
-      { display: '$v = gL$', factors: [['accel', 1, 1], ['length', 1, 1]] },
-      { display: '$v = \\sqrt{\\dfrac{g}{L}}$', factors: [['accel', 1, 2], ['length', -1, 2]] },
-      { display: '$v = \\dfrac{g}{L}$', factors: [['accel', 1, 1], ['length', -1, 1]] },
-      { display: '$v = \\sqrt{\\dfrac{L}{g}}$', factors: [['length', 1, 2], ['accel', -1, 2]] },
-      { display: '$v = gL^{2}$', factors: [['accel', 1, 1], ['length', 2, 1]] },
+    consistent: [
+      { expr: { display: '$v = \\sqrt{gL}$', factors: [['accel', 1, 2], ['length', 1, 2]] }, note: '$[\\sqrt{gL}] = (\\text{m s}^{-2} \\times \\text{m})^{1/2} = \\text{m s}^{-1}$' },
+      { expr: { display: '$v = gt$', factors: [['accel', 1, 1], ['time', 1, 1]] }, note: '$[gt] = \\text{m s}^{-2} \\times \\text{s} = \\text{m s}^{-1}$' },
+      { expr: { display: '$v = \\dfrac{L}{t}$', factors: [['length', 1, 1], ['time', -1, 1]] }, note: '$[L/t] = \\text{m} \\div \\text{s} = \\text{m s}^{-1}$' },
     ],
-    note: '$[\\sqrt{gL}] = (\\text{m s}^{-2} \\times \\text{m})^{1/2} = \\text{m s}^{-1}$',
+    wrong: [
+      { display: '$v = gL$', factors: [['accel', 1, 1], ['length', 1, 1]], why: '$\\text{m}^{2}\\text{s}^{-2}$ is the square of a speed' },
+      { display: '$v = \\sqrt{\\dfrac{g}{L}}$', factors: [['accel', 1, 2], ['length', -1, 2]], why: 'the metres cancel, leaving $\\text{s}^{-1}$' },
+      { display: '$v = \\dfrac{g}{L}$', factors: [['accel', 1, 1], ['length', -1, 1]], why: '$\\text{s}^{-2}$: both powers of m cancel' },
+      { display: '$v = \\sqrt{\\dfrac{L}{g}}$', factors: [['length', 1, 2], ['accel', -1, 2]], why: 'that is a time, not a speed' },
+      { display: '$v = g t^{2}$', factors: [['accel', 1, 1], ['time', 2, 1]], why: '$\\text{m}$: that is a distance' },
+      { display: '$v = \\dfrac{t}{L}$', factors: [['time', 1, 1], ['length', -1, 1]], why: 'the reciprocal of a speed' },
+      { display: '$v = Lt$', factors: [['length', 1, 1], ['time', 1, 1]], why: '$\\text{m s}$ is nothing familiar — a speed divides by the time' },
+    ],
   },
   {
-    intro: '$T$ is a time, $m$ is a mass and $k$ is a spring constant in $\\text{N m}^{-1}$.',
+    given: '$T$ is a time, $m$ is a mass, $k$ is a spring constant in $\\text{N m}^{-1}$, $L$ is a length and $g$ is an acceleration',
     lhs: 'time',
-    correct: { display: '$T = \\sqrt{\\dfrac{m}{k}}$', factors: [['mass', 1, 2], ['spring', -1, 2]] },
-    wrong: [
-      { display: '$T = \\sqrt{\\dfrac{k}{m}}$', factors: [['spring', 1, 2], ['mass', -1, 2]] },
-      { display: '$T = \\dfrac{m}{k}$', factors: [['mass', 1, 1], ['spring', -1, 1]] },
-      { display: '$T = mk$', factors: [['mass', 1, 1], ['spring', 1, 1]] },
-      { display: '$T = \\sqrt{mk}$', factors: [['mass', 1, 2], ['spring', 1, 2]] },
-      { display: '$T = \\dfrac{k}{m}$', factors: [['spring', 1, 1], ['mass', -1, 1]] },
+    consistent: [
+      { expr: { display: '$T = \\sqrt{\\dfrac{m}{k}}$', factors: [['mass', 1, 2], ['spring', -1, 2]] }, note: '$[\\sqrt{m/k}] = (\\text{kg} \\div \\text{kg s}^{-2})^{1/2} = \\text{s}$' },
+      { expr: { display: '$T = \\sqrt{\\dfrac{L}{g}}$', factors: [['length', 1, 2], ['accel', -1, 2]] }, note: '$[\\sqrt{L/g}] = (\\text{m} \\div \\text{m s}^{-2})^{1/2} = \\text{s}$' },
     ],
-    note: '$[\\sqrt{m/k}] = (\\text{kg} \\div \\text{kg s}^{-2})^{1/2} = \\text{s}$',
+    wrong: [
+      { display: '$T = \\sqrt{\\dfrac{k}{m}}$', factors: [['spring', 1, 2], ['mass', -1, 2]], why: 'that is a frequency, $\\text{s}^{-1}$' },
+      { display: '$T = \\dfrac{m}{k}$', factors: [['mass', 1, 1], ['spring', -1, 1]], why: '$\\text{s}^{2}$: the square root is missing' },
+      { display: '$T = mk$', factors: [['mass', 1, 1], ['spring', 1, 1]], why: '$\\text{kg}^{2}\\text{s}^{-2}$' },
+      { display: '$T = \\sqrt{mk}$', factors: [['mass', 1, 2], ['spring', 1, 2]], why: '$\\text{kg s}^{-1}$: the mass does not cancel' },
+      { display: '$T = \\sqrt{\\dfrac{g}{L}}$', factors: [['accel', 1, 2], ['length', -1, 2]], why: 'that is a frequency, $\\text{s}^{-1}$' },
+      { display: '$T = \\dfrac{L}{g}$', factors: [['length', 1, 1], ['accel', -1, 1]], why: '$\\text{s}^{2}$: the square root is missing' },
+      { display: '$T = Lg$', factors: [['length', 1, 1], ['accel', 1, 1]], why: '$\\text{m}^{2}\\text{s}^{-2}$, the square of a speed' },
+    ],
   },
   {
-    intro: '$E$ is an energy, $m$ is a mass, $v$ is a speed and $h$ is a height in a field $g$.',
+    given: '$E$ is an energy, $m$ is a mass, $v$ is a speed, $h$ is a height and $g$ is an acceleration',
     lhs: 'energy',
-    correct: { display: '$E = \\tfrac12 m v^{2}$', factors: [['mass', 1, 1], ['speed', 2, 1]] },
-    wrong: [
-      { display: '$E = \\tfrac12 m v$', factors: [['mass', 1, 1], ['speed', 1, 1]] },
-      { display: '$E = m v^{2} h$', factors: [['mass', 1, 1], ['speed', 2, 1], ['length', 1, 1]] },
-      { display: '$E = \\dfrac{mv^{2}}{h}$', factors: [['mass', 1, 1], ['speed', 2, 1], ['length', -1, 1]] },
-      { display: '$E = m g$', factors: [['mass', 1, 1], ['accel', 1, 1]] },
-      { display: '$E = \\dfrac{1}{2} m^{2} v$', factors: [['mass', 2, 1], ['speed', 1, 1]] },
+    consistent: [
+      { expr: { display: '$E = \\tfrac12 m v^{2}$', factors: [['mass', 1, 1], ['speed', 2, 1]] }, note: '$[mv^{2}] = \\text{kg} \\times \\text{m}^{2}\\text{s}^{-2} = \\text{J}$, and the $\\tfrac12$ has no units' },
+      { expr: { display: '$E = mgh$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1]] }, note: '$[mgh] = \\text{kg} \\times \\text{m s}^{-2} \\times \\text{m} = \\text{kg m}^{2}\\text{s}^{-2} = \\text{J}$' },
     ],
-    note: '$[mv^{2}] = \\text{kg} \\times \\text{m}^{2}\\text{s}^{-2} = \\text{J}$, and the $\\tfrac12$ has no units',
+    wrong: [
+      { display: '$E = \\tfrac12 m v$', factors: [['mass', 1, 1], ['speed', 1, 1]], why: 'that is a momentum' },
+      { display: '$E = m v^{2} h$', factors: [['mass', 1, 1], ['speed', 2, 1], ['length', 1, 1]], why: 'one power of m too many' },
+      { display: '$E = \\dfrac{mv^{2}}{h}$', factors: [['mass', 1, 1], ['speed', 2, 1], ['length', -1, 1]], why: 'that is a force' },
+      { display: '$E = mg$', factors: [['mass', 1, 1], ['accel', 1, 1]], why: 'that is a force (a weight), not an energy' },
+      { display: '$E = \\dfrac{1}{2} m^{2} v$', factors: [['mass', 2, 1], ['speed', 1, 1]], why: '$\\text{kg}^{2}\\text{m s}^{-1}$' },
+      { display: '$E = mgh^{2}$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 2, 1]], why: 'one power of the height too many' },
+      { display: '$E = \\dfrac{mgh}{v}$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1], ['speed', -1, 1]], why: 'dividing by a speed leaves a momentum' },
+    ],
   },
 ];
 
 function consistencyQ(rng: RNG): Generated | null {
   const item = rng.pick(CONSISTENCY);
+  const right = rng.pick(item.consistent);
   const wrongs = rng.pickDistinct(item.wrong, 4);
-  const options = buildChoiceOptions(rng, item.correct.display, wrongs.map((w) => w.display));
+  const options = buildChoiceOptions(rng, right.expr.display, wrongs.map((w) => ({ display: w.display, trap: w.why })));
   const g = finish(
     options,
-    `${item.note}, which matches the left-hand side; each of the others has the wrong powers.`,
+    `${right.note}, which matches the left-hand side; each of the others has the wrong powers.`,
     'A square root halves every power: check the units of both sides before trusting a formula.',
     ['units', 'dimensional analysis', 'consistency'],
-    { shape: 'expr', lhs: item.lhs, exprs: [item.correct, ...wrongs] },
+    { shape: 'expr', lhs: item.lhs, exprs: [right.expr, ...wrongs.map((w) => ({ display: w.display, factors: w.factors }))] },
   );
-  return { ...g, stem: `Which of the following equations is dimensionally consistent, given that ${item.intro}\n\n(Numerical factors have no units.)` };
+  return { ...g, stem: `Given that ${item.given}, which of the following equations is dimensionally consistent?\n\n(Numerical factors have no units.)` };
 }
 
 const GRAPHS: { y: string; yName: string; x: string; xName: string; op: 'gradient' | 'area'; note: string }[] = [
@@ -479,7 +625,9 @@ function graphQ(rng: RNG): Generated | null {
   const item = rng.pick(GRAPHS);
   const spec: Spec = item.op === 'gradient' ? { num: [[item.y, 1]], den: [[item.x, 1]] } : { num: [[item.y, 1], [item.x, 1]] };
   const target = specVec(spec)!;
-  const options = vecOptions(rng, target, [specVec(item.op === 'gradient' ? { num: [[item.y, 1], [item.x, 1]] } : { num: [[item.y, 1]], den: [[item.x, 1]] })!]);
+  // the classic slip: the area worked out where the gradient was asked for, or the other way round
+  const swapped = specVec(item.op === 'gradient' ? { num: [[item.y, 1], [item.x, 1]] } : { num: [[item.y, 1]], den: [[item.x, 1]] })!;
+  const options = vecOptions(rng, target, [{ v: swapped, trap: `gradient and area swapped: these are the units of the ${item.op === 'gradient' ? 'area under' : 'gradient of'} the graph` }]);
   if (!options) return null;
   const g = finish(
     options,
@@ -513,7 +661,7 @@ export default defineTemplate({
     1: 'SI base units of force, energy, power, pressure, momentum, charge',
     2: 'base units of a constant read off a formula: k in F = kx, G in F = Gm₁m₂/r², h in E = hf',
     3: 'which unit is NOT a unit of energy / power / force / pressure',
-    4: 'base units of ρv²L, ½kx², mv²/r; the powers a and b in T ∝ mᵃkᵇ',
+    4: 'base units of ρv²L, ½kx², mv²/r; the powers a and b in T ∝ mᵃkᵇ and other proportionalities',
     5: 'which formula is dimensionally consistent; the units of a graph’s gradient or area',
   },
   generate(rng, level: Level) {
@@ -521,7 +669,7 @@ export default defineTemplate({
   },
   verify(q) {
     if (q.answer.kind !== 'choice' || q.typedAllowed) return false;
-    const p = q.params as { shape: string; spec?: Spec; quantity?: string; target?: string; qA?: string; qB?: string; pairs?: { display: string; a: [number, number]; b: [number, number] }[]; lhs?: string; exprs?: ExprOption[] };
+    const p = q.params as { shape: string; spec?: Spec; quantity?: string; target?: string; qA?: string; qB?: string; pairs?: { display: string; a: Pow; b: Pow }[]; lhs?: string; exprs?: ExprOption[] };
     const correct = q.options.filter((o) => o.correct);
     if (correct.length !== 1 || correct[0].display !== q.answer.value) return false;
 

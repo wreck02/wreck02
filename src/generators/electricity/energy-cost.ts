@@ -51,6 +51,20 @@ function readable(v: Exact): boolean {
   return digits.length <= 4;
 }
 
+type Money = 'p' | '£';
+
+/**
+ * A value an examiner would print as a sum of money. In pence that means a whole number of pence
+ * (a half-penny is tolerated), except below 1, which is the honest "£0.75 for 75 p" unit slip; in
+ * pounds it means a whole number of pence. It keeps the efficiency-squared trap values 9.375 and
+ * 46.08 — four significant figures of pence — out of the option list.
+ */
+function moneyOk(x: number, unit: Money): boolean {
+  if (!Number.isInteger(r(x * 100))) return false;
+  if (unit === '£') return true;
+  return x < 1 || Number.isInteger(r(x * 10));
+}
+
 /** Exact fraction a/b in its lowest terms, or null if it is not an exam-clean ratio. */
 function ratio(a: number, b: number): Exact | null {
   if (!Number.isInteger(a) || !Number.isInteger(b) || b === 0) return null;
@@ -67,13 +81,14 @@ function ratio(a: number, b: number): Exact | null {
  * Positive, finite, clean option values. The window is wide because the mistakes this topic tests are unit
  * slips: a factor of 60, 1000 or 3600 out is exactly the distractor wanted.
  */
-function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
+function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact, money: Money | null): Distractor[] {
   const a = answer.toNumber();
   return ds.filter((d): d is { value: Exact; trap: string } => {
     const v = d.value;
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !v.isRational() || !isCleanExact(v).ok) return false;
     const x = v.toNumber();
     if (x < 1e-4 || x > 1e10 || x > 1e4 * a || x < a / 1e4) return false;
+    if (money && !moneyOk(x, money)) return false;
     const d2 = v.toRat().d;
     if (mode === 'fraction') return d2 <= 24n;
     if (!readable(v)) return false;
@@ -81,8 +96,11 @@ function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
   });
 }
 
-/** Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled
+ * out; `spare` near-misses are taken last, only when the named mistakes ran short.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -92,6 +110,7 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   };
   must.forEach(take);
   rng.shuffle(extra).forEach(take);
+  rng.shuffle(spare).forEach(take);
   return out;
 }
 
@@ -112,6 +131,10 @@ interface Pack {
   mode?: Mode;
   must: Candidate[];
   extra: Candidate[];
+  /** generic near-misses, used only if the named mistakes ran short */
+  spare?: Candidate[];
+  /** the answer is a sum of money: every option must be printable in that unit */
+  money?: Money;
   solution: string;
   trap: string;
   tags: string[];
@@ -123,7 +146,15 @@ function pack(rng: RNG, p: Pack): Generated | null {
   if (!isCleanExact(p.answer).ok || p.answer.sign() <= 0) return null;
   if (mode !== 'fraction' && !readable(p.answer)) return null;
   const format: NumberFormat = mode === 'fraction' ? 'fraction' : mode === 'sf' ? 'sf' : 'decimal';
-  const ds = ranked(rng, p.answer, cleanOnly(p.must, mode, p.answer), cleanOnly(p.extra, mode, p.answer));
+  const money = p.money ?? null;
+  if (money && !moneyOk(p.answer.toNumber(), money)) return null;
+  const ds = ranked(
+    rng,
+    p.answer,
+    cleanOnly(p.must, mode, p.answer, money),
+    cleanOnly(p.extra, mode, p.answer, money),
+    cleanOnly(p.spare ?? [], mode, p.answer, money),
+  );
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -171,14 +202,18 @@ function chargeQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(I + t), trap: 'added the current and the time' },
-      { value: val(Q * 60), trap: 'multiplied by 60 once too often' },
-      { value: val(Q / 60), trap: 'divided by 60 once too often' },
+      { value: inMin ? val(Q * 60) : null, trap: 'multiplied by 60 once too often' },
+      { value: inMin ? null : val(Q / 60), trap: 'converted the time to minutes when it was already in seconds' },
+      { value: val(t), trap: 'quoted the time in seconds as the charge' },
+    ],
+    spare: [
       { value: val(2 * Q), trap: 'doubled the charge' },
+      { value: val(Q / 2), trap: 'halved the charge' },
     ],
     solution: `$Q = It = ${n(I)} \\times ${t} = ${n(Q)}\\ \\text{C}$${inMin ? ` (${tText} $= ${t}$ s)` : ''}.`,
     trap: 'Q = It works in coulombs, amps and seconds: convert minutes to seconds first.',
     tags: ['charge', 'current', 'time'],
-    params: { variant: 'charge', I, t },
+    params: { variant: 'charge', I, t, Q },
   });
 }
 
@@ -198,14 +233,18 @@ function currentFromChargeQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(t / Q), trap: 'inverted the fraction' },
-      { value: val(I * 60), trap: 'multiplied by 60 once too often' },
-      { value: val(I / 60), trap: 'divided by 60 once too often' },
+      { value: inMin ? val(I * 60) : null, trap: 'multiplied by 60 once too often' },
+      { value: inMin ? null : val(I / 60), trap: 'converted the time to minutes when it was already in seconds' },
+      { value: val(Q - t), trap: 'subtracted the time from the charge' },
+    ],
+    spare: [
       { value: val(2 * I), trap: 'doubled the current' },
+      { value: val(I / 2), trap: 'halved the current' },
     ],
     solution: `$I = \\dfrac{Q}{t} = \\dfrac{${n(Q)}}{${t}} = ${n(I)}\\ \\text{A}$${inMin ? ` (${tText} $= ${t}$ s)` : ''}.`,
     trap: 'Current is charge per second: the time must be in seconds.',
     tags: ['charge', 'current', 'time'],
-    params: { variant: 'current-from-charge', I, t },
+    params: { variant: 'current-from-charge', I, t, Q },
   });
 }
 
@@ -225,15 +264,18 @@ function chargeTimeQ(rng: RNG): Generated | null {
       { value: val(I / Q), trap: 'inverted the fraction' },
     ],
     extra: [
-      { value: val(t / 60), trap: 'gave the time in minutes' },
+      { value: val(t / 60), trap: 'gave the time in minutes, not in seconds' },
       { value: val(t * 60), trap: 'multiplied by 60 instead of dividing' },
+      { value: val(Q - I), trap: 'subtracted the current from the charge' },
+    ],
+    spare: [
       { value: val(2 * t), trap: 'doubled the time' },
       { value: val(t / 2), trap: 'halved the time' },
     ],
     solution: `$Q = It$, so $t = \\dfrac{${n(Q)}}{${n(I)}} = ${t}\\ \\text{s}$.`,
     trap: 'Rearranging Q = It gives t = Q/I; multiplying instead is the usual slip.',
     tags: ['charge', 'current', 'time'],
-    params: { variant: 'charge-time', I, t },
+    params: { variant: 'charge-time', I, t, Q },
   });
 }
 
@@ -269,6 +311,10 @@ function kwhQ(rng: RNG): Generated | null {
     extra: [
       { value: val(P / h), trap: 'divided instead of multiplying' },
       { value: val(kWh * 3.6), trap: 'gave the energy in MJ' },
+      { value: val(h / P), trap: 'divided the hours by the power' },
+      { value: val(P + h), trap: 'added the power and the time instead of multiplying' },
+    ],
+    spare: [
       { value: val(2 * kWh), trap: 'doubled the energy' },
       { value: val(kWh / 2), trap: 'halved the energy' },
     ],
@@ -293,6 +339,7 @@ function costQ(rng: RNG): Generated | null {
   return pack(rng, {
     stem: `Electricity costs ${rate} p per kWh. ${withArticle(name)} of power ${n(P)} kW is used for ${hrs(h)}. Find the cost, in ${inPence ? 'pence' : '£'}.`,
     answer,
+    money: inPence ? 'p' : '£',
     must: [
       { value: val(inPence ? pence / 100 : pence), trap: inPence ? 'gave the cost in £ rather than pence' : 'gave the cost in pence rather than £' },
       { value: val(inPence ? P * rate : (P * rate) / 100), trap: 'forgot the number of hours' },
@@ -300,6 +347,10 @@ function costQ(rng: RNG): Generated | null {
     extra: [
       { value: val(kWh), trap: 'gave the energy in kWh, not the cost' },
       { value: val(inPence ? h * rate : (h * rate) / 100), trap: 'forgot the power' },
+      { value: val(inPence ? kWh / rate : kWh / rate / 100), trap: 'divided by the price instead of multiplying by it' },
+      { value: val(inPence ? rate : rate / 100), trap: 'quoted the price of one kilowatt-hour' },
+    ],
+    spare: [
       { value: val(2 * money), trap: 'doubled the cost' },
       { value: val(money / 2), trap: 'halved the cost' },
     ],
@@ -330,7 +381,11 @@ function kwhToJQ(rng: RNG): Generated | null {
       { value: val(k * 3.6e7), trap: 'slipped a power of ten' },
       { value: val(k * 1000), trap: 'converted kilowatt-hours to watt-hours only' },
       { value: val(KWH_J / k), trap: 'divided by the number of kilowatt-hours instead of multiplying' },
+      { value: val(k * 3.6), trap: 'gave the energy in MJ, not J' },
+    ],
+    spare: [
       { value: val(2 * J), trap: 'doubled the energy' },
+      { value: val(J / 2), trap: 'halved the energy' },
     ],
     solution: `$${n(k)}\\ \\text{kWh} = ${n(k)} \\times 3.6 \\times 10^{6} = ${answer.toLatex({ format: 'sf' })}\\ \\text{J}$.`,
     trap: '1 kWh = 1000 W × 3600 s = 3.6 × 10⁶ J, not 3600 J.',
@@ -355,6 +410,10 @@ function jToKwhQ(rng: RNG): Generated | null {
     extra: [
       { value: val(J / 3.6e7), trap: 'slipped a power of ten' },
       { value: val(J / 1000), trap: 'divided by 1000 only' },
+      { value: val(J / 3.6), trap: 'divided by 3.6 only' },
+      { value: val(k * 3.6), trap: 'multiplied by 3.6 instead of dividing' },
+    ],
+    spare: [
       { value: val(2 * k), trap: 'doubled the energy' },
       { value: val(k / 2), trap: 'halved the energy' },
     ],
@@ -386,8 +445,13 @@ function energyQVQ(rng: RNG): Generated | null {
     extra: [
       { value: val(V / Q), trap: 'inverted the fraction' },
       { value: val(Ej * t), trap: 'multiplied by the time as well' },
-      { value: val(Ej / 1000), trap: 'gave the answer in kJ' },
+      { value: val(Q * t), trap: 'multiplied the charge by the time instead of by the p.d.' },
+      { value: val(V * t), trap: 'used the time in place of the charge' },
+      { value: val(Q + V), trap: 'added the charge and the p.d. instead of multiplying' },
+    ],
+    spare: [
       { value: val(2 * Ej), trap: 'doubled the energy' },
+      { value: val(Ej / 2), trap: 'halved the energy' },
     ],
     solution: `Each coulomb gains ${V} J, so $E = QV = ${n(Q)} \\times ${V} = ${n(Ej)}\\ \\text{J}$.`,
     trap: 'The p.d. is joules per coulomb: multiply by the charge. Dividing by the time gives the power instead.',
@@ -416,6 +480,7 @@ function monthlyCostQ(rng: RNG): Generated | null {
   return pack(rng, {
     stem: `A household uses a ${n(P1)} kW heater for ${hrs(h1)} each day and a ${P2w} W television for ${hrs(h2)} each day. Electricity costs ${rate} p per kWh. Find the total cost of running these two appliances for ${days} days, in £.`,
     answer,
+    money: '£',
     must: [
       { value: val(pence), trap: 'gave the cost in pence rather than £' },
       { value: val((P1 * h1 * days * rate) / 100), trap: 'costed the heater only' },
@@ -424,7 +489,11 @@ function monthlyCostQ(rng: RNG): Generated | null {
       { value: val((dailyKWh * rate) / 100), trap: 'gave the cost for one day' },
       { value: val(totalKWh), trap: 'gave the energy in kWh, not the cost' },
       { value: val(((P1 * h1 + P2w * h2) * days * rate) / 100), trap: `treated the television as a ${P2w} kW appliance` },
+      { value: val(((P2w * h2) / 1000) * days * rate / 100), trap: 'costed the television only' },
+    ],
+    spare: [
       { value: val(2 * pounds), trap: 'doubled the cost' },
+      { value: val(pounds / 2), trap: 'halved the cost' },
     ],
     solution: `Each day: $${n(P1)} \\times ${n(h1)} + ${n(P2w / 1000)} \\times ${n(h2)} = ${n(dailyKWh)}$ kWh. Over ${days} days that is $${n(totalKWh)}$ kWh, costing $${n(totalKWh)} \\times ${rate} = ${n(pence)}$ p $= £${n(pounds)}$.`,
     trap: 'Turn the watts into kilowatts before adding, and divide the pence by 100 at the end.',
@@ -592,17 +661,25 @@ export default defineTemplate({
     const close = (x: number) => Math.abs(got - x) < 1e-9 * Math.max(1, Math.abs(x));
     switch (p.variant) {
       case 'charge': {
-        // accumulate I coulombs for each second
+        // accumulate I coulombs for each second, and check the stem's own figure agrees
         let Q = 0;
         for (let i = 0; i < p.t; i++) Q += p.I;
-        return close(Q);
+        return close(Q) && Math.abs(Q - p.Q) < 1e-9 * Math.max(1, p.Q);
       }
-      case 'current-from-charge':
-        // substitute back: this current for t seconds must deliver the stated charge
-        return Math.abs(got * p.t - p.I * p.t) < 1e-9;
-      case 'charge-time':
-        // substitute back: the current for this time must deliver the stated charge
-        return Math.abs(p.I * got - p.I * p.t) < 1e-9;
+      case 'current-from-charge': {
+        // accumulate this current for each second of the stated time and compare with the charge
+        // printed in the stem (a mis-printed Q is then caught too)
+        let Q = 0;
+        for (let i = 0; i < p.t; i++) Q += got;
+        return Math.abs(Q - p.Q) < 1e-9 * Math.max(1, p.Q);
+      }
+      case 'charge-time': {
+        // accumulate the stated current for each second of the answer and compare with the printed charge
+        if (!Number.isInteger(got) || got <= 0 || got > 1e5) return false;
+        let Q = 0;
+        for (let i = 0; i < got; i++) Q += p.I;
+        return Math.abs(Q - p.Q) < 1e-9 * Math.max(1, p.Q);
+      }
       case 'kwh': {
         // SI route: watts × seconds, then back to kWh
         const joules = p.P * 1000 * (p.h * 3600);

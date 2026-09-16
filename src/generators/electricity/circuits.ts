@@ -202,6 +202,11 @@ function seriesTotalQ(rng: RNG): Generated | null {
     extra: [
       { value: val(Math.abs(rs[0] - rs[1])), trap: 'subtracted the resistances' },
       { value: val(total / rs.length), trap: 'averaged the resistances' },
+      { value: val(total - rs[rs.length - 1]), trap: `left the ${ohms(rs[rs.length - 1])} resistor out of the sum` },
+      { value: val(par2(rs[0], rs[1])), trap: 'used the product-over-sum rule on the first two resistors' },
+      { value: val(total + rs[0]), trap: `counted the ${ohms(rs[0])} resistor twice` },
+    ],
+    spare: [
       { value: val(total / 2), trap: 'halved the total' },
       { value: val(2 * total), trap: 'doubled the total' },
     ],
@@ -228,7 +233,11 @@ function parallelEqualQ(rng: RNG): Generated | null {
       { value: val(R / 4), trap: 'divided by four instead of two' },
       { value: fracVal(condSum([R, R])), trap: 'left 1/R_total un-inverted' },
       { value: val(R * R), trap: 'multiplied the resistances without dividing by their sum' },
+      { value: val((R * R) / 2), trap: 'took half the product instead of half the resistance' },
+    ],
+    spare: [
       { value: val(4 * R), trap: 'doubled the series total' },
+      { value: val(R / 8), trap: 'divided by eight' },
     ],
     solution: `Two equal resistors in parallel give half the resistance: $R_{\\text{total}} = \\dfrac{${R}}{2} = ${n(R / 2)}\\ \\Omega$.`,
     trap: 'Adding resistances in parallel gives a total larger than either resistor — it must be smaller.',
@@ -256,7 +265,12 @@ function parallelPairQ(rng: RNG): Generated | null {
       { value: val(Math.abs(a - b)), trap: 'subtracted the resistances' },
       { value: val((a + b) / 2), trap: 'averaged the resistances' },
       { value: val(a * b), trap: 'multiplied the resistances without dividing by their sum' },
+      { value: val((a * b) / Math.abs(a - b)), trap: 'divided the product by the difference instead of the sum' },
+      { value: val(Math.min(a, b) / 2), trap: 'halved the smaller resistance, as for two equal resistors' },
+    ],
+    spare: [
       { value: val(2 * Rt), trap: 'doubled the combined resistance' },
+      { value: val(Rt / 2), trap: 'halved the combined resistance' },
     ],
     solution: `$R_{\\text{total}} = \\dfrac{${a} \\times ${b}}{${a} + ${b}} = \\dfrac{${a * b}}{${a + b}} = ${n(Rt)}\\ \\Omega$ (smaller than both).`,
     trap: 'The parallel total is always less than the smaller resistance; remember to invert 1/R at the end.',
@@ -285,8 +299,13 @@ function parallelTripleQ(rng: RNG): Generated | null {
     extra: [
       { value: val((rs[0] * rs[1] * rs[2]) / sum), trap: 'extended the product-over-sum rule to three resistors' },
       { value: val(par2(rs[0], rs[1])), trap: 'combined only two of the three resistors' },
+      { value: val(par2(rs[1], rs[2])), trap: 'combined only the last two resistors' },
       { value: val(sum / 3), trap: 'averaged the resistances' },
+      { value: val(rs[0] / 3), trap: 'divided the smallest resistance by three, as for three equal resistors' },
+    ],
+    spare: [
       { value: val(2 * Rt), trap: 'doubled the combined resistance' },
+      { value: val(Rt / 2), trap: 'halved the combined resistance' },
     ],
     solution: `Put the conductances over a common denominator: $\\dfrac{1}{R} = \\dfrac{1}{${rs[0]}} + \\dfrac{1}{${rs[1]}} + \\dfrac{1}{${rs[2]}} = \\dfrac{${L / rs[0]} + ${L / rs[1]} + ${L / rs[2]}}{${L}} = \\dfrac{${S}}{${L}}$, so $R = \\dfrac{${L}}{${S}} = ${n(Rt)}\\ \\Omega$.`,
     trap: 'Add the conductances, then invert: the total must be smaller than the smallest resistance.',
@@ -325,7 +344,12 @@ function mixTotalQ(rng: RNG): Generated | null {
       { value: val(par2(R0, a + b)), trap: 'combined the wrong pair' },
       { value: val(Rp), trap: 'forgot the series resistor' },
       { value: val(R0 + (a + b) / 2), trap: 'averaged the parallel pair instead of combining it' },
+      { value: val(R0 + a), trap: 'used only one of the two parallel branches' },
+      { value: val(par2(R0 + a, b)), trap: 'put the series resistor inside one branch' },
+    ],
+    spare: [
       { value: val(2 * Rt), trap: 'doubled the total' },
+      { value: val(Rt / 2), trap: 'halved the total' },
     ],
     solution: `Parallel pair: $\\dfrac{${a} \\times ${b}}{${a} + ${b}} = ${n(Rp)}\\ \\Omega$. In series with ${ohms(R0)}: $R = ${R0} + ${n(Rp)} = ${n(Rt)}\\ \\Omega$.`,
     trap: 'Combine the parallel pair first, then add the series resistor — the three do not simply add.',
@@ -354,6 +378,10 @@ function mixCurrentQ(rng: RNG): Generated | null {
     extra: [
       { value: val(V / parN([R0, a, b])), trap: 'treated all three resistors as one parallel combination' },
       { value: val(V / Rp), trap: 'forgot the series resistor' },
+      { value: val(V / (R0 + a)), trap: 'used only one of the two parallel branches' },
+      { value: val(V * Rt), trap: 'multiplied by the total resistance instead of dividing' },
+    ],
+    spare: [
       { value: val(2 * I), trap: 'doubled the current' },
       { value: val(I / 2), trap: 'halved the current' },
     ],
@@ -387,6 +415,9 @@ function dividerQ(rng: RNG): Generated | null {
     extra: [
       { value: val((V * R1) / R2), trap: 'divided by the other resistance instead of the total' },
       { value: val(V), trap: 'gave the whole supply p.d.' },
+      { value: val(V / (R1 + R2)), trap: 'gave the current in the circuit, not the p.d.' },
+    ],
+    spare: [
       { value: val(V1 / 2), trap: 'halved the p.d. once too often' },
       { value: val(2 * V1), trap: 'doubled the p.d.' },
     ],
@@ -418,6 +449,9 @@ function currentSplitQ(rng: RNG): Generated | null {
     extra: [
       { value: val((I * R2) / R1), trap: 'used the ratio of the two resistances instead of the resistance over the sum' },
       { value: val(I), trap: 'gave the total current' },
+      { value: val((I * R1) / R2), trap: 'used the ratio of the two resistances the other way round' },
+    ],
+    spare: [
       { value: val(2 * I1), trap: 'doubled the branch current' },
       { value: val(I1 / 2), trap: 'halved the branch current' },
     ],
@@ -457,7 +491,12 @@ function branchCurrentQ(rng: RNG): Generated | null {
       { value: val(r(Vp / R2)), trap: 'found the current in the other branch' },
       { value: val(V / (R0 + R1)), trap: 'ignored the second branch altogether' },
       { value: val(I / 2), trap: 'assumed the current splits equally between the branches' },
+      { value: val(r(Vp / Rp)), trap: 'used the combined parallel resistance instead of the branch resistance' },
+      { value: val(r((I * R2) / (R1 + R2))), trap: 'split the total current by resistance without finding the p.d. first' },
+    ],
+    spare: [
       { value: val(2 * I1), trap: 'doubled the branch current' },
+      { value: val(I1 / 2), trap: 'halved the branch current' },
     ],
     solution: `$R = ${R0} + ${n(Rp)} = ${n(Rt)}\\ \\Omega$ and $I = \\dfrac{${n(V)}}{${n(Rt)}} = ${n(I)}\\ \\text{A}$. The p.d. across the parallel pair is $${n(I)} \\times ${n(Rp)} = ${n(Vp)}\\ \\text{V}$, so the ${ohms(R1)} branch carries $\\dfrac{${n(Vp)}}{${R1}} = ${n(I1)}\\ \\text{A}$.`,
     trap: 'Only part of the supply p.d. is across the parallel section; find the total current first.',
@@ -472,6 +511,9 @@ function addParallelQ(rng: RNG): Generated | null {
   if (Rt >= R1) return null;
   const X = r((R1 * Rt) / (R1 - Rt));
   if (!Number.isInteger(X) || X > 200) return null;
+  // X === R1 means the target is exactly half of R1, and the level-5 "design" question collapses into
+  // the level-1 fact that two equal resistors in parallel halve; X === Rt would print the answer too
+  if (X === R1 || X === Rt) return null;
   const answer = val(X);
   if (!answer) return null;
   return pack(rng, {
@@ -484,9 +526,14 @@ function addParallelQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(par2(R1, Rt)), trap: 'combined the two given values in parallel' },
-      { value: val(Rt / 2), trap: 'halved the target resistance' },
-      { value: val(2 * Rt), trap: 'doubled the target resistance' },
+      { value: val(R1 * Rt), trap: 'multiplied the two resistances without dividing by their difference' },
+      { value: val((R1 * Rt) / (R1 + Rt)), trap: 'divided the product by the sum instead of the difference' },
+      { value: val(R1 / 2), trap: 'assumed the second resistor must equal the first' },
+    ],
+    spare: [
       { value: val(2 * X), trap: 'doubled the answer' },
+      { value: val(X / 2), trap: 'halved the answer' },
+      { value: val(2 * Rt), trap: 'doubled the target resistance' },
     ],
     solution: `Conductances subtract: $\\dfrac{1}{R} = \\dfrac{1}{${Rt}} - \\dfrac{1}{${R1}} = \\dfrac{${R1 / gcd(R1, Rt)} - ${Rt / gcd(R1, Rt)}}{${(R1 * Rt) / gcd(R1, Rt)}}$, so $R = \\dfrac{${R1} \\times ${Rt}}{${R1} - ${Rt}} = ${X}\\ \\Omega$.`,
     trap: 'Subtract the conductances (1/R), not the resistances: adding a resistor in parallel always lowers the total.',
@@ -517,7 +564,12 @@ function junctionQ(rng: RNG): Generated | null {
       { value: val((a + b + c) * R), trap: 'added the outgoing current instead of subtracting it' },
       { value: val(IR / R), trap: 'divided the current by the resistance' },
       { value: val(R / IR), trap: 'inverted Ohm’s law' },
+      { value: val(IR), trap: 'gave the current in the resistor, not the p.d. across it' },
+      { value: val(Math.abs(a - b - c) * R), trap: 'subtracted both of the other currents' },
+    ],
+    spare: [
       { value: val(2 * V), trap: 'doubled the p.d.' },
+      { value: val(V / 2), trap: 'halved the p.d.' },
     ],
     solution: `Kirchhoff at the junction: current in the resistor $= ${n(a)} + ${n(b)} - ${n(c)} = ${n(IR)}\\ \\text{A}$, so $V = IR = ${n(IR)} \\times ${R} = ${n(V)}\\ \\text{V}$.`,
     trap: 'Total current in = total current out; only the current that actually flows through the resistor sets its p.d.',
@@ -559,14 +611,24 @@ export default defineTemplate({
     const branchCurrents = (Vt: number, rs: number[]) => rs.reduce((s, x) => s + Vt / x, 0);
     switch (p.variant) {
       case 'series-total': {
-        // Ohm's law check: with 2 A flowing, the p.d.s across the resistors must add to 2 × R_total
+        // loop equation: drive the claimed total with a test supply, walk the chain subtracting the
+        // p.d. dropped across each resistor, and require nothing to be left over at the end
         const rs = p.rs as number[];
-        const Vt = 2 * got;
-        return Math.abs(rs.reduce((s, x) => s + 2 * x, 0) - Vt) < 1e-9;
+        const Vt = 6 * got;
+        const I = Vt / got;
+        let left = Vt;
+        for (const x of rs) left -= I * x;
+        return Math.abs(left) < 1e-9 * Vt && Math.abs(I * I * got - rs.reduce((s, x) => s + I * I * x, 0)) < 1e-9 * Vt;
+      }
+      case 'parallel-triple': {
+        // reduce the three pairwise by product-over-sum — the route the generator did not take
+        const rs = p.rs as number[];
+        let acc = rs[0];
+        for (let i = 1; i < rs.length; i++) acc = (acc * rs[i]) / (acc + rs[i]);
+        return Math.abs(acc - got) < 1e-9 * Math.max(1, got);
       }
       case 'parallel-equal':
-      case 'parallel-pair':
-      case 'parallel-triple': {
+      case 'parallel-pair': {
         // conductance route: the branch currents from a 60 V test supply must add to 60 / R_total
         const rs = p.rs as number[];
         const Vt = 60;

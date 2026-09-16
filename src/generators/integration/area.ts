@@ -9,15 +9,24 @@ import type { RNG } from '../../core/rng';
  * Areas under and between curves.
  * Level 1: area under y = x² from 0 to 3 (9)
  * Level 2: area between y = x(4 − x) and the x-axis (32/3) — the intersections must be found
- * Level 3: between the line y = mx and the parabola y = x² (1/6, 4/3, …)
+ * Level 3: between a line y = mx + c and a parabola y = ax² (1/6, 4/3, …)
  * Level 4: between two parabolas, or between a parabola and a line y = k
  * Level 5: the curve crosses the axis (add the absolute values); enclosed by y = 4 − x² and y = 3 (4/3)
+ *
+ * Every option in an area question is a *positive* number: a negative or zero area is impossible,
+ * so such a candidate would be eliminated without doing any work. `cleanOnly` enforces that, and a
+ * draw that cannot offer four clean positive named distractors is rejected rather than padded.
  */
 
 type Poly = number[]; // coefficients, highest power first
 
 function horner(c: Poly, x: number): number {
   return c.reduce((acc, v) => acc * x + v, 0);
+}
+
+/** Exact value of a polynomial at an exact x (used for half-integer midpoints). */
+function evalAt(c: Poly, x: Exact): Exact {
+  return c.reduce((acc, v) => acc.mul(x).add(E(v)), Exact.ZERO);
 }
 
 /** f − g, right-aligned. */
@@ -49,6 +58,14 @@ function oldPowInt(c: Poly, a: number, b: number): Exact {
     const p = n - i;
     const coef = p === 0 ? E(v) : frac(v, p);
     return s.add(coef.mul(E(b).pow(p + 1).sub(E(a).pow(p + 1))));
+  }, Exact.ZERO);
+}
+/** Divided by the new power but forgot to raise it: ∫ c x^p → (c/(p+1)) x^p. Under-counts. */
+function samePowInt(c: Poly, a: number, b: number): Exact {
+  const n = c.length - 1;
+  return c.reduce((s, v, i) => {
+    const p = n - i;
+    return s.add(frac(v, p + 1).mul(E(b).pow(p).sub(E(a).pow(p))));
   }, Exact.ZERO);
 }
 
@@ -84,16 +101,20 @@ function antiTex(c: Poly): string {
 
 type Candidate = { value: Exact | null; trap: string };
 
+/** Areas are positive: a wrong route giving 0 or a negative value is not an option the exam would print. */
 function cleanOnly(ds: Candidate[]): Distractor[] {
-  return ds.filter((d): d is { value: Exact; trap: string } => d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
+  return ds.filter((d): d is { value: Exact; trap: string } =>
+    d.value !== null && Number.isFinite(d.value.toNumber()) && d.value.toNumber() > 1e-12 && isCleanExact(d.value).ok);
 }
 
-/** Areas are positive: wrong routes that give 0 or a negative value are dropped unless explicitly kept as the sign trap. */
-function positive(ds: Candidate[]): Candidate[] {
-  return ds.map((d) => (d.value && d.value.toNumber() > 1e-12 ? d : { value: null, trap: d.trap }));
-}
-
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Choose the distractors. A target number of options *below* the answer is drawn first and the
+ * pool is then read from whichever side is still short, so the answer's position in the sorted
+ * option list is close to uniform instead of always (say) the second smallest.
+ * Returns null when there are not four distinct candidates: the caller redraws rather than let
+ * `buildOptions` pad with unlabelled generic perturbations.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] | null {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -102,12 +123,23 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     out.push(d);
   };
   must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const wantBelow = rng.int(0, count);
+  const pool = rng.shuffle(extra).filter((d) => !seen.some((s) => s.equals(d.value)));
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  while (out.length < count) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    let i = pool.findIndex((d) => isBelow(d) === needBelow);
+    if (i < 0) i = 0;
+    if (pool.length === 0) return null;
+    take(pool[i]);
+    pool.splice(i, 1);
+  }
   return out;
 }
 
 function options(rng: RNG, answer: Exact, must: Candidate[], extra: Candidate[]) {
-  return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must), cleanOnly(extra)), { format: 'fraction' });
+  const ds = ranked(rng, answer, cleanOnly(must), cleanOnly(extra));
+  return ds && buildOptions(rng, answer, ds, { format: 'fraction' });
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -164,10 +196,12 @@ interface Built {
 
 function finish(rng: RNG, b: Built): Generated | null {
   if (!isCleanExact(b.answer).ok || b.answer.toNumber() <= 0 || b.answer.toNumber() > 150) return null;
+  const opts = options(rng, b.answer, b.must, b.extra);
+  if (!opts) return null;
   return {
     stem: b.stem,
     answer: { kind: 'exact', value: b.answer },
-    options: options(rng, b.answer, b.must, b.extra),
+    options: opts,
     solution: b.solution,
     trap: b.trap,
     tags: ['integration', 'area', ...b.tags],
@@ -188,17 +222,22 @@ function underQ(rng: RNG): Generated | null {
   const area = defInt(f, lo, hi);
   if (area.toNumber() > 100) return null;
   const fhi = horner(f, hi);
-  const must = positive([
+  const mid = frac(lo + hi, 2);
+  const must: Candidate[] = [
     { value: noDivInt(f, lo, hi), trap: 'did not divide by the new power when integrating' },
-    { value: lo === 0 ? frac(hi * fhi, 2) : frac((hi - lo) * fhi, 2), trap: 'used ½ × base × height as if the region were a triangle' },
-  ]);
-  const extra = positive([
+    { value: E(hi - lo).mul(evalAt(f, mid)), trap: 'used base × the height at the middle of the interval, as if the region were a rectangle' },
+  ];
+  const extra: Candidate[] = [
+    { value: frac((hi - lo) * fhi, 2), trap: 'used ½ × base × height as if the region were a triangle' },
     { value: E((hi - lo) * fhi), trap: 'used base × height as if the region were a rectangle' },
     { value: oldPowInt(f, lo, hi), trap: 'divided by the old power instead of the new one' },
+    { value: samePowInt(f, lo, hi), trap: 'divided by the new power but forgot to raise the power' },
     { value: E(fhi - horner(f, lo)), trap: 'substituted the limits into y instead of integrating' },
+    { value: k !== 0 ? defInt([...f.slice(0, -1), 0], lo, hi) : null, trap: `dropped the constant ${k} when integrating` },
+    { value: k !== 0 ? E(k * (hi - lo)) : null, trap: 'integrated the constant term only' },
     { value: lo !== 0 ? defInt(f, 0, hi) : null, trap: 'forgot to subtract the value at the lower limit' },
     { value: area.mulRat(2), trap: 'doubled the integral' },
-  ]);
+  ];
   const stem = rng.bool(0.5)
     ? `Find the area of the region bounded by the curve ${Y(f)}, the $x$-axis and the lines $x = ${lo}$ and $x = ${hi}$.`
     : `Find the area under the curve ${Y(f)} between $x = ${lo}$ and $x = ${hi}$.`;
@@ -216,28 +255,35 @@ function underQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 2
 
 function parabolaAxisQ(rng: RNG): Generated | null {
-  const r1 = rng.pick([0, 0, 0, 1, -1, 2, -2, 3]);
+  const a = rng.pick([1, 1, 1, 2]);
+  const r1 = rng.int(-4, 3);
   const w = rng.pick([2, 3, 4, 5, 6]);
   const r2 = r1 + w;
   if (r2 > 6) return null;
-  const below = rng.bool(0.3);
-  const s = below ? 1 : -1;
+  const below = rng.bool(0.35);
+  const s = (below ? 1 : -1) * a;
   const f: Poly = [s, -s * (r1 + r2), s * r1 * r2];
-  const area = frac(w ** 3, 6);
+  if (f.some((v) => Math.abs(v) > 30)) return null;
+  const area = frac(a * w ** 3, 6);
   const signedInt = defInt(f, r1, r2);
-  const curve = r1 === 0 && !below ? `$y = x(${w} - x)$` : Y(f);
-  const must = [
-    { value: signedInt.neg().equals(area) ? area.neg() : signedInt, trap: below ? 'left the signed integral negative: the area is its modulus' : 'integrated with the limits the wrong way round' },
-    { value: r1 !== 0 ? defInt(f, 0, r2).abs() : defInt(f, 0, 1).abs(), trap: r1 !== 0 ? `integrated from 0 instead of from the first intersection x = ${r1}` : 'integrated from 0 to 1 without finding where the curve meets the axis' },
+  const curve = r1 === 0 && !below && a === 1 ? `$y = x(${w} - x)$` : Y(f);
+  // A region below the axis gives a negative integral, but −area is never offered: an area cannot be
+  // negative, so the pair (+A, −A) would hand the answer over. The sign is explained in the solution.
+  const must: Candidate[] = [
+    { value: r1 !== 0 && r2 !== 0 ? defInt(f, 0, r2).abs() : defInt(f, r1 === 0 ? 0 : r1, r1 === 0 ? 1 : r1 + 1).abs(),
+      trap: r1 !== 0 && r2 !== 0 ? `integrated from 0 instead of from the first intersection x = ${r1}` : `integrated from ${r1 === 0 ? '0 to 1' : `${r1} to ${r1 + 1}`} without finding where the curve meets the axis` },
+    { value: frac(a * w ** 3, 8), trap: 'used ½ × base × height with the vertex height, as if the region were a triangle' },
   ];
-  const extra = positive([
-    { value: frac(w ** 3, 8), trap: 'used ½ × base × height with the vertex height, as if the region were a triangle' },
-    { value: frac(w ** 3, 4), trap: 'used base × height, as if the region were a rectangle' },
+  const extra: Candidate[] = [
+    { value: frac(a * w ** 3, 4), trap: 'used base × height, as if the region were a rectangle' },
+    { value: frac(a * w ** 3, 3), trap: 'forgot the ½ from the x² term' },
+    { value: frac(a * w ** 3, 12), trap: 'integrated only as far as the vertex: that is half the region' },
     { value: noDivInt(f, r1, r2).abs(), trap: 'did not divide by the new powers when integrating' },
     { value: oldPowInt(f, r1, r2).abs(), trap: 'divided by the old powers instead of the new ones' },
-    { value: frac(w ** 3, 3), trap: 'forgot the ½ from the x² term' },
+    { value: samePowInt(f, r1, r2).abs(), trap: 'divided by the new powers but forgot to raise them' },
+    { value: frac(a * w * w, 4), trap: 'gave the greatest height of the region' },
     { value: E(w), trap: 'gave the width of the region' },
-  ]);
+  ];
   return finish(rng, {
     stem: `Find the area of the region enclosed by the curve ${curve} and the $x$-axis.`,
     answer: area,
@@ -252,30 +298,39 @@ function parabolaAxisQ(rng: RNG): Generated | null {
 // ----------------------------------------------------------------------------- level 3
 
 function lineParabolaQ(rng: RNG): Generated | null {
-  const a = rng.pick([1, 1, 1, 2]);
-  const r2 = rng.pick(a === 1 ? [1, 2, 3, 4] : [1, 2, 3]);
-  const m = a * r2;
-  const line: Poly = [m, 0];
+  const a = rng.pick([1, 1, 2, 3]);
+  const r1 = rng.int(-4, 3);
+  const w = rng.pick([1, 2, 2, 3, 3, 4, 5, 6]);
+  const r2 = r1 + w;
+  if (r2 > 5 || a * w ** 3 > 900) return null;
+  const m = a * (r1 + r2);
+  const c = -a * r1 * r2;
+  if (m === 0 || Math.abs(m) > 12 || Math.abs(c) > 24) return null;
+  const line: Poly = [m, c];
   const para: Poly = [a, 0, 0];
-  const area = frac(a * r2 ** 3, 6);
-  const diff = sub(line, para); // mx − ax²
-  const must = positive([
-    { value: frac(a * r2 ** 3, 3), trap: 'found the area under the parabola only' },
-    { value: frac(m * r2 * r2, 2), trap: 'found the area under the line (the triangle) only' },
-  ]);
-  const extra = positive([
-    { value: area.neg(), trap: 'subtracted the curves the wrong way round' },
-    { value: r2 !== 1 ? defInt(diff, 0, 1) : null, trap: 'integrated from 0 to 1 without finding the intersections' },
-    { value: frac(m * r2 * r2, 2).add(frac(a * r2 ** 3, 3)), trap: 'added the two integrals instead of subtracting' },
-    { value: a !== 1 ? frac(r2 ** 3, 6) : null, trap: `ignored the coefficient ${a} of x²` },
-    { value: noDivInt(diff, 0, r2), trap: 'did not divide by the new powers' },
-    { value: frac(a * r2 ** 3, 2), trap: 'forgot to divide the x³ term by 3' },
-  ]);
+  const area = frac(a * w ** 3, 6);
+  const diff = sub(line, para); // mx + c − ax²
+  const must: Candidate[] = [
+    { value: defInt(para, r1, r2).abs(), trap: 'found the area under the parabola only' },
+    { value: defInt(line, r1, r2).abs(), trap: 'found the area under the line only' },
+  ];
+  const extra: Candidate[] = [
+    { value: frac(a * w ** 3, 8), trap: 'treated the region as a triangle: ½ × width × the greatest gap between the curves' },
+    { value: frac(a * w ** 3, 12), trap: 'integrated only as far as the midpoint: that is half the region' },
+    { value: defInt(para, r1, r2).abs().add(defInt(line, r1, r2).abs()), trap: 'added the two integrals instead of subtracting' },
+    { value: a !== 1 ? frac(w ** 3, 6) : null, trap: `ignored the coefficient ${a} of x²` },
+    { value: r1 !== 0 && r2 !== 0 ? defInt(diff, 0, r2).abs() : null, trap: 'integrated from 0 instead of from the first intersection' },
+    { value: noDivInt(diff, r1, r2).abs(), trap: 'did not divide by the new powers' },
+    { value: oldPowInt(diff, r1, r2).abs(), trap: 'divided by the old powers instead of the new ones' },
+    { value: samePowInt(diff, r1, r2).abs(), trap: 'divided by the new powers but forgot to raise them' },
+    { value: frac(a * w ** 3, 2), trap: 'forgot to divide the x³ term by 3' },
+    { value: frac(a * w ** 3, 3), trap: 'doubled the area' },
+  ];
   return finish(rng, {
     stem: `Find the area of the region enclosed by the line ${Y(line)} and the curve ${Y(para)}.`,
     answer: area,
     must, extra,
-    solution: `They meet where $${nice(para)} = ${nice(line)}$, i.e. $x = 0$ and $x = ${r2}$; the line is on top between them. Area $= \\int_{0}^{${r2}} (${nice(diff)})\\,dx = \\left[${L(frac(m, 2))}x^{2} - ${L(frac(a, 3))}x^{3}\\right]_{0}^{${r2}} = ${L(area)}$.`,
+    solution: `They meet where $${nice(para)} = ${nice(line)}$, i.e. $x = ${r1}$ and $x = ${r2}$; the line is on top between them. Area $= \\int_{${r1}}^{${r2}} (${nice(diff)})\\,dx = \\left[${antiTex(diff)}\\right]_{${r1}}^{${r2}} = ${L(area)}$.`,
     trap: 'Find the intersections, then integrate (top curve − bottom curve) between them; neither curve alone gives the area.',
     tags: ['between-curves', 'intersections'],
     params: { variant: 'line-parabola', f: line, g: para, lo: null, hi: null },
@@ -296,18 +351,20 @@ function twoParabolasQ(rng: RNG): Generated | null {
   if (g.some((v) => Math.abs(v) > 12) || f.some((v) => Math.abs(v) > 12)) return null;
   const diff = sub(g, f); // = −2(x − r1)(x − r2) ≥ 0 between the roots
   const area = frac(w ** 3, 3);
-  const must = positive([
+  const must: Candidate[] = [
     { value: frac(w ** 3, 6), trap: 'subtracted only one of the x² terms: the difference has leading coefficient 2' },
-    { value: area.neg().abs().equals(area) ? defInt(f, r1, r2).abs() : null, trap: 'integrated one curve only' },
-  ]);
-  const extra = positive([
-    { value: area.neg(), trap: 'subtracted the curves the wrong way round' },
+    { value: defInt(f, r1, r2).abs(), trap: 'integrated the lower curve only' },
+  ];
+  const extra: Candidate[] = [
     { value: defInt(g, r1, r2).abs(), trap: 'integrated the upper curve only' },
+    { value: frac(w ** 3, 12), trap: 'integrated only as far as the midpoint: that is half the region' },
+    { value: frac(w ** 3, 4), trap: 'treated the region as a triangle: ½ × width × the greatest gap between the curves' },
     { value: r1 !== 0 && r2 !== 0 ? defInt(diff, 0, r2).abs() : null, trap: 'integrated from 0 instead of from the first intersection' },
     { value: area.mulRat(2), trap: 'doubled the area' },
     { value: noDivInt(diff, r1, r2).abs(), trap: 'did not divide by the new powers' },
-    { value: frac(w ** 3, 2), trap: 'forgot to divide the x³ term by 3' },
-  ]);
+    { value: samePowInt(diff, r1, r2).abs(), trap: 'divided by the new powers but forgot to raise them' },
+    { value: E(w ** 3), trap: 'forgot to divide the x³ term by 3' },
+  ];
   const eq = sub(f, g); // 2x² − 2(r1 + r2)x + 2 r1 r2
   return finish(rng, {
     stem: `Find the area of the region enclosed by the curves ${Y(f)} and ${Y(g)}.`,
@@ -335,18 +392,20 @@ function curveLineQ(rng: RNG): Generated | null {
   const disc = f[1] * f[1] - 4 * f[0] * f[2];
   const sq = Math.round(Math.sqrt(Math.max(0, disc)));
   const ownRoots = disc > 0 && sq * sq === disc && (-f[1] - sq) % (2 * f[0]) === 0 ? [(-f[1] - sq) / (2 * f[0]), (-f[1] + sq) / (2 * f[0])].sort((x, y) => x - y) : null;
-  const must = positive([
+  const must: Candidate[] = [
     { value: defInt(f, r1, r2).abs(), trap: 'integrated the curve alone and forgot to subtract the line' },
     { value: k !== 0 ? E(Math.abs(k) * w) : null, trap: 'found the rectangle under the line only' },
-  ]);
-  const extra = positive([
-    { value: area.neg(), trap: 'subtracted the curves the wrong way round' },
+  ];
+  const extra: Candidate[] = [
     { value: ownRoots && (ownRoots[0] !== r1 || ownRoots[1] !== r2) ? defInt(diff, ownRoots[0], ownRoots[1]).abs() : null, trap: 'used the x-intercepts of the parabola as the limits instead of the intersections with the line' },
+    { value: frac(w ** 3, 8), trap: 'treated the region as a triangle: ½ × width × the greatest gap between the curves' },
+    { value: frac(w ** 3, 12), trap: 'integrated only as far as the midpoint: that is half the region' },
     { value: r1 !== 0 && r2 !== 0 ? defInt(diff, 0, r2).abs() : null, trap: 'integrated from 0 instead of from the first intersection' },
     { value: frac(w ** 3, 3), trap: 'doubled the area' },
     { value: noDivInt(diff, r1, r2).abs(), trap: 'did not divide by the new powers' },
+    { value: samePowInt(diff, r1, r2).abs(), trap: 'divided by the new powers but forgot to raise them' },
     { value: frac(w ** 3, 2), trap: 'forgot to divide the x³ term by 3' },
-  ]);
+  ];
   const eq = up ? sub(f, g) : sub(g, f);
   return finish(rng, {
     stem: `Find the area of the region enclosed by the curve ${Y(f)} and the line $y = ${k}$.`,
@@ -363,35 +422,41 @@ function curveLineQ(rng: RNG): Generated | null {
 
 function cubicCrossQ(rng: RNG): Generated | null {
   const kind = rng.pick(['odd', 'odd', 'shifted']);
+  const j = rng.pick([1, 1, 2, 3]);
   let f: Poly, lo: number, hi: number, mid: number, lobe: Exact, crossings: string;
   if (kind === 'odd') {
-    const a = rng.pick([1, 2, 2, 3]);
-    f = [1, 0, -a * a, 0]; lo = -a; hi = a; mid = 0;
-    lobe = frac(a ** 4, 4);
-    crossings = `$x(x^{2} - ${a * a}) = 0$, so the curve crosses at $x = -${a}, 0, ${a}$`;
+    const a = rng.pick([1, 2, 2, 3, 4]);
+    if (j * a ** 4 > 300) return null;
+    f = [j, 0, -j * a * a, 0]; lo = -a; hi = a; mid = 0;
+    lobe = frac(j * a ** 4, 4);
+    crossings = `$${j === 1 ? '' : j}x(x^{2} - ${a * a}) = 0$, so the curve crosses at $x = -${a}, 0, ${a}$`;
   } else {
-    const p = rng.pick([1, 2]);
-    f = [1, -3 * p, 2 * p * p, 0]; lo = 0; hi = 2 * p; mid = p;
-    lobe = frac(p ** 4, 4);
-    crossings = `$x(x - ${p})(x - ${2 * p}) = 0$, so the curve crosses at $x = 0, ${p}, ${2 * p}$`;
+    const p = rng.pick([1, 2, 3]);
+    if (j * p ** 4 > 300) return null;
+    f = [j, -3 * j * p, 2 * j * p * p, 0]; lo = 0; hi = 2 * p; mid = p;
+    lobe = frac(j * p ** 4, 4);
+    crossings = `$${j === 1 ? '' : j}x(x - ${p})(x - ${2 * p}) = 0$, so the curve crosses at $x = 0, ${p}, ${2 * p}$`;
   }
+  if (f.some((v) => Math.abs(v) > 40)) return null;
   const area = lobe.mulRat(2);
-  const must = positive([
+  const must: Candidate[] = [
     { value: lobe, trap: 'found the area of one of the two regions only' },
     { value: noDivInt(f, lo, mid).abs().add(noDivInt(f, mid, hi).abs()), trap: 'did not divide by the new powers' },
-  ]);
-  const extra = [
-    { value: E(0), trap: 'the signed integral over the whole interval is 0 because the two regions cancel' },
+  ];
+  const extra: Candidate[] = [
     { value: area.mulRat(2), trap: 'doubled the total' },
-    { value: lobe.neg(), trap: 'left one region negative' },
+    { value: lobe.mulRat(frac(1, 2).toRat()), trap: 'integrated only as far as the turning point of one region' },
+    { value: area.mulRat(frac(4, 3).toRat()), trap: 'divided x⁴ by 3 instead of by 4' },
     { value: oldPowInt(f, lo, mid).abs().add(oldPowInt(f, mid, hi).abs()), trap: 'divided by the old powers' },
+    { value: samePowInt(f, lo, mid).abs().add(samePowInt(f, mid, hi).abs()), trap: 'divided by the new powers but forgot to raise them' },
     { value: area.mulRat(frac(2, 3).toRat()), trap: 'arithmetic slip with the ¼' },
+    { value: E(hi - lo).mul(lobe), trap: 'multiplied one region by the width of the interval' },
   ];
   return finish(rng, {
     stem: `Find the total area of the regions enclosed between the curve ${Y(f)} and the $x$-axis.`,
     answer: area,
     must, extra,
-    solution: `${crossings}. By symmetry the two regions are equal: $\\left|\\int_{${lo}}^{${mid}} (${nice(f)})\\,dx\\right| = ${L(lobe)}$, so the total area is $2 \\times ${L(lobe)} = ${L(area)}$.`,
+    solution: `${crossings}. By symmetry the two regions are equal: $\\left|\\int_{${lo}}^{${mid}} (${nice(f)})\\,dx\\right| = ${L(lobe)}$, so the total area is $2 \\times ${L(lobe)} = ${L(area)}$. (One integral over the whole range gives 0, because the two regions cancel.)`,
     trap: 'When the curve crosses the axis inside the interval, integrate each region separately and add the moduli; one integral over the whole range cancels them.',
     tags: ['cross-axis', 'cubic', 'symmetry'],
     params: { variant: 'cubic-cross', f, g: [0], lo, hi },
@@ -400,23 +465,25 @@ function cubicCrossQ(rng: RNG): Generated | null {
 
 function parabolaCrossQ(rng: RNG): Generated | null {
   const kind = rng.pick(['x2-m2', 'x2-mx']);
-  const m = kind === 'x2-m2' ? rng.pick([1, 2, 2, 3]) : rng.pick([2, 3, 4]);
-  const T = m + rng.pick([1, 2]);
+  const m = kind === 'x2-m2' ? rng.pick([1, 2, 2, 3, 4]) : rng.pick([2, 3, 4, 5]);
+  const T = m + rng.pick([1, 2, 3]);
   const f: Poly = kind === 'x2-m2' ? [1, 0, -m * m] : [1, -m, 0];
   const A1 = defInt(f, 0, m).abs();
   const A2 = defInt(f, m, T);
   const area = A1.add(A2);
-  const must = [
+  const must: Candidate[] = [
     { value: A2.sub(A1), trap: 'gave the signed integral over the whole interval, letting the two regions cancel' },
     { value: A2.sub(A1).abs(), trap: 'took the modulus of the single integral over the whole interval' },
   ];
-  const extra = positive([
+  const extra: Candidate[] = [
     { value: A1, trap: 'found the region below the axis only' },
     { value: A2, trap: 'found the region above the axis only' },
-    { value: A1.sub(A2), trap: 'sign of the second region wrong' },
     { value: A1.mulRat(2), trap: 'doubled the first region as if the two were equal' },
-    { value: noDivInt(f, 0, m).abs().add(noDivInt(f, m, T)), trap: 'did not divide by the new powers' },
-  ]);
+    { value: A2.mulRat(2), trap: 'doubled the second region as if the two were equal' },
+    { value: noDivInt(f, 0, m).abs().add(noDivInt(f, m, T).abs()), trap: 'did not divide by the new powers' },
+    { value: samePowInt(f, 0, m).abs().add(samePowInt(f, m, T).abs()), trap: 'divided by the new powers but forgot to raise them' },
+    { value: defInt(f, 0, T).abs().add(A1.mulRat(2)), trap: 'added twice the lower region to the whole signed integral' },
+  ];
   return finish(rng, {
     stem: `Find the total area of the regions bounded by the curve ${Y(f)}, the $x$-axis and the lines $x = 0$ and $x = ${T}$.`,
     answer: area,
@@ -429,28 +496,31 @@ function parabolaCrossQ(rng: RNG): Generated | null {
 }
 
 function enclosedByLineQ(rng: RNG): Generated | null {
-  const r = rng.pick([1, 1, 2]);
-  const down = rng.bool(0.7);
-  const d = rng.int(1, 5); // the line y = d (not the x-axis itself)
+  const r = rng.pick([1, 1, 2, 3]);
+  const down = rng.bool(0.6);
+  const d = rng.intExcluding(-4, 6, [0]); // the line y = d (not the x-axis itself)
   const c = down ? d + r * r : d - r * r; // parabola y = c − x² or y = x² + c
+  if (Math.abs(c) > 14) return null;
   const f: Poly = down ? [-1, 0, c] : [1, 0, c];
   const g: Poly = [d];
   const diff = down ? sub(f, g) : sub(g, f); // r² − x²
   const area = frac(4 * r ** 3, 3);
   const sq = Math.round(Math.sqrt(Math.abs(c)));
   const ownInt = down && c > 0 && sq * sq === c && sq !== r;
-  const must = positive([
+  const must: Candidate[] = [
     { value: defInt(f, -r, r).abs(), trap: 'integrated the curve alone and forgot to subtract the line' },
     { value: frac(2 * r ** 3, 3), trap: 'integrated from 0 to r only (half the region)' },
-  ]);
-  const extra = positive([
+  ];
+  const extra: Candidate[] = [
     { value: ownInt ? defInt(diff, -sq, sq).abs() : null, trap: `used the x-intercepts ±${sq} of the parabola as the limits` },
-    { value: area.neg(), trap: 'subtracted the curves the wrong way round' },
     { value: E(2 * r ** 3), trap: 'found the rectangle 2r × r² around the region' },
-    { value: E(d * 2 * r), trap: 'found the rectangle under the line only' },
+    { value: E(r ** 3), trap: 'treated the region as a triangle: ½ × 2r × r²' },
+    { value: E(Math.abs(d) * 2 * r), trap: 'found the rectangle under the line only' },
     { value: noDivInt(diff, -r, r).abs(), trap: 'did not divide by the new power' },
-    { value: E(r * r), trap: 'gave the height of the region' },
-  ]);
+    { value: samePowInt(diff, -r, r).abs(), trap: 'divided by the new power but forgot to raise it' },
+    { value: frac(8 * r ** 3, 3), trap: 'doubled the area' },
+    { value: E(r * r), trap: 'gave the greatest height of the region' },
+  ];
   return finish(rng, {
     stem: `Find the area of the region enclosed by the curve ${Y(f)} and the line $y = ${d}$.`,
     answer: area,
@@ -472,7 +542,7 @@ export default defineTemplate({
   levels: {
     1: 'area under y = x² from 0 to 3 (9)',
     2: 'between y = x(4 − x) and the x-axis (32/3): find the intersections',
-    3: 'between y = mx and y = x² (1/6, 4/3, …)',
+    3: 'between a line y = mx + c and y = ax² (1/6, 4/3, …)',
     4: 'between two parabolas; between a parabola and y = k',
     5: 'curve crossing the axis (add the moduli); enclosed by y = 4 − x² and y = 3 (4/3)',
   },

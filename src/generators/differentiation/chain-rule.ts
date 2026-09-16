@@ -271,8 +271,11 @@ const quadStep = (b: number, c: number) => `Let $u = ${poly([1, b, c])}$, so $\\
 // ----------------------------------------------------------------------------- levels 1–2: (ax + b)^n
 
 function linearPowerQ(rng: RNG, n: number): Generated | null {
-  const a = rng.pick([1, 2, 2, 3, -1, -2, 4]);
-  const b = rng.nonZeroInt(-3, 3);
+  // Draw the sign of a separately (and keep b > 0 when it is negative, so the bracket reads
+  // "(3 - 2x)" and never "(-3 - 2x)"): half the gradients are then negative, which keeps the
+  // answer off the top of the sorted option list.
+  const a = rng.pick([1, 2, 2, 3, 4]) * rng.sign();
+  const b = a < 0 ? rng.int(1, 3) : rng.nonZeroInt(-3, 3);
   if (!linReads(a, b)) return null;
   // |u| = 2 or 3 keeps "did not lower the power" (answer × u) away from ±answer.
   const u = rng.weighted(n >= 4 ? [2, -2, 1, -1] : [2, -2, 3, -3, 1, -1], n >= 4 ? [3, 3, 1, 1] : [3, 3, 2, 2, 1, 1]);

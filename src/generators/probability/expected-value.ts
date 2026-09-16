@@ -2,7 +2,7 @@ import { defineTemplate, retry, type Generated, type Level } from '../../core/te
 import { E, frac, Exact } from '../../core/exact';
 import { buildOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
-import { gcd } from '../../core/gen-utils';
+import { gcd, lcm, nCr } from '../../core/gen-utils';
 import type { RNG } from '../../core/rng';
 
 /**
@@ -11,7 +11,10 @@ import type { RNG } from '../../core/rng';
  * Level 2: the expected score of a spinner whose sectors repeat
  * Level 3: a game with a stake: win £5 with probability ¼ for a £2 stake → expected profit −¾
  * Level 4: the expected number of sixes in 12 rolls, or E(X) from a distribution given in words
- * Level 5: the stake or prize that makes a game fair, or E(X) with probabilities given as fractions
+ * Level 5: the stake or prize that makes a game fair, or E(X) (and E(aX + b)) with the probabilities in words
+ *
+ * verify() never re-runs the sum that generate() used: every variant either enumerates the
+ * sample space outcome by outcome or substitutes the answer back into the condition it satisfies.
  */
 
 const FRACTION = { format: 'fraction' as const };
@@ -66,7 +69,10 @@ function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generat
 
 const PROB_FALLBACK = [[1, 2], [1, 3], [2, 3], [1, 4], [3, 4], [1, 6], [5, 6], [1, 5], [2, 5], [1, 9], [1, 12], [5, 12], [7, 36], [13, 36]].map(([n, d]) => frac(n, d));
 
-/** `ds` has already been ranked; probabilities get a probability-shaped fallback. */
+/**
+ * `ds` has already been ranked. Level 1 rejects any draw that cannot fill all four wrong
+ * options with a named mistake, so the fallback is only ever reached at higher levels.
+ */
 function probOptions(rng: RNG, answer: Exact, ds: Distractor[]) {
   return buildOptions(rng, answer, ds, { ...FRACTION, fallback: PROB_FALLBACK });
 }
@@ -86,7 +92,7 @@ function waysForTotal(s: number): number {
 
 function diceSumQ(rng: RNG): Generated | null {
   const mode = rng.pick(['equal', 'atleast', 'atmost']);
-  const s = rng.int(4, 10);
+  const s = rng.int(3, 11);
   let ways = 0;
   let ask: string;
   if (mode === 'equal') { ways = waysForTotal(s); ask = `the total is $${s}$`; }
@@ -104,6 +110,7 @@ function diceSumQ(rng: RNG): Generated | null {
     { value: frac(Math.ceil(ways / 2), 36), trap: 'counted $(a, b)$ and $(b, a)$ as the same outcome' },
     { value: frac(ways, 18), trap: 'halved the number of outcomes' },
   ], [0, 1]));
+  if (distractors.length < 4) return null; // never pad a level-1 question with untrapped fractions
   return {
     stem: `Two fair six-sided dice are rolled and their scores are added. Find the probability that ${ask}.`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
@@ -125,12 +132,17 @@ const TRIALS: Trial[] = [
 function atLeastOneQ(rng: RNG): Generated | null {
   const trial = rng.pick(TRIALS);
   const ev = rng.pick(trial.events);
-  const n = trial.faces === 2 ? rng.int(2, 4) : 2;
+  // Two tosses of a coin has too small a sample space to offer four different mistakes.
+  const n = trial.faces === 2 ? rng.int(3, 4) : 2;
   const total = trial.faces ** n;
   const bad = (trial.faces - ev.good) ** n;
   const answer = frac(total - bad, total);
   if (!isCleanExact(answer).ok) return null;
   const single = frac(ev.good, trial.faces);
+  // Unordered outcomes (multisets) treated as equally likely — the classic "HH, HT, TT" error.
+  const multisets = nCr(trial.faces + n - 1, n);
+  const multisetsNone = nCr(trial.faces - ev.good + n - 1, n);
+  const exactlyOne = n * ev.good * (trial.faces - ev.good) ** (n - 1);
   const distractors = ranked(rng, answer, cleanOnly([
     { value: single.mul(E(n)), trap: 'added the probabilities instead of using the complement' },
     { value: frac(bad, total), trap: 'gave the probability of getting none' },
@@ -138,8 +150,11 @@ function atLeastOneQ(rng: RNG): Generated | null {
     { value: attempt(() => E(1).sub(single.pow(n))), trap: 'used $1 - P(\\text{all})$ instead of $1 - P(\\text{none})$' },
   ], [0, 1]), cleanOnly([
     { value: single, trap: 'answered for a single trial' },
-    { value: frac(n * ev.good, total), trap: 'counted only the outcomes with exactly one success' },
+    { value: frac(exactlyOne, total), trap: 'found the probability of exactly one success' },
+    { value: frac(multisets - multisetsNone, multisets), trap: 'treated the unordered outcomes as equally likely' },
+    { value: E(1).sub(E(1).sub(single).mul(E(n))), trap: 'subtracted the failure probabilities instead of multiplying them' },
   ], [0, 1]));
+  if (distractors.length < 4) return null; // never pad a level-1 question with untrapped fractions
   return {
     stem: `${trial.name} ${WORDS[n]} times. Find the probability of obtaining at least one ${ev.text.replace(/^an? /, '')}.`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
@@ -162,18 +177,23 @@ function spinnerQ(rng: RNG): Generated | null {
   const f3 = n - f1 - f2;
   const freqs = [f1, f2, f3];
   if (freqs.some((f) => f < 1)) return null;
+  if (new Set(freqs).size === 1) return null; // equal sectors: nothing to weight
   const total = values.reduce((acc, v, i) => acc + v * freqs[i], 0);
   const answer = frac(total, n);
   if (!isCleanExact(answer).ok) return null;
   // Keep the arithmetic mental: a whole number or a simple half/quarter.
   if (Number(answer.toRat().d) > 4) return null;
   const naive = frac(values[0] + values[1] + values[2], 3);
+  if (naive.equals(answer)) return null; // the weighting would make no difference
+  const maxF = Math.max(...freqs);
+  const uniqueMode = freqs.filter((f) => f === maxF).length === 1;
   const distractors = ranked(rng, answer, cleanOnly([
     { value: naive, trap: 'averaged the three different scores, ignoring how many sectors show each' },
     { value: E(total), trap: 'forgot to divide by the number of sectors' },
-    { value: E(values[freqs.indexOf(Math.max(...freqs))]), trap: 'gave the most likely score instead of the mean' },
-    { value: frac(total, 3), trap: 'divided by the number of different scores' },
+    { value: uniqueMode ? E(values[freqs.indexOf(maxF)]) : null, trap: 'gave the most likely score instead of the mean' },
+    { value: frac(total - values[2] * freqs[2], n), trap: 'dropped the last term of $\\sum x p$' },
   ]), cleanOnly([
+    { value: frac(total, 3), trap: 'divided by the number of different scores' },
     { value: E(values[2]), trap: 'gave the highest score' },
     { value: frac(values[0] + values[1] + values[2], n), trap: 'added the scores once each, not once per sector' },
     { value: frac(total, n).add(E(1)), trap: 'slip of one' },
@@ -186,7 +206,7 @@ function spinnerQ(rng: RNG): Generated | null {
     solution: `$E(X) = \\frac{${values.map((v, i) => `${freqs[i]} \\times ${v}`).join(' + ')}}{${n}} = \\frac{${total}}{${n}} = ${tx(answer)}$.`,
     trap: 'Weight every score by how many sectors show it — the mean of the different scores is not the expected score.',
     tags: ['probability', 'expected-value', 'spinner'],
-    params: { variant: 'spinner', values, freqs },
+    params: { variant: 'spinner', values, freqs, n },
     typedAllowed: true,
   };
 }
@@ -197,8 +217,11 @@ const PROBS: [number, number][] = [[1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [2, 5
 
 function gameQ(rng: RNG): Generated | null {
   const [pn, pd] = rng.pick(PROBS);
-  const prize = rng.int(2, 12);
-  const cost = rng.int(1, 6);
+  const cost = rng.int(1, 5);
+  // A prize worth playing for: at least twice the stake. The probability, not the prize,
+  // decides whether the expected profit is positive or negative.
+  const prize = rng.int(2 * cost, 12);
+  if (prize <= cost) return null;
   const p = frac(pn, pd);
   const answer = p.mul(E(prize)).sub(E(cost));
   if (answer.isZero() || !isCleanExact(answer).ok) return null;
@@ -206,11 +229,11 @@ function gameQ(rng: RNG): Generated | null {
   const distractors = ranked(rng, answer, cleanOnly([
     { value: p.mul(E(prize)), trap: 'forgot to subtract the stake' },
     { value: answer.neg(), trap: 'subtracted the winnings from the stake (sign error)' },
+    { value: E(prize).sub(E(cost)).mul(p).sub(E(cost)), trap: 'subtracted the stake twice: once inside the probability and once outside' },
     { value: E(prize - cost), trap: 'ignored the probability altogether' },
-    { value: p.mul(E(prize - cost)), trap: 'applied the probability to the profit but forgot the stake is always paid' },
   ]), cleanOnly([
+    { value: p.mul(E(prize - cost)), trap: 'applied the probability to the profit but forgot the stake is always paid' },
     { value: p.mul(E(prize)).add(E(cost)), trap: 'added the stake instead of subtracting it' },
-    { value: E(prize).sub(E(cost)).mul(p).sub(E(cost)), trap: 'subtracted the stake twice' },
     { value: p.mul(E(prize)).sub(E(cost)).mul(E(2)), trap: 'doubled the expected profit' },
   ]));
   return {
@@ -275,11 +298,13 @@ function distributionQ(rng: RNG): Generated | null {
   const answer = xs.reduce((acc, x, i) => acc.add(frac(tenths[i] * x, 10)), Exact.ZERO);
   if (!isCleanExact(answer).ok || answer.isZero()) return null;
   const mean = frac(xs[0] + xs[1] + xs[2], 3);
+  const maxT = Math.max(...tenths);
+  const uniqueMode = tenths.filter((t) => t === maxT).length === 1;
   const distractors = ranked(rng, answer, cleanOnly([
     { value: mean, trap: 'averaged the values, ignoring the probabilities' },
     { value: E(xs[0] + xs[1] + xs[2]), trap: 'added the values' },
-    { value: answer.mul(E(3)).mul(frac(1, 1)), trap: 'multiplied by the number of values' },
-    { value: E(xs[tenths.indexOf(Math.max(...tenths))]), trap: 'gave the most likely value' },
+    { value: answer.mul(E(3)), trap: 'multiplied by the number of values' },
+    { value: uniqueMode ? E(xs[tenths.indexOf(maxT)]) : null, trap: 'gave the most likely value' },
   ]), cleanOnly([
     { value: answer.add(E(1)), trap: 'slip of one' },
     { value: answer.mul(frac(1, 2)), trap: 'halved the total' },
@@ -360,38 +385,94 @@ function fairGameQ(rng: RNG): Generated | null {
   };
 }
 
+/**
+ * Probabilities given as fractions in words. One spin is the plain Σ x p; the other two
+ * shapes add the level-5 step of using E(X) again (two spins, or E(aX + b)).
+ */
+type SpinAsk = 'single' | 'two' | 'payout';
+
 function fractionSpinnerQ(rng: RNG): Generated | null {
   const d = rng.pick([6, 8, 10, 12]);
   const a = rng.int(1, d - 2);
   const b = rng.int(1, d - a - 1);
   const c = d - a - b;
   const parts = [a, b, c];
+  if (new Set(parts).size === 1) return null; // "biased" must really be biased
   const xs = rng.pickDistinct([1, 2, 3, 4, 5, 6, 8, 10], 3).sort((x, y) => x - y);
-  const answer = xs.reduce((acc, x, i) => acc.add(frac(parts[i] * x, d)), Exact.ZERO);
-  if (!isCleanExact(answer).ok || answer.isZero()) return null;
-  if (Number(answer.toRat().d) > 6) return null;
+  const mean = xs.reduce((acc, x, i) => acc.add(frac(parts[i] * x, d)), Exact.ZERO);
+  if (!isCleanExact(mean).ok || mean.isZero()) return null;
+  if (Number(mean.toRat().d) > 6) return null;
+  const plainMean = frac(xs[0] + xs[1] + xs[2], 3);
+  if (plainMean.equals(mean)) return null; // the probabilities would make no difference
+  const reversed = xs.reduce((acc, x, i) => acc.add(frac(parts[2 - i] * x, d)), Exact.ZERO);
+  const maxPart = Math.max(...parts);
+  const uniqueMode = parts.filter((t) => t === maxPart).length === 1;
   const pf = parts.map((t) => {
     const g = gcd(t, d);
     return frac(t / g, d / g);
   });
-  const distractors = ranked(rng, answer, cleanOnly([
-    { value: frac(xs[0] + xs[1] + xs[2], 3), trap: 'averaged the three scores, ignoring the probabilities' },
-    { value: E(xs[0] + xs[1] + xs[2]), trap: 'added the scores' },
-    { value: E(xs[parts.indexOf(Math.max(...parts))]), trap: 'gave the most likely score' },
-    { value: xs.reduce((acc, x, i) => acc.add(frac(parts[2 - i] * x, d)), Exact.ZERO), trap: 'paired the scores with the wrong probabilities' },
-  ]), cleanOnly([
-    { value: answer.mul(E(3)), trap: 'multiplied by the number of outcomes' },
-    { value: answer.add(E(1)), trap: 'slip of one' },
-    { value: answer.mul(frac(1, 2)), trap: 'halved the total' },
-  ]));
+  const ask = rng.pick(['single', 'two', 'payout'] as SpinAsk[]);
+  const k = ask === 'payout' ? rng.int(2, 5) : 1;
+  const j = ask === 'payout' ? rng.nonZeroInt(-6, 6) : 0;
+  const answer = ask === 'single' ? mean : ask === 'two' ? mean.mul(E(2)) : mean.mul(E(k)).add(E(j));
+  if (!isCleanExact(answer).ok || answer.isZero()) return null;
+  let question: string;
+  let solution: string;
+  let must: { value: Exact | null; trap: string }[];
+  let extra: { value: Exact | null; trap: string }[];
+  const sumTerms = xs.map((x, i) => `${tx(pf[i])} \\times ${x}`).join(' + ');
+  if (ask === 'single') {
+    question = 'Find the expected score for one spin.';
+    solution = `$E(X) = ${sumTerms} = ${tx(mean)}$.`;
+    must = [
+      { value: plainMean, trap: 'averaged the three scores, ignoring the probabilities' },
+      { value: E(xs[0] + xs[1] + xs[2]), trap: 'added the scores' },
+      { value: uniqueMode ? E(xs[parts.indexOf(maxPart)]) : null, trap: 'gave the most likely score' },
+      { value: reversed, trap: 'paired the scores with the wrong probabilities' },
+    ];
+    extra = [
+      { value: mean.mul(E(3)), trap: 'multiplied by the number of outcomes' },
+      { value: mean.add(E(1)), trap: 'slip of one' },
+      { value: mean.mul(frac(1, 2)), trap: 'halved the total' },
+    ];
+  } else if (ask === 'two') {
+    question = 'The spinner is spun twice. Find the expected value of the total score.';
+    solution = `$E(X) = ${sumTerms} = ${tx(mean)}$, and expectation adds, so the expected total is $2 \\times ${tx(mean)} = ${tx(answer)}$.`;
+    must = [
+      { value: mean, trap: 'gave the expected score for one spin only' },
+      { value: mean.mul(mean), trap: 'multiplied the two spins instead of adding them' },
+      { value: plainMean.mul(E(2)), trap: 'averaged the three scores, ignoring the probabilities' },
+      { value: reversed.mul(E(2)), trap: 'paired the scores with the wrong probabilities' },
+    ];
+    extra = [
+      { value: E(2 * (xs[0] + xs[1] + xs[2])), trap: 'added the scores and doubled' },
+      { value: mean.mul(frac(1, 2)), trap: 'halved instead of doubling' },
+      { value: E(2 * xs[2]), trap: 'assumed the highest score both times' },
+    ];
+  } else {
+    question = `The random variable $X$ is the score on one spin. Find $E(${k}X ${j > 0 ? `+ ${j}` : `- ${-j}`})$.`;
+    solution = `$E(X) = ${sumTerms} = ${tx(mean)}$, so $E(${k}X ${j > 0 ? '+' : '-'} ${Math.abs(j)}) = ${k} \\times ${tx(mean)} ${j > 0 ? '+' : '-'} ${Math.abs(j)} = ${tx(answer)}$.`;
+    must = [
+      { value: mean.mul(E(k)), trap: `forgot the $${j > 0 ? '+' : '-'} ${Math.abs(j)}$` },
+      { value: mean.add(E(j)), trap: `forgot to multiply $E(X)$ by $${k}$` },
+      { value: mean.add(E(j)).mul(E(k)), trap: `multiplied the constant by $${k}$ as well` },
+      { value: mean.mul(E(k)).sub(E(j)), trap: 'used the constant with the wrong sign' },
+    ];
+    extra = [
+      { value: plainMean.mul(E(k)).add(E(j)), trap: 'averaged the three scores, ignoring the probabilities' },
+      { value: mean, trap: 'gave $E(X)$ rather than $E(aX + b)$' },
+      { value: reversed.mul(E(k)).add(E(j)), trap: 'paired the scores with the wrong probabilities' },
+    ];
+  }
+  const distractors = ranked(rng, answer, cleanOnly(must), cleanOnly(extra));
   return {
-    stem: `A biased spinner scores $${xs[0]}$ with probability $${tx(pf[0])}$, $${xs[1]}$ with probability $${tx(pf[1])}$ and $${xs[2]}$ with probability $${tx(pf[2])}$. Find the expected score for one spin.`,
+    stem: `A biased spinner scores $${xs[0]}$ with probability $${tx(pf[0])}$, $${xs[1]}$ with probability $${tx(pf[1])}$ and $${xs[2]}$ with probability $${tx(pf[2])}$. ${question}`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
     options: valueOptions(rng, answer, distractors),
-    solution: `$E(X) = ${xs.map((x, i) => `${tx(pf[i])} \\times ${x}`).join(' + ')} = ${tx(answer)}$.`,
-    trap: 'E(X) = Σ x p — weight each score by its own probability.',
+    solution,
+    trap: 'E(X) = Σ x p — weight each score by its own probability, then E(aX + b) = aE(X) + b.',
     tags: ['probability', 'expected-value', 'spinner'],
-    params: { variant: 'fraction-spinner', xs, parts, d },
+    params: { variant: 'fraction-spinner', xs, parts, d, ask, k, j },
     typedAllowed: true,
   };
 }
@@ -408,7 +489,7 @@ export default defineTemplate({
     2: 'the expected score of a spinner with repeated sectors',
     3: 'a £2 stake, a £5 prize with probability ¼ → expected profit −¾',
     4: 'expected number of sixes in 12 rolls, or E(X) from a distribution in words',
-    5: 'the fair stake or fair prize, or E(X) with probabilities given as fractions',
+    5: 'the fair stake or fair prize, or E(X) and E(aX + b) with probabilities given as fractions',
   },
   generate(rng, level: Level) {
     return retry(rng, () => {
@@ -423,11 +504,23 @@ export default defineTemplate({
     if (q.answer.kind !== 'exact') return false;
     const got = q.answer.value.toNumber();
     const close = (x: number) => Number.isFinite(x) && Math.abs(got - x) < 1e-9 * Math.max(1, Math.abs(x));
+    /** Average a list of equally likely outcome values, one at a time. */
+    const meanOf = (outcomes: number[]): number => {
+      let sum = 0;
+      for (const v of outcomes) sum += v;
+      return sum / outcomes.length;
+    };
+    /** The sample space of a spinner: one entry per sector. */
+    const sectors = (values: number[], counts: number[]): number[] => {
+      const out: number[] = [];
+      counts.forEach((f, i) => { for (let s = 0; s < f; s++) out.push(values[i]); });
+      return out;
+    };
     const p = q.params as {
       variant: string; mode?: string; s?: number; faces?: number; good?: number; n?: number;
       values?: number[]; freqs?: number[]; pn?: number; pd?: number; qn?: number; qd?: number;
       prize?: number; cost?: number; xs?: number[]; tenths?: number[]; parts?: number[]; d?: number;
-      m1?: number; m2?: number;
+      m1?: number; m2?: number; ask?: SpinAsk; k?: number; j?: number;
     };
     switch (p.variant) {
       case 'dice-total': {
@@ -455,28 +548,61 @@ export default defineTemplate({
         return close(hits / total);
       }
       case 'spinner': {
-        const { values, freqs } = p as { values: number[]; freqs: number[] };
-        const n = freqs.reduce((a, b) => a + b, 0);
-        return close(values.reduce((acc, v, i) => acc + v * freqs[i], 0) / n);
+        // Build the sample space (one entry per sector) and average it, rather than
+        // re-running the Σ f·v that generate() used.
+        const { values, freqs, n } = p as { values: number[]; freqs: number[]; n: number };
+        const space = sectors(values, freqs);
+        if (space.length !== n) return false;
+        return close(meanOf(space));
       }
-      case 'game':
-        return close((p.pn! / p.pd!) * p.prize! - p.cost!);
-      case 'trials':
-        return close(p.n! * (p.pn! / p.pd!));
+      case 'game': {
+        // Enumerate the pd equally likely outcomes of one play: pn of them win the prize.
+        const { pn, pd, prize, cost } = p as { pn: number; pd: number; prize: number; cost: number };
+        const plays: number[] = [];
+        for (let i = 0; i < pd; i++) plays.push(i < pn ? prize - cost : -cost);
+        return close(meanOf(plays));
+      }
+      case 'trials': {
+        // Build the whole distribution of the count trial by trial, then take Σ k·P(k).
+        const { pn, pd, n } = p as { pn: number; pd: number; n: number };
+        const prob = pn / pd;
+        let dist = [1];
+        for (let i = 0; i < n; i++) {
+          const next = new Array<number>(dist.length + 1).fill(0);
+          dist.forEach((w, k) => { next[k] += w * (1 - prob); next[k + 1] += w * prob; });
+          dist = next;
+        }
+        const total = dist.reduce((acc, w) => acc + w, 0);
+        if (Math.abs(total - 1) > 1e-9) return false;
+        return close(dist.reduce((acc, w, k) => acc + k * w, 0));
+      }
       case 'distribution': {
+        // Enumerate the ten equally likely tenths.
         const { xs, tenths } = p as { xs: number[]; tenths: number[] };
-        if (tenths.reduce((a, b) => a + b, 0) !== 10) return false;
-        return close(xs.reduce((acc, x, i) => acc + (x * tenths[i]) / 10, 0));
+        const space = sectors(xs, tenths);
+        if (space.length !== 10) return false;
+        return close(meanOf(space));
       }
       case 'fair-prize':
         // The game is fair when the expected winnings equal the stake.
         return Math.abs((p.pn! / p.pd!) * got - p.cost!) < 1e-9;
-      case 'fair-stake':
-        return close((p.pn! / p.pd!) * p.m1! + (p.qn! / p.qd!) * p.m2!);
+      case 'fair-stake': {
+        // Enumerate L equally likely outcomes and check the expected profit at this stake is 0.
+        const { pn, pd, qn, qd, m1, m2 } = p as { pn: number; pd: number; qn: number; qd: number; m1: number; m2: number };
+        const L = lcm(pd, qd);
+        const win1 = (pn * L) / pd, win2 = (qn * L) / qd;
+        if (!Number.isInteger(win1) || !Number.isInteger(win2) || win1 + win2 > L) return false;
+        const plays: number[] = [];
+        for (let i = 0; i < L; i++) plays.push(i < win1 ? m1 - got : i < win1 + win2 ? m2 - got : -got);
+        return Math.abs(meanOf(plays)) < 1e-9 * Math.max(1, m1);
+      }
       case 'fraction-spinner': {
-        const { xs, parts, d } = p as { xs: number[]; parts: number[]; d: number };
-        if (parts.reduce((a, b) => a + b, 0) !== d) return false;
-        return close(xs.reduce((acc, x, i) => acc + (x * parts[i]) / d, 0));
+        // Enumerate the d equally likely sectors, average them, then apply the asked-for step.
+        const { xs, parts, d, ask, k, j } = p as { xs: number[]; parts: number[]; d: number; ask: SpinAsk; k: number; j: number };
+        const space = sectors(xs, parts);
+        if (space.length !== d) return false;
+        const mean = meanOf(space);
+        return close(ask === 'single' ? mean : ask === 'two' ? 2 * mean : k * mean + j);
       }
       default:
         return false;

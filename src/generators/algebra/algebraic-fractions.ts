@@ -186,11 +186,11 @@ function build(rng: RNG, variant: Variant): Generated | null {
       const num = [c * c, 0, -a * a];
       const stem = `Simplify $${fr(poly(num), linear(c, s * a))}$.`;
       return choiceQ(rng, stem, [{ num, den: [c, s * a] }], { num: [c, -s * a], den: [] }, [
-        { f: { num: [c, s * a], den: [] }, trap: `sign error: the other factor is ${linear(c, -a)}` },
+        { f: { num: [c, s * a], den: [] }, trap: `sign error: the factor that survives is ${linear(c, -s * a)}` },
         { f: { num: [c, -s * a * a], den: [] }, trap: 'cancelled x² with x and left the constants: terms cannot be cancelled' },
         { f: { num: [c, 0], den: [] }, trap: 'cancelled term by term' },
         { f: { num: [-c, s * a], den: [] }, trap: 'sign of the whole expression wrong' },
-        { f: { num: [c, -s * a], den: [[c, s * a]] }, trap: `factorised the numerator as (${linear(c, -a)})² so nothing cancelled` },
+        { f: { num: [c, -s * a], den: [[c, s * a]] }, trap: `factorised the numerator as (${linear(c, -s * a)})² so nothing cancelled` },
         ...(c === 1 ? [] : [{ f: { num: [1, -s * a], den: [] }, trap: 'did not square-root the x² coefficient when factorising' }]),
       ], `Factorise the numerator: $${poly(num)} = (${linear(c, a)})(${linear(c, -a)})$, then cancel the $(${linear(c, s * a)})$: the result is $${linear(c, -s * a)}$.`, 'Only common factors cancel, never individual terms: (x² − 9)/(x + 3) is not x − 9.', ['difference-of-squares']);
     }
@@ -269,7 +269,7 @@ function build(rng: RNG, variant: Variant): Generated | null {
         let options;
         try {
           options = buildSetOptions(rng, [E(t)], cleanSets([
-            { values: [E(t), E(-t)], trap: 'assumed ± : here the quadratic is a perfect square with one repeated root' },
+            { values: [E(t), E(-t)], trap: 'put ± on the root: this quadratic is a perfect square, with one repeated root' },
             { values: [E(-t)], trap: 'sign error in the root' },
             { values: [E(t), E(kk)], trap: 'took the two numbers in the equation as the roots' },
             { values: [E(kk)], trap: 'gave the numerator k instead of the root' },

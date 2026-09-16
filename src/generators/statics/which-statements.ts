@@ -12,6 +12,10 @@ import type { RNG } from '../../core/rng';
  * Level 4: a diver at depth — liquid pressure, total pressure, and why doubling the depth does not double it
  * Level 5: a hydraulic jack (force, pressure, distances, work); a particle in equilibrium under three forces
  *
+ * Two rules keep the statements answerable: a force is only ever named by its magnitude when the two
+ * magnitudes differ, and every scenario's `note` is a function of the three statement kinds actually
+ * drawn, so the worked solution quotes no quantity that the stem does not state.
+ *
  * verify() recomputes every statement's truth from the raw numbers in params with an explicit
  * moment / pressure / upthrust calculation, then rebuilds the expected option text from the truth vector.
  */
@@ -39,9 +43,12 @@ interface Scenario {
   pool: Stmt[];
   params: Record<string, number>;
   trap: string;
-  note: string;
+  /** the working the three chosen statements need — and nothing they do not */
+  note: (kinds: string[]) => string;
   /** pairs of statement kinds that must not appear together */
   exclusive?: [string, string][];
+  /** at least one of these kinds must be among the three drawn (keeps a calculation in the question) */
+  requireAny?: string[];
 }
 
 /** A numeric statement: half the time it quotes the correct value, otherwise one of the wrong ones. */
@@ -53,14 +60,21 @@ function numeric(rng: RNG, kind: string, correct: number, wrongs: number[], text
 
 const bool = (kind: string, text: string, truth: boolean): Stmt => ({ kind, claim: truth ? 1 : 0, text, truth });
 
+const has = (kinds: string[], ...ks: string[]): boolean => ks.some((k) => kinds.includes(k));
+
 // ------------------------------------------------------------------------------------------ scenarios
+
+const D_POOL = [0.2, 0.25, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2];
+const F_POOL = [10, 12, 15, 20, 24, 25, 30, 40, 50, 60, 80, 100];
 
 /** A light rod on a pivot with one force each side: moments, balance, direction of turning. */
 function rodOnPivot(rng: RNG): Scenario | null {
-  const d1 = rng.pick([0.2, 0.25, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2]);
-  const d2 = rng.pick([0.2, 0.25, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2].filter((v) => v !== d1));
-  const F1 = rng.pick([10, 12, 15, 20, 24, 25, 30, 40, 50, 60, 80, 100]);
-  const F2 = rng.bool(0.5) ? sig((F1 * d1) / d2) : rng.pick([10, 12, 15, 20, 24, 25, 30, 40, 50, 60, 80, 100]);
+  const d1 = rng.pick(D_POOL);
+  const d2 = rng.pick(D_POOL.filter((v) => v !== d1));
+  const F1 = rng.pick(F_POOL);
+  // The statements name a force by its magnitude, so the two magnitudes must differ.
+  const F2 = rng.bool(0.5) ? sig((F1 * d1) / d2) : rng.pick(F_POOL.filter((v) => v !== F1));
+  if (eq(F2, F1)) return null;
   if (!Number.isInteger(F2 * 2) || F2 < 5 || F2 > 200) return null;
   const m1 = sig(F1 * d1), m2 = sig(F2 * d2);
   if (!Number.isInteger(m1 * 4) || !Number.isInteger(m2 * 4)) return null;
@@ -76,14 +90,25 @@ function rodOnPivot(rng: RNG): Scenario | null {
   if (balanced) pool.push(numeric(rng, 'pivot-force', sig(F1 + F2), [F1, F2, sig(Math.abs(F1 - F2))], (c) => `The downward force on the pivot is ${N(c)}.`));
   return {
     scenario: 'rod',
-    intro: `A light rod rests on a pivot. A force of ${N(F1)} acts vertically downwards at a point ${M(d1)} from the pivot, and a force of ${N(F2)} acts vertically downwards at a point ${M(d2)} from the pivot on the other side.`,
+    intro: `A light rod is held horizontal on a pivot and then released. A force of ${N(F1)} acts vertically downwards at a point ${M(d1)} from the pivot, and a force of ${N(F2)} acts vertically downwards at a point ${M(d2)} from the pivot on the other side.`,
     pool,
     params: { F1, d1, F2, d2 },
     trap: 'Comparing the forces is not enough: it is force × distance from the pivot that decides which way a rod turns.',
-    note: `Moments about the pivot: $${num(F1)} \\times ${num(d1)} = ${num(m1)}$ N m and $${num(F2)} \\times ${num(d2)} = ${num(m2)}$ N m, so the rod ${balanced ? 'balances' : `turns towards the $${num(m1 > m2 ? F1 : F2)}$ N force`}.`,
-    exclusive: [['turns-towards-1', 'bigger-moment-1'], ['balanced', 'turns-towards-1']],
+    note: (kinds) => {
+      const parts = [`Moments about the pivot: $${num(F1)} \\times ${num(d1)} = ${num(m1)}$ N m and $${num(F2)} \\times ${num(d2)} = ${num(m2)}$ N m.`];
+      if (has(kinds, 'balanced', 'turns-towards-1', 'bigger-moment-1', 'pivot-force')) {
+        parts.push(balanced ? 'The two moments are equal, so the rod stays horizontal.' : `The moment of the $${num(m1 > m2 ? F1 : F2)}$ N force is the larger, so the rod turns that way.`);
+      }
+      if (kinds.includes('pivot-force')) parts.push(`The pivot carries both forces: $${num(F1)} + ${num(F2)} = ${num(F1 + F2)}$ N.`);
+      if (kinds.includes('double-distance')) parts.push('A moment is proportional to the distance from the pivot, so twice the distance is twice the moment.');
+      return parts.join(' ');
+    },
+    exclusive: [['turns-towards-1', 'bigger-moment-1'], ['balanced', 'turns-towards-1'], ['moment1', 'moment2']],
   };
 }
+
+/** Liquids a block might be put into, used for the "would it float in …" statement. */
+const OTHER_RHO = [600, 700, 800, 900, 1000, 1100, 1200, 1300, 1500];
 
 /** A block floating with a stated fraction of its volume submerged. */
 function floatingBlock(rng: RNG): Scenario | null {
@@ -95,7 +120,13 @@ function floatingBlock(rng: RNG): Scenario | null {
   const mass = sig((rhoB * V) / 1e6);
   if (!Number.isInteger(mass * 100) || mass < 0.05) return null;
   const W = sig(mass * G);
-  const other = rng.pick([700, 900, 1300, 1500].filter((r) => r !== rhoF));
+  // The other liquid must be clearly denser or clearly less dense than the block: at exactly rho_block
+  // the block is neutrally buoyant and "would it float?" has no clean answer.
+  const cands = OTHER_RHO.filter((r) => r !== rhoF && Math.abs(r - rhoB) >= 0.15 * rhoB);
+  const below = cands.filter((r) => r < rhoB), above = cands.filter((r) => r > rhoB);
+  const side = rng.bool(0.5) && below.length > 0 ? below : above.length > 0 ? above : below;
+  if (side.length === 0) return null;
+  const other = rng.pick(side);
   const percent = `$${num(f * 100)}\\%$`;
   return {
     scenario: 'float',
@@ -111,7 +142,15 @@ function floatingBlock(rng: RNG): Scenario | null {
     ],
     params: { rhoF, f, rhoB, V, mass, other },
     trap: 'A floating body displaces its own weight of liquid, so the fraction submerged is ρ_body/ρ_liquid — not the other way up.',
-    note: `Floating: upthrust $=$ weight, so $\\rho_{\\text{block}} = ${num(f)} \\times ${num(rhoF)} = ${num(rhoB)}$ kg m$^{-3}$, mass $= ${num(rhoB)} \\times ${num(V)} \\times 10^{-6} = ${num(mass)}$ kg and the upthrust equals the weight, $${num(W)}$ N.`,
+    note: (kinds) => {
+      const parts = [`Floating: upthrust $=$ weight, so $\\rho_{\\text{block}} = ${num(f)} \\times ${num(rhoF)} = ${num(rhoB)}$ kg m$^{-3}$.`];
+      if (has(kinds, 'mass', 'upthrust', 'upthrust-equals-weight')) parts.push(`Mass $= ${num(rhoB)} \\times ${num(V)} \\times 10^{-6} = ${num(mass)}$ kg.`);
+      if (has(kinds, 'upthrust', 'upthrust-equals-weight')) parts.push(`The upthrust equals that weight, $${num(mass)} \\times 10 = ${num(W)}$ N.`);
+      if (kinds.includes('volume-submerged')) parts.push(`Volume displaced $= ${num(f)} \\times ${num(V)} = ${num(sig(f * V))}$ cm$^{3}$.`);
+      if (kinds.includes('floats-in-other')) parts.push(`It floats in any liquid denser than $${num(rhoB)}$ kg m$^{-3}$ and sinks in any liquid less dense.`);
+      if (kinds.includes('denser-liquid')) parts.push('A denser liquid needs less volume displaced to give the same upthrust.');
+      return parts.join(' ');
+    },
     exclusive: [['upthrust-equals-weight', 'upthrust']],
   };
 }
@@ -138,7 +177,11 @@ function beamOnSupports(rng: RNG): Scenario | null {
     ],
     params: { L, Wb, W, d },
     trap: 'The support nearer the load carries more of it; only the beam’s own weight is shared equally.',
-    note: `Moments about $B$: $R_A \\times ${num(L)} = ${num(Wb)} \\times ${num(L / 2)} + ${num(W)} \\times ${num(L - d)}$, so $R_A = ${num(RA)}$ N and $R_B = ${num(Wb + W)} - ${num(RA)} = ${num(RB)}$ N.`,
+    note: (kinds) => {
+      const parts = [`Moments about $B$: $R_A \\times ${num(L)} = ${num(Wb)} \\times ${num(L / 2)} + ${num(W)} \\times ${num(L - d)}$, so $R_A = ${num(RA)}$ N and $R_B = ${num(Wb + W)} - ${num(RA)} = ${num(RB)}$ N.`];
+      if (has(kinds, 'equal-at-centre', 'half-each')) parts.push('The beam’s own weight acts at the centre and is shared equally; only the load’s position breaks the symmetry.');
+      return parts.join(' ');
+    },
     exclusive: [['ra-greater', 'half-each'], ['ra', 'rb']],
   };
 }
@@ -167,7 +210,15 @@ function diver(rng: RNG): Scenario | null {
     ],
     params: { rho, h, A },
     trap: 'Total pressure is 100 kPa + ρgh, so doubling the depth doubles only the ρgh part — the atmosphere is still there.',
-    note: `$\\rho g h = ${num(rho)} \\times 10 \\times ${num(h)} = ${num(pw * 1000)}$ Pa $= ${num(pw)}$ kPa, so the total is $${num(P_ATM)} + ${num(pw)} = ${num(total)}$ kPa; a force $= pA = ${num(total)} \\times 10^{3} \\times ${num(A)} = ${num(force)}$ N.`,
+    note: (kinds) => {
+      const parts = [`$\\rho g h = ${num(rho)} \\times 10 \\times ${num(h)} = ${num(pw * 1000)}$ Pa $= ${num(pw)}$ kPa.`];
+      if (has(kinds, 'total-pressure', 'double-total', 'force')) parts.push(`Total pressure $= ${num(P_ATM)} + ${num(pw)} = ${num(total)}$ kPa.`);
+      if (kinds.includes('force')) parts.push(`Force $= pA = ${num(total)} \\times 10^{3} \\times ${num(A)} = ${num(force)}$ N.`);
+      if (kinds.includes('double-total')) parts.push('Doubling the depth doubles the $\\rho g h$ part only: the $100$ kPa of atmosphere is still there.');
+      if (kinds.includes('double-liquid')) parts.push('$\\rho g h$ is proportional to $h$.');
+      if (has(kinds, 'all-directions', 'depends-on-area')) parts.push('Pressure in a liquid depends only on the depth (and the density), not on the width of the container, and acts equally in every direction.');
+      return parts.join(' ');
+    },
     exclusive: [['double-total', 'double-liquid'], ['water-pressure', 'total-pressure']],
   };
 }
@@ -198,7 +249,17 @@ function hydraulicJack(rng: RNG): Scenario | null {
     ],
     params: { a1, a2, F1, d1 },
     trap: 'A jack multiplies force, never energy: the large piston moves as many times less as its force is times bigger.',
-    note: `Equal pressure: $F_2 = ${num(F1)} \\times \\frac{${num(a2)}}{${num(a1)}} = ${num(F2)}$ N; equal volumes swept: $d_2 = ${num(d1)} \\div ${num(k)} = ${num(d2)}$ cm, so the work $F d$ is the same on both sides.`,
+    note: (kinds) => {
+      const parts: string[] = [];
+      if (kinds.includes('pressure')) parts.push(`Pressure $= \\dfrac{${num(F1)}}{${num(a1)} \\times 10^{-4}} = ${num(p * 1000)}$ Pa $= ${num(p)}$ kPa.`);
+      if (has(kinds, 'force2', 'same-pressure', 'work-multiplied') || parts.length === 0) {
+        parts.push(`The pressure is the same at both pistons, so $F_2 = ${num(F1)} \\times \\frac{${num(a2)}}{${num(a1)}} = ${num(F2)}$ N.`);
+      }
+      if (kinds.includes('distance2')) parts.push(`Equal volumes are swept: $d_2 = ${num(d1)} \\div ${num(k)} = ${num(d2)}$ cm.`);
+      else if (has(kinds, 'small-moves-further', 'work-multiplied')) parts.push(`Equal volumes are swept, so the large piston moves $${num(k)}$ times less than the small one.`);
+      if (has(kinds, 'small-moves-further', 'work-multiplied')) parts.push('The work $Fd$ is therefore the same on both sides.');
+      return parts.join(' ');
+    },
   };
 }
 
@@ -222,8 +283,14 @@ function threeForces(rng: RNG): Scenario | null {
     ],
     params: { east, north, c },
     trap: 'Forces add as vectors: 3 N and 4 N at right angles give 5 N, never 7 N.',
-    note: `The resultant of the two given forces is $\\sqrt{${num(east)}^2 + ${num(north)}^2} = ${num(c)}$ N pointing north-east, so $F$ must be ${num(c)} N in the opposite direction (south-west) and the three forces form a closed triangle.`,
+    note: (kinds) => {
+      const parts = [`The resultant of the two given forces is $\\sqrt{${num(east)}^2 + ${num(north)}^2} = ${num(c)}$ N pointing north-east, so $F$ is ${num(c)} N in the opposite direction (south-west).`];
+      if (has(kinds, 'triangle', 'sum-zero', 'collinear')) parts.push('Three forces in equilibrium have zero vector sum, so they close a triangle and cannot be collinear unless all three act along one line.');
+      return parts.join(' ');
+    },
     exclusive: [['magnitude', 'resultant-two']],
+    // definitions alone ("sum zero", "triangle", "largest") would make this answerable without any work
+    requireAny: ['magnitude', 'resultant-two'],
   };
 }
 
@@ -248,6 +315,7 @@ function truthOf(scenario: string, kind: string, claim: number, p: Record<string
   switch (scenario) {
     case 'rod': {
       const m1 = p.F1 * p.d1, m2 = p.F2 * p.d2;
+      if (p.F1 === p.F2) return null; // "the 60 N force" would name both
       switch (kind) {
         case 'moment1': return eq(claim, m1);
         case 'moment2': return eq(claim, m2);
@@ -271,7 +339,8 @@ function truthOf(scenario: string, kind: string, claim: number, p: Record<string
         case 'upthrust': return eq(claim, upthrust);
         case 'mass': return eq(claim, mass);
         case 'denser-liquid': return true;
-        case 'floats-in-other': return density < p.other;
+        // neutral buoyancy would make this statement a matter of opinion
+        case 'floats-in-other': return Math.abs(p.other - density) < 0.1 * density ? null : density < p.other;
         case 'volume-submerged': return eq(claim * 1e-6, vSub);
       }
       return null;
@@ -357,6 +426,7 @@ export default defineTemplate({
       const chosen = rng.pickDistinct(sc.pool, 3);
       const kinds = chosen.map((s) => s.kind);
       for (const [x, y] of sc.exclusive ?? []) if (kinds.includes(x) && kinds.includes(y)) return null;
+      if (sc.requireAny && !kinds.some((k) => sc.requireAny!.includes(k))) return null;
       const truth = chosen.map((s) => s.truth) as [boolean, boolean, boolean];
       const options = statementOptions(truth);
       const correct = options.find((o) => o.correct)!.display;
@@ -366,7 +436,7 @@ export default defineTemplate({
         stem,
         answer: { kind: 'choice' as const, value: correct },
         options,
-        solution: `${verdicts}. ${sc.note}`,
+        solution: `${verdicts}. ${sc.note(kinds)}`,
         trap: sc.trap,
         tags: ['statics', 'statements', sc.scenario],
         params: { scenario: sc.scenario, ...sc.params, statements: chosen.map((s) => ({ kind: s.kind, claim: s.claim })), truth },
@@ -377,6 +447,9 @@ export default defineTemplate({
   verify(q) {
     if (q.answer.kind !== 'choice') return false;
     const p = q.params as Record<string, number> & { scenario: string; statements: { kind: string; claim: number }[]; truth: boolean[] };
+    // the three statements must be distinguishable: two identical texts cannot have opposite truth values
+    const texts = q.stem.split('\n').filter((l) => /^(I|II|III)\. /.test(l)).map((l) => l.replace(/^(I|II|III)\. /, '').trim());
+    if (texts.length !== 3 || new Set(texts).size !== 3) return false;
     const truth: boolean[] = [];
     for (const s of p.statements) {
       const t = truthOf(p.scenario, s.kind, s.claim, p);

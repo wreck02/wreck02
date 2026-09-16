@@ -153,10 +153,10 @@ function build(rng: RNG, variant: Variant): Generated | null {
         ...(variant === 'abs-x-plus' ? [
           { values: [E(b + a), E(-(b + a))], trap: 'added the constant instead of subtracting it' },
           { values: [E(b), E(-b)], trap: 'ignored the constant' },
-          { values: [E(a), E(-a)], trap: 'solved |x| = a instead of isolating |x| first' },
+          { values: [E(Math.abs(a)), E(-Math.abs(a))], trap: 'used the constant on the left-hand side instead of isolating |x| first' },
         ] : [
           { values: [E(k * k), E(-k * k)], trap: 'squared instead of solving' },
-          { values: [E(-k), E(0)], trap: 'took 0 as the second solution' },
+          { values: [E(-k), E(0)], trap: 'kept the negative root and took 0 as the other solution' },
         ]),
         { values: [E(k), E(0)], trap: 'took 0 as the second solution' },
       ];

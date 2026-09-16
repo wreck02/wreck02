@@ -8,20 +8,26 @@ import type { RNG } from '../../core/rng';
  * V = IR and the three power formulas (P = VI = I²R = V²/R), plus E = Pt.
  * Level 1: V = IR, I = V/R, R = V/I and P = VI with clean numbers
  * Level 2: P = I²R and P = V²/R (values chosen so the power is a whole number of watts)
- * Level 3: E = Pt in J or kJ; the current an appliance draws from a 12 V, 24 V or 240 V supply
+ * Level 3: E = Pt in J or kJ (the time is always in minutes, so a conversion is always needed);
+ *          the current an appliance draws from a 12 V, 24 V or 240 V supply
  * Level 4: the resistance of a lamp from its rating (60 W, 240 V → 960 Ω); I = √(P/R); heat in a resistor in t s
  * Level 5: ratios — P ∝ V² when the supply p.d. changes, R ∝ V²/P for two lamps (answer a fraction),
  *          and the power dissipated in one resistor of a series pair
  *
- * Answers carry their unit (V, A, W, Ω, J, kJ); the resistance ratios are bare fractions. Every wrong option is
- * a named mistake (P = VI², R = V × I, P ∝ V, kJ for J, the rated power at the wrong p.d.); parameters that
- * cannot supply four distinct clean ones are redrawn rather than padded.
+ * Answers carry their unit (V, A, W, Ω, J, kJ); the resistance ratios are bare fractions. Because
+ * `buildOptions` appends the answer's unit to every option, a "J vs kJ" or "W vs kW" slip cannot be
+ * expressed here at all — such a candidate would print as "96000 kJ", which is not what the mistake
+ * produces — so those candidates are not offered; the unit traps live in which-statements, where each
+ * statement carries its own unit. Every wrong option is a named mistake (P = VI², R = V × I, P ∝ V,
+ * the rated power at the wrong p.d., the time left in minutes); the ×2 / ÷2 / ×10 near-misses are a
+ * last resort (`spare`) used only when the named traps do not yield four distinct clean values, and
+ * parameters that still cannot supply four are redrawn rather than padded.
  */
 
 const U_V = '\\text{V}', U_A = '\\text{A}', U_W = '\\text{W}', U_OHM = '\\text{Ω}', U_J = '\\text{J}', U_KJ = '\\text{kJ}';
 
 type Mode = 'decimal' | 'fraction';
-type Candidate = { value: Exact | null; trap: string; /** a unit slip: allowed to sit far from the answer */ wide?: boolean };
+type Candidate = { value: Exact | null; trap: string };
 
 /** Plain number for a stem: 1200, 0.05, 21.6. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
@@ -39,6 +45,37 @@ const supply = (v: number): string => {
   const art = i === 8 || i === 11 || i === 18 || (i >= 80 && i <= 89) ? 'an' : 'a';
   return `${art} ${n(v)} V supply`;
 };
+const Supply = (v: number): string => supply(v).charAt(0).toUpperCase() + supply(v).slice(1);
+
+// --------------------------------------------------------------------------- plausible devices
+
+interface Device { subject: string; noun: string }
+const dev = (subject: string, noun: string): Device => ({ subject, noun });
+const COMPONENT = dev('A component', 'component');
+
+/** An appliance whose power rating reads naturally, for a stem that quotes no supply p.d. */
+function deviceForPower(rng: RNG, P: number): Device {
+  if (P >= 1500) return rng.pick([dev('An electric kettle', 'kettle'), dev('An immersion heater', 'heater'), dev('An electric heater', 'heater')]);
+  if (P >= 600) return rng.pick([dev('A toaster', 'toaster'), dev('A microwave oven', 'oven'), dev('A hairdryer', 'hairdryer')]);
+  if (P >= 150) return rng.pick([dev('A desktop computer', 'computer'), dev('A television', 'television'), dev('A food mixer', 'mixer')]);
+  if (P >= 20) return rng.pick([dev('A television', 'television'), dev('A filament lamp', 'lamp'), dev('A laptop charger', 'charger')]);
+  return rng.pick([dev('A filament lamp', 'lamp'), dev('A radio', 'radio')]);
+}
+
+/**
+ * A device name that suits the supply p.d. as well as the power. The exam would not print a 480 W desk
+ * lamp, nor a heater drawing 10 A from a 9 V supply: when the pair (V, P) fits no appliance the stem
+ * just says "a component". Below 12 V only a torch-sized load (≤ 12 W, ≤ 1.5 A) keeps a name.
+ */
+function deviceFor(rng: RNG, V: number, P: number): Device {
+  if (V >= 100) return deviceForPower(rng, P);
+  if (V < 12) return P <= 12 && P / V <= 1.5 ? rng.pick([dev('A torch lamp', 'lamp'), dev('A small electric motor', 'motor')]) : COMPONENT;
+  if (P > 250) return COMPONENT;
+  if (P <= 60) return rng.pick([dev('A filament lamp', 'lamp'), dev('A cooling fan', 'fan'), dev('A small electric motor', 'motor')]);
+  return dev('An electric motor', 'motor');
+}
+
+// --------------------------------------------------------------------------- option plumbing
 
 /** Exact value of a computed quantity, or null if it is not an exam-clean number. */
 function val(x: number): Exact | null {
@@ -75,8 +112,10 @@ function ratio(a: number, b: number): Exact | null {
 }
 
 /**
- * Positive, finite, clean, exam-sized option values. Anything more than 100 times the answer (or less than a
- * hundredth of it) is dropped: an option no candidate would consider wastes a line.
+ * Positive, finite, clean, exam-sized option values. Every option carries the answer's unit, so the
+ * window is absolute: anything more than 100 times the answer (or less than a hundredth of it) is
+ * dropped, an option no candidate would consider. The limit is 100 rather than 20 because the named
+ * "left the time in minutes" slip is exactly a factor of 60; nothing wider is ever offered.
  */
 function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
   const a = answer.toNumber();
@@ -85,7 +124,7 @@ function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !v.isRational() || !isCleanExact(v).ok) return false;
     const x = v.toNumber();
     if (x < 0.001 || x > 5e6) return false;
-    if (!d.wide && (x > 100 * a || x < a / 100)) return false;
+    if (x > 100 * a || x < a / 100) return false;
     const d2 = v.toRat().d;
     if (mode === 'fraction') return d2 <= 24n;
     if (!readable(v)) return false;
@@ -93,8 +132,12 @@ function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
   });
 }
 
-/** Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled out. */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled
+ * out; `spare` near-misses (doubled, halved, a decimal place out) are taken last, only when the named
+ * mistakes did not yield four distinct clean values.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
@@ -104,6 +147,7 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   };
   must.forEach(take);
   rng.shuffle(extra).forEach(take);
+  rng.shuffle(spare).forEach(take);
   return out;
 }
 
@@ -124,6 +168,8 @@ interface Pack {
   mode?: Mode;
   must: Candidate[];
   extra: Candidate[];
+  /** generic near-misses, used only if the named mistakes ran short */
+  spare?: Candidate[];
   solution: string;
   trap: string;
   tags: string[];
@@ -135,7 +181,13 @@ function pack(rng: RNG, p: Pack): Generated | null {
   if (!isCleanExact(p.answer).ok || p.answer.sign() <= 0) return null;
   if (mode !== 'fraction' && !readable(p.answer)) return null;
   const format: NumberFormat = mode === 'fraction' ? 'fraction' : 'decimal';
-  const ds = ranked(rng, p.answer, cleanOnly(p.must, mode, p.answer), cleanOnly(p.extra, mode, p.answer));
+  const ds = ranked(
+    rng,
+    p.answer,
+    cleanOnly(p.must, mode, p.answer),
+    cleanOnly(p.extra, mode, p.answer),
+    cleanOnly(p.spare ?? [], mode, p.answer),
+  );
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -170,10 +222,14 @@ function ohmVQ(rng: RNG): Generated | null {
       { value: val(I + R), trap: 'added the current and the resistance' },
     ],
     extra: [
-      { value: val(I / R), trap: 'inverted the product' },
-      { value: val(V * I), trap: 'gave the power VI, not the p.d.' },
+      { value: val(I / R), trap: 'inverted the product: divided the current by the resistance' },
+      { value: val(V * I), trap: 'gave the power VI in watts, not the p.d.' },
+      { value: val(R - I), trap: 'subtracted the current from the resistance' },
+    ],
+    spare: [
       { value: val(2 * V), trap: 'doubled the p.d.' },
       { value: val(V / 2), trap: 'halved the p.d.' },
+      { value: val(10 * V), trap: 'slipped a decimal place' },
     ],
     solution: `$V = IR = ${n(I)} \\times ${R} = ${n(V)}\\ \\text{V}$.`,
     trap: 'V = IR is a product: dividing gives neither the p.d. nor the power.',
@@ -190,7 +246,7 @@ function ohmIQ(rng: RNG): Generated | null {
   const answer = val(I);
   if (!answer) return null;
   return pack(rng, {
-    stem: `${supply(V).charAt(0).toUpperCase() + supply(V).slice(1)} is connected across a resistor of resistance ${R} Ω. Find the current in the resistor.`,
+    stem: `${Supply(V)} is connected across a resistor of resistance ${R} Ω. Find the current in the resistor.`,
     answer,
     unit: U_A,
     must: [
@@ -198,7 +254,11 @@ function ohmIQ(rng: RNG): Generated | null {
       { value: val(R / V), trap: 'divided the resistance by the p.d.' },
     ],
     extra: [
-      { value: val(V * I), trap: 'gave the power, not the current' },
+      { value: val((V * V) / R), trap: 'gave the power V²/R in watts, not the current' },
+      { value: val(V - R), trap: 'subtracted the resistance from the p.d.' },
+      { value: val(V / (R * R)), trap: 'divided by R² instead of R' },
+    ],
+    spare: [
       { value: val(2 * I), trap: 'doubled the current' },
       { value: val(I / 2), trap: 'halved the current' },
       { value: val(10 * I), trap: 'slipped a decimal place' },
@@ -206,7 +266,7 @@ function ohmIQ(rng: RNG): Generated | null {
     solution: `$I = \\dfrac{V}{R} = \\dfrac{${n(V)}}{${R}} = ${n(I)}\\ \\text{A}$.`,
     trap: 'I = V/R: the current is the p.d. divided by the resistance, not their product.',
     tags: ['ohms-law', 'current'],
-    params: { variant: 'ohm-i', I, R },
+    params: { variant: 'ohm-i', V, R },
   });
 }
 
@@ -217,8 +277,9 @@ function ohmRQ(rng: RNG): Generated | null {
   if (!Number.isInteger(V) || V < 6 || V > 300 || I === R) return null;
   const answer = val(R);
   if (!answer) return null;
+  const d = deviceFor(rng, V, r(V * I));
   return pack(rng, {
-    stem: `A lamp draws a current of ${n(I)} A from ${supply(V)}. Find the resistance of the lamp.`,
+    stem: `${d.subject} draws a current of ${n(I)} A from ${supply(V)}. Find the resistance of the ${d.noun}.`,
     answer,
     unit: U_OHM,
     must: [
@@ -227,6 +288,10 @@ function ohmRQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(V - I), trap: 'subtracted the current from the p.d.' },
+      { value: val(V / (I * I)), trap: 'divided by I² instead of I (that mixes R = V/I with P = I²R)' },
+      { value: val(I * I * V), trap: 'multiplied by the current twice' },
+    ],
+    spare: [
       { value: val(2 * R), trap: 'doubled the resistance' },
       { value: val(R / 2), trap: 'halved the resistance' },
       { value: val(10 * R), trap: 'slipped a decimal place' },
@@ -234,7 +299,7 @@ function ohmRQ(rng: RNG): Generated | null {
     solution: `$R = \\dfrac{V}{I} = \\dfrac{${n(V)}}{${n(I)}} = ${R}\\ \\Omega$.`,
     trap: 'R = V/I. The product V × I is the power in watts, not the resistance.',
     tags: ['ohms-law', 'resistance'],
-    params: { variant: 'ohm-r', I, R },
+    params: { variant: 'ohm-r', I, V },
   });
 }
 
@@ -245,9 +310,9 @@ function powerVIQ(rng: RNG): Generated | null {
   if (!Number.isInteger(P) || P < 2 || P > 3000 || V === I) return null;
   const answer = val(P);
   if (!answer) return null;
-  const device = rng.pick(['An electric motor', 'A small heater', 'A lamp', 'A cooling fan']);
+  const d = deviceFor(rng, V, P);
   return pack(rng, {
-    stem: `${device} draws a current of ${n(I)} A from a ${V} V supply. Find the power of the ${device.split(' ').slice(1).join(' ')}.`,
+    stem: `${d.subject} draws a current of ${n(I)} A from ${supply(V)}. Find the power transferred to the ${d.noun}.`,
     answer,
     unit: U_W,
     must: [
@@ -257,8 +322,12 @@ function powerVIQ(rng: RNG): Generated | null {
     extra: [
       { value: val(V + I), trap: 'added the p.d. and the current' },
       { value: val(V * V * I), trap: 'squared the p.d. as well' },
-      { value: val(P / 1000), trap: 'gave the answer in kW', wide: true },
+      { value: val(V * I * I * I), trap: 'cubed the current' },
+    ],
+    spare: [
       { value: val(2 * P), trap: 'doubled the power' },
+      { value: val(P / 2), trap: 'halved the power' },
+      { value: val(10 * P), trap: 'slipped a decimal place' },
     ],
     solution: `$P = VI = ${V} \\times ${n(I)} = ${n(P)}\\ \\text{W}$.`,
     trap: 'P = VI. Squaring belongs to the other two forms: P = I²R and P = V²/R.',
@@ -285,10 +354,14 @@ function powerI2RQ(rng: RNG): Generated | null {
       { value: val(I * R * R), trap: 'squared the resistance instead of the current' },
     ],
     extra: [
+      { value: val(2 * I * R), trap: 'doubled the current instead of squaring it' },
       { value: val((I * I) / R), trap: 'divided by R instead of multiplying' },
+      { value: val(I * I * R * R), trap: 'squared the resistance as well as the current' },
+    ],
+    spare: [
       { value: val(2 * P), trap: 'doubled the power' },
       { value: val(P / 2), trap: 'halved the power' },
-      { value: val(P / 1000), trap: 'gave the answer in kW', wide: true },
+      { value: val(10 * P), trap: 'slipped a decimal place' },
     ],
     solution: `$P = I^2 R = ${n(I)}^2 \\times ${R} = ${n(I * I)} \\times ${R} = ${n(P)}\\ \\text{W}$.`,
     trap: 'In P = I²R only the current is squared; IR is the p.d. across the resistor.',
@@ -305,7 +378,7 @@ function powerV2RQ(rng: RNG): Generated | null {
   const answer = val(P);
   if (!answer) return null;
   return pack(rng, {
-    stem: `${supply(V).charAt(0).toUpperCase() + supply(V).slice(1)} is connected across a resistor of resistance ${R} Ω. Find the power dissipated in the resistor.`,
+    stem: `${Supply(V)} is connected across a resistor of resistance ${R} Ω. Find the power dissipated in the resistor.`,
     answer,
     unit: U_W,
     must: [
@@ -313,10 +386,14 @@ function powerV2RQ(rng: RNG): Generated | null {
       { value: val(V * R), trap: 'multiplied instead of dividing' },
     ],
     extra: [
+      { value: val(V * V), trap: 'squared the p.d. but forgot to divide by the resistance' },
       { value: val((V * V) / (R * R)), trap: 'squared the resistance as well' },
+      { value: val((2 * V) / R), trap: 'doubled the p.d. instead of squaring it' },
+    ],
+    spare: [
       { value: val(2 * P), trap: 'doubled the power' },
       { value: val(P / 2), trap: 'halved the power' },
-      { value: val(P / 1000), trap: 'gave the answer in kW', wide: true },
+      { value: val(10 * P), trap: 'slipped a decimal place' },
     ],
     solution: `$P = \\dfrac{V^2}{R} = \\dfrac{${V * V}}{${R}} = ${n(P)}\\ \\text{W}$.`,
     trap: 'P = V²/R: square the p.d., not the resistance. V/R alone is the current.',
@@ -328,12 +405,13 @@ function powerV2RQ(rng: RNG): Generated | null {
 // --------------------------------------------------------------------------- level 3
 
 function energyPtQ(rng: RNG): Generated | null {
-  const inKW = rng.bool(0.6);
+  const inKW = rng.bool(0.5);
   const Pstated = inKW ? rng.pick([0.5, 1, 1.2, 1.5, 2, 2.4, 3]) : rng.pick([40, 50, 60, 75, 100, 150, 200, 250, 500]);
   const P = inKW ? r(Pstated * 1000) : Pstated;
-  const inMin = rng.bool(0.6);
-  const tStated = inMin ? rng.pick([2, 3, 4, 5, 10, 15, 20]) : rng.pick([20, 30, 40, 60, 90]);
-  const t = inMin ? tStated * 60 : tStated;
+  // The time is always stated in minutes: at this level the question is about converting before multiplying,
+  // and with the time already in seconds a "×60" distractor would answer a question the stem never asked.
+  const tStated = rng.pick([2, 3, 4, 5, 10, 15, 20]);
+  const t = tStated * 60;
   const Ej = r(P * t);
   if (Ej < 500 || Ej > 3e6) return null;
   const inKJ = Ej >= 10000;
@@ -343,24 +421,34 @@ function energyPtQ(rng: RNG): Generated | null {
   const unit = inKJ ? U_KJ : U_J;
   const unitName = inKJ ? 'kJ' : 'J';
   const pText = inKW ? `${n(Pstated)} kW` : `${Pstated} W`;
-  const tText = inMin ? `${tStated} minute${tStated === 1 ? '' : 's'}` : `${tStated} s`;
-  const device = rng.pick(['An electric heater', 'A kettle', 'An immersion heater', 'A toaster']);
+  const tText = `${tStated} minute${tStated === 1 ? '' : 's'}`;
+  const d = deviceForPower(rng, P);
+  // Both minute slips are real, but offering "÷ 60" and "× 60" together would stretch the option list
+  // over a factor of 3600, so each question shows one of them.
+  const overshoot = rng.bool(0.4);
   return pack(rng, {
-    stem: `${device} of power ${pText} is switched on for ${tText}. Find the energy it transfers, in ${unitName}.`,
+    stem: `${d.subject} of power ${pText} is switched on for ${tText}. Find the energy it transfers, in ${unitName}.`,
     answer,
     unit,
     must: [
-      { value: val(Pstated * tStated), trap: `multiplied the numbers as they stand (${pText} × ${tText}) without converting to watts and seconds` },
-      { value: val(Ej * (inKJ ? 1 : 1 / 1000)), trap: inKJ ? 'gave the energy in J, not kJ' : 'gave the energy in kJ, not J', wide: true },
+      { value: overshoot ? null : val(Pstated * tStated), trap: `multiplied the numbers as they stand (${pText} × ${tText}) without converting` },
+      { value: overshoot ? null : val(P * tStated * scale), trap: 'left the time in minutes instead of converting it to seconds' },
     ],
     extra: [
-      { value: val((P / t) * scale), trap: 'divided the power by the time' },
-      { value: val(P * scale), trap: 'gave the power, not the energy', wide: true },
-      { value: val(2 * Ej * scale), trap: 'doubled the energy' },
-      { value: val(Ej * scale * 60), trap: 'multiplied by 60 once too often' },
+      { value: overshoot ? val(Ej * scale * 60) : null, trap: 'multiplied by 60 once too often' },
+      { value: val((P + t) * scale), trap: 'added the power and the time instead of multiplying' },
+      { value: inKW ? val(Pstated * t * scale) : null, trap: 'left the power in kilowatts instead of converting it to watts' },
     ],
-    solution: `$E = Pt = ${n(P)} \\times ${t} = ${n(Ej)}\\ \\text{J}${inKJ ? ` = ${n(Ej / 1000)}\\ \\text{kJ}` : ''}$.`,
-    trap: 'E = Pt needs watts and seconds: convert kW to W and minutes to seconds before multiplying, then convert J to kJ.',
+    spare: [
+      { value: val(2 * Ej * scale), trap: 'doubled the energy' },
+      { value: val((Ej * scale) / 2), trap: 'halved the energy' },
+      { value: val(3 * Ej * scale), trap: 'tripled the energy' },
+      { value: val((Ej * scale) / 4), trap: 'quartered the energy' },
+    ],
+    solution: `$E = Pt = ${n(P)} \\times ${t} = ${n(Ej)}\\ \\text{J}${inKJ ? ` = ${n(Ej / 1000)}\\ \\text{kJ}` : ''}$ (${tText} $= ${t}$ s).`,
+    trap: inKW
+      ? 'E = Pt needs watts and seconds: turn the kW into W and the minutes into seconds before multiplying.'
+      : 'E = Pt needs the time in seconds: multiply the minutes by 60 first, and only once.',
     tags: ['energy', 'power', 'time'],
     params: { variant: 'energy-pt', P, t, inKJ },
   });
@@ -375,22 +463,25 @@ function currentFromRatingQ(rng: RNG): Generated | null {
   const Pstated = inKW ? r(P / 1000) : P;
   const answer = val(I);
   if (!answer) return null;
-  const device = P >= 500
-    ? rng.pick(['An electric kettle', 'A hairdryer', 'A microwave oven', 'A toaster'])
-    : rng.pick(['A television', 'A desk lamp', 'A laptop charger', 'A small fan']);
+  const d = deviceFor(rng, V, P);
   return pack(rng, {
-    stem: `${device} of power ${n(Pstated)} ${inKW ? 'kW' : 'W'} is connected to a ${V} V supply. Find the current it draws.`,
+    stem: `${d.subject} of power ${n(Pstated)} ${inKW ? 'kW' : 'W'} is connected to ${supply(V)}. Find the current it draws.`,
     answer,
     unit: U_A,
     must: [
-      { value: val(P * V), trap: 'multiplied instead of dividing: I = P/V' },
-      { value: inKW ? val(Pstated / V) : val(V / P), trap: inKW ? 'forgot to convert kW to W' : 'divided the p.d. by the power', wide: true },
+      { value: val(V / P), trap: 'inverted the fraction: divided the p.d. by the power' },
+      { value: inKW ? val(Pstated / V) : val(P / (V * V)), trap: inKW ? 'left the rating in kilowatts instead of watts' : 'divided by V² instead of V' },
     ],
     extra: [
-      { value: val(V / P), trap: 'inverted the fraction' },
+      { value: val((V * V) / P), trap: 'gave the resistance of the appliance, not the current' },
+      { value: inKW ? val(Pstated) : null, trap: 'quoted the power rating in kilowatts as the current' },
+      { value: val(P * V), trap: 'multiplied instead of dividing: I = P/V' },
+    ],
+    spare: [
+      { value: val((P / V) * 10), trap: 'slipped a decimal place' },
+      { value: val(P / V / 10), trap: 'slipped a decimal place' },
       { value: val((P / V) * 2), trap: 'doubled the current' },
       { value: val(P / V / 2), trap: 'halved the current' },
-      { value: val((P / V) * 10), trap: 'slipped a decimal place' },
     ],
     solution: `$P = VI$, so $I = \\dfrac{P}{V} = \\dfrac{${P}}{${V}} = ${n(I)}\\ \\text{A}$.`,
     trap: 'Divide the power in watts by the supply p.d.; a rating in kW must be turned into watts first.',
@@ -409,7 +500,11 @@ function bulbResistanceQ(rng: RNG): Generated | null {
   if (!Number.isInteger(P) || !Number.isInteger(R) || P < 6 || P > 3000 || R > 2000) return null;
   const answer = val(R);
   if (!answer) return null;
-  const device = P >= 500 ? rng.pick(['An electric heater', 'An immersion heater']) : P >= 150 ? rng.pick(['A filament lamp', 'A soldering iron']) : 'A filament lamp';
+  // a rating question needs a resistive appliance, and the power alone fixes which one is plausible
+  const device = P >= 1000
+    ? rng.pick(['An electric heater', 'An immersion heater', 'An electric kettle'])
+    : P >= 300 ? rng.pick(['A soldering iron', 'An electric heater'])
+      : P >= 15 ? 'A filament lamp' : 'A torch lamp';
   return pack(rng, {
     stem: `${device} is rated ${P} W, ${V} V. Find its resistance when it is operating normally.`,
     answer,
@@ -419,8 +514,12 @@ function bulbResistanceQ(rng: RNG): Generated | null {
       { value: val(P / V), trap: 'gave the current the device draws, not its resistance' },
     ],
     extra: [
+      { value: val(P), trap: 'quoted the power rating as the resistance' },
+      { value: val(V), trap: 'quoted the rated p.d. as the resistance' },
       { value: val(V * P), trap: 'multiplied instead of dividing' },
       { value: val((P * P) / V), trap: 'squared the power instead of the p.d.' },
+    ],
+    spare: [
       { value: val(2 * R), trap: 'doubled the resistance' },
       { value: val(R / 2), trap: 'halved the resistance' },
     ],
@@ -451,16 +550,23 @@ function heatInResistorQ(rng: RNG): Generated | null {
     unit: inKJ ? U_KJ : U_J,
     must: [
       { value: val(I * R * t * scale), trap: 'forgot to square the current' },
-      { value: val(P * tStated * scale), trap: inMin ? 'used the time in minutes instead of seconds' : 'used the power, not the energy' },
+      { value: inMin ? val(P * tStated * scale) : null, trap: 'left the time in minutes instead of converting it to seconds' },
     ],
     extra: [
-      { value: val(P * scale), trap: 'gave the power, not the energy', wide: true },
-      { value: val(Ej * (inKJ ? 1 : 1 / 1000)), trap: inKJ ? 'gave the energy in J, not kJ' : 'gave the energy in kJ, not J', wide: true },
+      { value: val(2 * I * R * t * scale), trap: 'doubled the current instead of squaring it' },
       { value: val(I * I * R * R * t * scale), trap: 'squared the resistance as well' },
+      // the power in watts is only a plausible wrong answer when the answer itself is in joules
+      { value: inKJ ? null : val(P), trap: 'gave the power in watts, not the energy' },
+    ],
+    spare: [
       { value: val(2 * Ej * scale), trap: 'doubled the energy' },
+      { value: val((Ej * scale) / 2), trap: 'halved the energy' },
+      { value: val((Ej * scale) * 10), trap: 'slipped a decimal place' },
     ],
     solution: `$P = I^2R = ${n(I * I)} \\times ${R} = ${n(P)}\\ \\text{W}$, so $E = Pt = ${n(P)} \\times ${t} = ${n(Ej)}\\ \\text{J}${inKJ ? ` = ${n(Ej / 1000)}\\ \\text{kJ}` : ''}$.`,
-    trap: 'Square the current, then multiply by the time in seconds; IRt misses the second factor of I.',
+    trap: inMin
+      ? 'Square the current, then multiply by the time in seconds — the minutes must be converted first.'
+      : 'Square the current before multiplying by R and t; IRt misses the second factor of I.',
     tags: ['heating-effect', 'energy', 'i2r'],
     params: { variant: 'heat-in-resistor', I, R, t, inKJ },
   });
@@ -484,6 +590,9 @@ function currentFromPRQ(rng: RNG): Generated | null {
     extra: [
       { value: val(P / (R * R)), trap: 'divided by R² instead of R' },
       { value: val(R / P), trap: 'inverted the fraction' },
+      { value: val(P / (2 * R)), trap: 'halved P/R instead of taking its square root' },
+    ],
+    spare: [
       { value: val(2 * I), trap: 'doubled the current' },
       { value: val(I / 2), trap: 'halved the current' },
     ],
@@ -517,7 +626,10 @@ function voltageScaledQ(rng: RNG): Generated | null {
       { value: val(P1 / k), trap: 'scaled the power the wrong way round, linearly' },
       { value: val(P1 * k * k * k), trap: 'cubed the p.d. ratio' },
       { value: val(P1), trap: 'assumed the power is unchanged' },
+    ],
+    spare: [
       { value: val(2 * P2), trap: 'doubled the answer' },
+      { value: val(P2 / 2), trap: 'halved the answer' },
     ],
     solution: `$P = \\dfrac{V^2}{R}$ with $R$ fixed, so $P \\propto V^2$. The p.d. is multiplied by $${n(k)}$, so the power is multiplied by $${n(k * k)}$: $${P1} \\times ${n(k * k)} = ${n(P2)}\\ \\text{W}$.`,
     trap: 'Doubling the p.d. quadruples the power: P ∝ V² at constant resistance.',
@@ -550,6 +662,8 @@ function resistanceRatioQ(rng: RNG): Generated | null {
       extra: [
         { value: ratio(P2 * P2, P1 * P1), trap: 'squared the power ratio' },
         { value: ratio(P1 * P1, P2 * P2), trap: 'squared the inverted ratio' },
+      ],
+      spare: [
         { value: ratio(2 * P2, P1), trap: 'arithmetic slip in the ratio' },
         { value: ratio(P2, 2 * P1), trap: 'arithmetic slip in the ratio' },
       ],
@@ -575,6 +689,8 @@ function resistanceRatioQ(rng: RNG): Generated | null {
       { value: ratio(V2, V1), trap: 'inverted the ratio and forgot to square it' },
       { value: E(1), trap: 'assumed equal power ratings mean equal resistances' },
       { value: ratio(V1 * V1 * V1, V2 * V2 * V2), trap: 'cubed the p.d. ratio' },
+    ],
+    spare: [
       { value: ratio(2 * V1, V2), trap: 'arithmetic slip in the ratio' },
     ],
     solution: `$R = \\dfrac{V^2}{P}$ with $P$ the same for both, so $\\dfrac{R_1}{R_2} = \\dfrac{V_1^2}{V_2^2} = \\dfrac{${V1 * V1}}{${V2 * V2}} = ${answer.toLatex()}$.`,
@@ -606,7 +722,11 @@ function seriesPowerQ(rng: RNG): Generated | null {
       { value: val(I * I * R2), trap: 'found the power in the other resistor' },
       { value: val(I * R1), trap: 'that is the p.d. across the resistor, in volts' },
       { value: val(V / (R1 + R2)), trap: 'gave the current, not the power' },
+      { value: val(I * (R1 + R2)), trap: 'used the total resistance with P = IR' },
+    ],
+    spare: [
       { value: val(2 * P1), trap: 'doubled the power' },
+      { value: val(P1 / 2), trap: 'halved the power' },
     ],
     solution: `Series: $R = ${R1} + ${R2} = ${R1 + R2}\\ \\Omega$, so $I = \\dfrac{${n(V)}}{${R1 + R2}} = ${n(I)}\\ \\text{A}$ and $P = I^2R_1 = ${n(I * I)} \\times ${R1} = ${n(P1)}\\ \\text{W}$.`,
     trap: 'Only part of the supply p.d. is across each resistor; use the common current with P = I²R.',
@@ -652,14 +772,15 @@ export default defineTemplate({
         return Math.abs(R - p.R) < 1e-9 && Math.abs(got * p.I - p.I * p.I * p.R) < 1e-9;
       }
       case 'ohm-i': {
-        // substitute back: this current through R must produce the stated supply p.d.
-        const V = p.I * p.R;
-        return Math.abs(got * p.R - V) < 1e-9 && Math.abs(got * got * p.R - V * got) < 1e-9;
+        // build the p.d. this current would produce by adding R/2 volts for each half-amp and compare
+        // with the p.d. printed in the stem, then cross-check with the power
+        let V = 0;
+        for (let i = 0; i < Math.round(got * 2); i++) V += p.R / 2;
+        return Math.abs(V - p.V) < 1e-9 && Math.abs(got * got * p.R - p.V * got) < 1e-9;
       }
       case 'ohm-r': {
-        // the resistance found must dissipate the same power as P = VI
-        const V = p.I * p.R;
-        return Math.abs(p.I * p.I * got - V * p.I) < 1e-9 && close(p.R);
+        // substitute into the printed p.d., and cross-check by the power: I²R must equal VI
+        return Math.abs(got * p.I - p.V) < 1e-9 && Math.abs(p.I * p.I * got - p.V * p.I) < 1e-9;
       }
       case 'power-vi': {
         // energy route: in 5 s a charge of 5I coulombs passes through a p.d. of V volts

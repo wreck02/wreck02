@@ -10,7 +10,7 @@ import type { RNG } from '../../core/rng';
  * Level 2: quotients: (0.0498 × 19.7) / 0.51 ≈ (0.05 × 20) / 0.5 = 2
  * Level 3: square roots and squares: √0.0398 ≈ √0.04 = 0.2; 3.1² × 19.8 ≈ 9 × 20 = 180
  * Level 4: order of magnitude of a real quantity from data in the stem (seconds in a year ≈ 3 × 10^7 → 10^7),
- *          a choice between five consecutive powers of ten
+ *          a choice between five powers of ten, each wrong one a named slip (a factor of 60 or 1000 dropped)
  * Level 5: standard form: (5.02 × 10^3)² / (2.1 × 10^-2) ≈ 25 × 10^6 / 0.02 = 1.25 × 10^9
  *
  * Every raw number is built as (integer mantissa) × 10^k, so its decimal string is exact and verify()

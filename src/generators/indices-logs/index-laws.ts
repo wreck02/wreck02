@@ -10,7 +10,7 @@ import type { RNG } from '../../core/rng';
  * Level 1: a^m × a^n and a^m ÷ a^n → find k in a^k
  * Level 2: (a^m)^n, mixed bases 2^3 × 4^2 = 2^k, and an expression that collapses to a^0 = 1
  * Level 3: negative and fractional indices: 8^x = 2^12, 9^(1/2) × 3^4 = 3^k, write 1/8 or √32 as a power of 2
- * Level 4: simplify (2^n)² × 8 / 4^n as a single power of 2 (choice of 2^{…} expressions)
+ * Level 4: simplify (2^n)² × 8 / 4^n, (3^(n+1))² / 27^n, 25^n × 25 / 5^n … as a single power (choice)
  * Level 5: solve 2^(x+2) − 2^x = 24, or 3^(2x) = 27^(x−1)
  *
  * Wrong options are named mistakes: multiplying exponents when multiplying powers, adding when raising
@@ -544,7 +544,7 @@ export default defineTemplate({
     1: '2^3 × 2^4 = 2^k, 5^7 ÷ 5^2 = 5^k',
     2: '(2^3)^4, 2^3 × 4^2 = 2^k, expressions equal to a^0',
     3: '8^x = 2^12, 9^(1/2) × 3^4 = 3^k, 1/8 and √32 as powers of 2',
-    4: 'simplify (2^n)² × 8 / 4^n as 2^{…} (choice)',
+    4: 'simplify (2^n)² × 8 / 4^n, (2^(n+1))³ / 8^n, 9^n × 27 / 3^n … as a single power (choice)',
     5: 'solve 2^(x+2) − 2^x = 24, 3^(2x) = 27^(x−1)',
   },
   generate(rng, level: Level) {

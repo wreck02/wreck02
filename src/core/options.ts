@@ -16,6 +16,12 @@ export const OPTION_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 export interface Distractor {
   value: Exact;
   trap?: string;
+  /**
+   * Mark the headline mistakes a question is really testing. `must` distractors are
+   * considered before the rest, so the option list always offers the trap the question
+   * is built around instead of losing it to the shuffle.
+   */
+  must?: boolean;
 }
 
 export interface BuildOptionsConfig {
@@ -66,7 +72,8 @@ export function buildOptions(rng: RNG, answer: Exact, distractors: (Exact | Dist
   // Distractors must be exam-plausible numbers too: drop anything failing the clean-number rule.
   const isNew = (v: Exact) => Number.isFinite(v.toNumber()) && isCleanExact(v).ok && !seen.some((s) => s.equals(v));
   const candidates = rng.shuffle(distractors.map((d) => (d instanceof Exact ? { value: d } : d)));
-  for (const d of candidates) {
+  // Headline traps first (in their own shuffled order), then everything else.
+  for (const d of [...candidates.filter((c) => c.must), ...candidates.filter((c) => !c.must)]) {
     if (chosen.length >= count - 1) break;
     if (isNew(d.value)) { seen.push(d.value); chosen.push(d); }
   }
@@ -106,12 +113,13 @@ function sameSet(a: Exact[], b: Exact[]): boolean {
 }
 
 /** Options for set answers (e.g. roots of a quadratic). */
-export function buildSetOptions(rng: RNG, answer: Exact[], distractors: (Exact[] | { values: Exact[]; trap?: string })[], cfg: SetOptionsConfig = {}): Option[] {
+export function buildSetOptions(rng: RNG, answer: Exact[], distractors: (Exact[] | { values: Exact[]; trap?: string; must?: boolean })[], cfg: SetOptionsConfig = {}): Option[] {
   const count = cfg.count ?? 5;
   const seen: Exact[][] = [answer];
   const chosen: { values: Exact[]; trap?: string }[] = [];
   const isNew = (v: Exact[]) => v.every((x) => isCleanExact(x).ok) && !seen.some((s) => sameSet(s, v));
-  const cands = rng.shuffle(distractors.map((d) => (Array.isArray(d) ? { values: d } : d)));
+  const shuffled = rng.shuffle(distractors.map((d) => (Array.isArray(d) ? { values: d } : d)));
+  const cands = [...shuffled.filter((c) => c.must), ...shuffled.filter((c) => !c.must)];
   for (const d of cands) {
     if (chosen.length >= count - 1) break;
     if (isNew(d.values)) { seen.push(d.values); chosen.push(d); }
@@ -138,14 +146,22 @@ export function buildSetOptions(rng: RNG, answer: Exact[], distractors: (Exact[]
 }
 
 /** Options for 'choice' answers: plain MathText strings. */
-export function buildChoiceOptions(rng: RNG, correct: string, wrong: (string | { display: string; trap?: string })[], count = 5): Option[] {
+export function buildChoiceOptions(
+  rng: RNG,
+  correct: string,
+  wrong: (string | { display: string; trap?: string; must?: boolean; key?: string })[],
+  count = 5,
+): Option[] {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
   const seen = new Set([norm(correct)]);
   const chosen: { display: string; trap?: string }[] = [];
-  for (const w of rng.shuffle(wrong.map((w) => (typeof w === 'string' ? { display: w } : w)))) {
+  const shuffled = rng.shuffle(wrong.map((w) => (typeof w === 'string' ? { display: w } : w)));
+  for (const w of [...shuffled.filter((c) => c.must), ...shuffled.filter((c) => !c.must)]) {
     if (chosen.length >= count - 1) break;
-    const k = norm(w.display);
-    if (!seen.has(k)) { seen.add(k); chosen.push(w); }
+    // `key` lets a template declare that two differently written options mean the same
+    // value (e.g. "ln 24" and "ln 4 + ln 6"), so only one of them can be offered.
+    const k = w.key ? `k:${norm(w.key)}` : norm(w.display);
+    if (!seen.has(k) && !seen.has(norm(w.display))) { seen.add(k); seen.add(norm(w.display)); chosen.push(w); }
   }
   if (chosen.length < count - 1) throw new Error(`buildChoiceOptions: only ${chosen.length + 1} distinct options`);
   const all: Option[] = [{ key: '', display: correct, correct: true }, ...chosen.map((c) => ({ key: '', display: c.display, correct: false, trap: c.trap }))];

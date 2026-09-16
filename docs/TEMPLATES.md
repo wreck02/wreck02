@@ -109,8 +109,15 @@ clean too: never pad with weird fractions.
   constant, wrong index law (adding instead of multiplying powers), off-by-one (n vs n−1), unit slip
   (cm vs m, kW vs W), swapped numerator/denominator, forgetting to square, using diameter in πr²,
   mixing sin/cos, forgetting a factor of ½, dividing instead of multiplying, taking the wrong root.
+* Mark the one or two mistakes the question is really testing with `must: true`
+  (`{ value, trap, must: true }`). Those are considered before the rest, so the trap the question is built
+  around is never lost to the shuffle. Do not mark more than `count - 1` of them.
+* For `buildChoiceOptions`, two options that are written differently but mean the same value (for example
+  `$x = \ln 24$` and `$x = \ln 4 + \ln 6$`) must not both appear. Give such options the same `key` and the
+  builder will offer at most one of them.
 * Do not include a distractor equal to the answer or unclean numbers; `buildOptions` drops duplicates and
-  pads with generic perturbations only if you ran short (that is a smell — give better distractors).
+  anything failing the clean-number rule, and pads with generic perturbations only if you ran short (that is
+  a smell — give better distractors).
 
 ## 6. Solutions and traps
 

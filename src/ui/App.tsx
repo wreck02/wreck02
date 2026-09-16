@@ -69,7 +69,7 @@ function Screen({ nav }: { nav: Nav }) {
   const r = nav.route;
   switch (r.name) {
     case 'home': return <Home nav={nav} />;
-    case 'setup': return <Setup nav={nav} mode={r.mode} />;
+    case 'setup': return <Setup nav={nav} mode={r.mode} prefill={r.prefill} />;
     case 'run': return <Runner key={r.config.seed + r.config.mode} nav={nav} config={r.config} />;
     case 'report': return <Report nav={nav} sessionId={r.sessionId} />;
     case 'analytics': return <Analytics nav={nav} />;

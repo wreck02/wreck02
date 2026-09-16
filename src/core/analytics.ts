@@ -39,7 +39,6 @@ export interface Stats {
 }
 
 function stats(key: string, name: string, xs: Attempt[]): Stats {
-  const answered = xs.filter((a) => !a.skipped);
   const times = xs.map((a) => a.timeMs);
   const correct = xs.filter((a) => a.correct).length;
   const med = median(times);
@@ -54,7 +53,7 @@ function stats(key: string, name: string, xs: Attempt[]): Stats {
     p75Ms: percentile(times, 0.75),
     paceGapSec: xs.length ? med / 1000 - PACE_SECONDS : NaN,
     overPaceCount: xs.filter(overPace).length,
-    problemCount: xs.filter((a) => !a.correct || overPace(a)).length + (xs.length - answered.length) * 0,
+    problemCount: xs.filter((a) => !a.correct || overPace(a)).length,
   };
 }
 

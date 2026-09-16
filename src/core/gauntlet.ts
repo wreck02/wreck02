@@ -59,7 +59,7 @@ export function gauntletStep(s: GauntletState, correct: boolean, timeMs: number)
 }
 
 /** Persistent record of the highest sustained level per topic. */
-export type GauntletRecords = Record<string, { sustained: Level; peak: Level; at: number; runs: number }>;
+export type GauntletRecords = Record<string, { sustained: Level | 0; peak: Level; at: number; runs: number }>;
 
 export function loadGauntletRecords(): GauntletRecords {
   return load<GauntletRecords>(KEYS.gauntlet, {});
@@ -67,9 +67,9 @@ export function loadGauntletRecords(): GauntletRecords {
 
 export function updateGauntletRecord(records: GauntletRecords, topicKey: string, state: GauntletState, at = Date.now()): GauntletRecords {
   const prev = records[topicKey];
-  const sustained = Math.max(prev?.sustained ?? 0, state.sustained) as Level;
+  const sustained = Math.max(prev?.sustained ?? 0, state.sustained) as Level | 0;
   const peak = Math.max(prev?.peak ?? 0, state.peak) as Level;
-  records[topicKey] = { sustained: (sustained || 1) as Level, peak, at, runs: (prev?.runs ?? 0) + 1 };
+  records[topicKey] = { sustained, peak, at, runs: (prev?.runs ?? 0) + 1 };
   save(KEYS.gauntlet, records);
   return records;
 }

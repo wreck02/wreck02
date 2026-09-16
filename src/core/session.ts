@@ -100,8 +100,7 @@ export function poolFor(config: Pick<SessionConfig, 'module' | 'topics' | 'templ
     const pool = TEMPLATES.filter((t) => ids.has(t.id));
     if (pool.length > 0) return pool;
   }
-  const pool = templatesFor({ module: config.module, topics: config.topics });
-  return pool.length > 0 ? pool : [...TEMPLATES];
+  return templatesFor({ module: config.module, topics: config.topics });
 }
 
 /**
@@ -188,9 +187,10 @@ export function presetConfig(mode: Mode, seed: string, overrides: Partial<Sessio
     case 'drill':
       return { ...base, timed: false, count: 10, ...overrides };
     case 'sprint':
-      return { ...base, count: SPRINT_QUESTIONS, timeLimitSec: SPRINT_SECONDS, ...overrides };
+      return { ...base, ...overrides, count: SPRINT_QUESTIONS, timeLimitSec: SPRINT_SECONDS, timed: true };
     case 'sim':
-      return { ...base, count: SIM_QUESTIONS, timeLimitSec: SIM_SECONDS, answerMode: 'mc', immediateFeedback: false, ...overrides };
+      // The exam shape is fixed: overrides may choose module/topics/seed but not the format.
+      return { ...base, ...overrides, count: SIM_QUESTIONS, timeLimitSec: SIM_SECONDS, answerMode: 'mc', immediateFeedback: false, timed: true, allowSkip: true };
     case 'gauntlet':
       return { ...base, level: 2, count: 30, ...overrides };
     case 'review':

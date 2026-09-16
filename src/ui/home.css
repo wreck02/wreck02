@@ -1,0 +1,53 @@
+/* Extra styles for Home / Setup / Settings / Help and the Heatmap component.
+   Loaded once via Home.tsx (App always imports Home), so the classes are global. */
+
+/* Cards inside a grid must not inherit the stacked-card top margin. */
+.grid > .card + .card { margin-top: 0; }
+
+.hero { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem; margin-bottom: 1rem; }
+.hero h1 { margin: 0; }
+.hero .purpose { flex-basis: 100%; margin: 0; }
+
+.section { margin-top: 1.5rem; }
+.section > h2 { margin-bottom: 0.6rem; }
+.section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; margin-bottom: 0.6rem; }
+.section-head h2 { margin: 0; }
+
+.mode-card { display: flex; flex-direction: column; gap: 0.35rem; }
+.mode-card h3 { margin: 0; }
+.mode-card p { flex: 1; margin: 0 0 0.5rem; }
+
+.stats { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.stat { padding: 0.6rem 0.75rem; border-radius: 10px; background: var(--surface-2); }
+.stat .v { font-size: 1.35rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.stat .k { font-size: 0.75rem; color: var(--muted); }
+.stat .sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
+
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { display: flex; align-items: center; gap: 0.75rem; padding: 0.45rem 0; border-bottom: 1px solid var(--border); }
+.list li:last-child { border-bottom: 0; }
+.list .grow { flex: 1; min-width: 0; }
+
+.toggle { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; min-height: 40px; }
+.toggle input { width: 1.1rem; height: 1.1rem; }
+
+.form-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.field .hint { font-size: 0.8rem; color: var(--muted); font-weight: 400; }
+.input.narrow { width: 7.5rem; }
+
+.heatmap .collabel { text-align: center; font-size: 0.75rem; color: var(--muted); }
+.heatmap button.cell { border: 0; padding: 0; width: 100%; cursor: pointer; font: inherit; font-size: 0.75rem; font-weight: 600; }
+.heatmap button.cell.empty { font-weight: 400; }
+.heatmap button.cell:hover { filter: brightness(0.95); }
+.heatmap button.cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.heatmap-legend { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; font-size: 0.75rem; color: var(--muted); }
+.heatmap-legend .bar { width: 6rem; height: 8px; border-radius: 4px; }
+
+.help h2 { margin-top: 1.25rem; }
+.help h2:first-child { margin-top: 0; }
+.help li { margin-bottom: 0.3rem; }
+
+@media (max-width: 600px) {
+  .modes.grid { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+}

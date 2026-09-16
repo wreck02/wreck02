@@ -97,6 +97,7 @@ main.page.wide { max-width: 1100px; }
   padding: 1rem 1.1rem; box-shadow: var(--shadow);
 }
 .card + .card { margin-top: 1rem; }
+.grid > .card + .card { margin-top: 0; }
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
 .row.between { justify-content: space-between; }

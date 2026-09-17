@@ -305,6 +305,12 @@ interface Form {
   usesTan: boolean;
   /** Angle pairs this form must not use, e.g. a = b where the expression would be a literal repeat like sin A sin A. */
   reject?: (a: number, b: number) => boolean;
+  /**
+   * Values the first angle may take, when the default first-quadrant trio pins the answer. A form
+   * whose answer is always the largest value it can possibly take is answerable by "pick the biggest
+   * option" once the shape is recognised, so those forms reach into the second quadrant as well.
+   */
+  anglesA?: number[];
   tex: (A: Part, B: Part) => string;
   ex: (f: Trig, a: number, b: number) => Exact;
   fl: (f: FTrig, a: number, b: number) => number;
@@ -313,9 +319,10 @@ interface Form {
   /**
    * The values this expression can possibly take, when that is obvious from its shape.
    * A sum of two squares can never be negative and $1 + \tan^2 A$ can never be below 1, so
-   * such an option is struck out on sight and does none of a distractor's work.
+   * such an option is struck out on sight and does none of a distractor's work. The angles are
+   * passed too, because a form that may use an obtuse angle is only sign-pinned when it does not.
    */
-  possible?: (x: number) => boolean;
+  possible?: (x: number, a: number, b: number) => boolean;
   /** Identity shortcut for the solution, if any. `A(d)` renders an angle in the current unit. */
   note?: (a: number, b: number, A: (d: number) => string) => string | null;
 }
@@ -361,6 +368,10 @@ const FORMS: Form[] = [
   },
   {
     id: 'sin-add', usesB: true, usesTan: false, reject: (a, b) => a === b,
+    // Restricted to the first quadrant this only ever expands to sin 90° = 1, the largest value a
+    // sine can take, so the answer was the largest option in every single instance. With an obtuse
+    // first angle it also reaches sin 150° and sin 210°.
+    anglesA: [30, 45, 60, 120, 135, 150],
     tex: (A, B) => `${A('sin')} ${B('cos')} + ${A('cos')} ${B('sin')}`,
     ex: (f, a, b) => f.s(a).mul(f.c(b)).add(f.c(a).mul(f.s(b))),
     fl: (f, a, b) => f.s(a) * f.c(b) + f.c(a) * f.s(b),
@@ -374,8 +385,9 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.s(b)), trap: 'paired the two sines' },
       { value: () => f.c(a).mul(f.c(b)), trap: 'paired the two cosines' },
     ],
-    // The expression is sin(A + B): it can never leave [-1, 1], and both products are positive here.
-    possible: (x) => x > 1e-9 && x <= 1 + 1e-9,
+    // The expression is sin(A + B): a sine, so it never leaves [-1, 1]; with both angles in the
+    // first quadrant both products are positive too.
+    possible: (x, a, b) => Math.abs(x) <= 1 + 1e-9 && (a > 90 || b > 90 || x > 1e-9),
     note: (a, b, A) => `Quick route: this is the expansion of $\\sin(A + B) = \\sin ${A(a + b)}$.`,
   },
   {
@@ -399,6 +411,9 @@ const FORMS: Form[] = [
   },
   {
     id: 'cos-diff', usesB: true, usesTan: false, reject: (a, b) => a === b,
+    // First quadrant alone gives only cos 30° = √3/2, within one option of the top of a cosine's
+    // range; an obtuse first angle adds cos 60° and cos 120°.
+    anglesA: [30, 45, 60, 120, 135, 150],
     tex: (A, B) => `${A('cos')} ${B('cos')} + ${A('sin')} ${B('sin')}`,
     ex: (f, a, b) => f.c(a).mul(f.c(b)).add(f.s(a).mul(f.s(b))),
     fl: (f, a, b) => f.c(a) * f.c(b) + f.s(a) * f.s(b),
@@ -413,8 +428,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.c(b)), trap: 'paired sin A with cos B' },
       { value: () => f.c(a).mul(f.s(b)), trap: 'paired cos A with sin B' },
     ],
-    // The expression is cos(A - B) with A, B in the first quadrant: positive and at most 1.
-    possible: (x) => x > 1e-9 && x <= 1 + 1e-9,
+    // The expression is cos(A - B): a cosine, and positive when both angles are in the first quadrant.
+    possible: (x, a, b) => Math.abs(x) <= 1 + 1e-9 && (a > 90 || b > 90 || x > 1e-9),
     note: (a, b, A) => `Quick route: this is the expansion of $\\cos(A - B) = \\cos ${A(Math.abs(a - b))}$.`,
   },
   {
@@ -454,9 +469,11 @@ const FORMS: Form[] = [
     note: (a, b, A) => (a === b ? `Quick route: $\\frac{\\cos A}{\\sin A} = \\frac{1}{\\tan A}$, so this is $\\frac{1}{\\tan ${A(a)}}$.` : null),
   },
   {
-    // A = 45° is excluded: the expression is then exactly 1 and almost every mistake lands on
-    // \u221a2/2, 1/2 or a value above 1, so there are not four distinct admissible options left.
-    id: 'double-sin', usesB: false, usesTan: false, reject: (a) => a === 45,
+    // A = 45° and A = 135° are excluded: sin 2A is then ±1, the end of a sine's range, and almost
+    // every mistake lands on √2/2, 1/2 or a value outside [-1, 1], leaving too few options. The
+    // obtuse angles are there so the answer is not always √3/2, the largest value the rest can give.
+    id: 'double-sin', usesB: false, usesTan: false, reject: (a) => a === 45 || a === 135,
+    anglesA: [30, 60, 120, 150],
     tex: (A) => `2 ${A('sin')} ${A('cos')}`,
     ex: (f, a) => f.s(a).mul(f.c(a)).mulRat(2),
     fl: (f, a) => 2 * f.s(a) * f.c(a),
@@ -472,8 +489,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.c(a)).mulRat(HALF), trap: 'used $\\sin A\\cos A = \\tfrac{1}{2}\\sin 2A$ the wrong way round' },
       { value: () => f.s(a).pow(2).mulRat(2), trap: 'squared the sine instead of multiplying by the cosine' },
     ],
-    // The expression is sin 2A with A in the first quadrant: strictly between 0 and 1 inclusive.
-    possible: (x) => x > 1e-9 && x <= 1 + 1e-9,
+    // The expression is sin 2A: a sine, and positive when A is in the first quadrant.
+    possible: (x, a) => Math.abs(x) <= 1 + 1e-9 && (a > 90 || x > 1e-9),
     note: (a, _b, A) => `Quick route: $2\\sin A \\cos A = \\sin 2A = \\sin ${A(2 * a)}$.`,
   },
   {
@@ -578,8 +595,8 @@ const FLOAT_TRIG: FTrig = {
 
 /** Angles for a form: the exam prints one clean value here, not surd bookkeeping like (√6 − √2)/4, so single-term answers only. */
 function anglesFor(rng: RNG, form: Form): { a: number; b: number; answer: Exact } | null {
-  for (let i = 0; i < 30; i++) {
-    const a = rng.pick([30, 45, 60]);
+  for (let i = 0; i < 40; i++) {
+    const a = rng.pick(form.anglesA ?? [30, 45, 60]);
     const b = form.usesB ? rng.pick([30, 45, 60]) : a;
     if (form.reject?.(a, b)) continue;
     const answer = attempt(() => form.ex(EXACT_TRIG, a, b));
@@ -616,7 +633,7 @@ function expressionQ(rng: RNG): Generated | null {
   // Options must be single-term, clean and — where the expression's shape pins them down —
   // inside the range the expression can actually reach.
   const usable = (ds: { value: Exact | null; trap: string }[]) =>
-    cleanOnly(ds).filter((d) => d.value.isSingleTerm() && (!form.possible || form.possible(d.value.toNumber())));
+    cleanOnly(ds).filter((d) => d.value.isSingleTerm() && (!form.possible || form.possible(d.value.toNumber(), a, b)));
   const mistakes = form.mistakes(EXACT_TRIG, a, b).map((m) => ({ value: attempt(m.value), trap: m.trap }));
   const must = usable(mistakes.slice(0, 2));
   const extra = usable([

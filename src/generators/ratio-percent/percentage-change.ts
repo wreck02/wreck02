@@ -94,7 +94,13 @@ function assemble(rng: RNG, ans: Exact, must: Distractor[], others: Distractor[]
   const lo = fBelow + Math.max(0, need - above.length);
   const hi = fBelow + Math.min(need, below.length);
   if (lo > hi) return [...forced, ...rest].slice(0, total);
-  const r = rng.int(lo, hi);
+  // Draw the rank by thirds of the sorted list rather than uniformly over the achievable ranks: the
+  // headline trap always undershoots at levels 3 and 4, so rank 0 is out of reach and a uniform draw
+  // over 1..4 still leaves the answer in the top third 60% of the time.
+  const buckets: number[][] = [[], [], []];
+  for (let k = lo; k <= hi; k++) buckets[k / total < 0.34 ? 0 : k / total < 0.67 ? 1 : 2].push(k);
+  const live = buckets.filter((b) => b.length > 0);
+  const r = rng.pick(rng.pick(live));
   return [...forced, ...below.slice(0, r - fBelow), ...above.slice(0, need - (r - fBelow))];
 }
 
@@ -179,6 +185,11 @@ function applyChange(rng: RNG): Generated | null {
     { value: E(N + (up ? change : -change) / 10), trap: 'decimal point slip in the percentage' },
     { value: E(N).div(mult(sp)), trap: 'divided by the multiplier instead of multiplying' },
     { value: E(N).mul(mult(sp)).mul(mult(sp)), trap: 'applied the change twice' },
+    // Every mistake above pulls the same way once the direction is known (an increase question's
+    // wrong options nearly all undershoot), which pinned the answer to the top of the sorted list.
+    // These two overshoot an increase and undershoot a decrease, so both sides are live.
+    { value: tryE(() => E(N).mul(mult(2 * sp))), trap: `doubled the percentage: used ${2 * Math.abs(p)}% instead of ${p}%` },
+    { value: tryE(() => E(N).div(mult(-sp))), trap: `divided by ${multStr(-sp)}, the multiplier for a change the other way` },
   ]);
   const weak = keep([{ value: E(100 + sp), trap: 'gave the multiplier as a percentage instead of the new value' }], { exclude: [N] });
   let stem: string;
@@ -280,6 +291,12 @@ function reverse(rng: RNG): Generated | null {
     // Capped at five times the answer: for p = 5 this is twenty times the new value, and a town of
     // 1.52 million after a 5% fall from 80 000 is eliminated without any arithmetic.
     { value: 100 * newV <= 5 * p * O ? E(newV).mul(frac(100, p)) : null, trap: `treated the new value as ${p}% of the original` },
+    // Undoing a change lands nearly every mistake on the same side of the original — below it for a
+    // rise, above it for a fall — so the answer was the largest option in 80% of decrease questions.
+    // These three over-correct, and so sit on the other side in each direction.
+    { value: tryE(() => E(newV).div(mult(sp)).mul(mult(-sp))), trap: `over-corrected: undid the ${p}% change and then applied a ${p}% change the other way on top` },
+    { value: tryE(() => E(newV).div(mult(sp)).div(mult(sp))), trap: `divided by ${multStr(sp)} a second time` },
+    { value: 100 + 2 * sp > 0 ? tryE(() => E(newV).div(mult(2 * sp))) : null, trap: `doubled the percentage in the multiplier: divided by ${multStr(2 * sp)}` },
   ]);
   let stem: string;
   if (ctx === 'sale') stem = `In a sale all prices are reduced by $${p}\\%$. The sale price of a jacket is £${newV}. Find its original price in pounds.`;

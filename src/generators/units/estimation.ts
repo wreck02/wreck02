@@ -156,15 +156,15 @@ function estimate(rng: RNG, e: Est): Generated | null {
         .sort((p, q) => (Math.abs(p.k) + (p.named ? 0 : 1.5)) - (Math.abs(q.k) + (q.named ? 0 : 1.5)));
     const below = side(-1), above = side(1);
     const chosen: { k: number; trap: string; named: boolean }[] = [];
-    // An unnamed rung beyond a factor of 100 names no mistake, so at most one may appear in a list.
-    // A missed 10^3 conversion (litres for m³, grams for kilograms) is at least a slip these chains
-    // really produce; 10^4 is not, so an unnamed one of those is a last resort, used only once both
-    // sides have run out of anything better.
-    let far = 0, allowFar = false;
+    // A rung beyond a factor of 100 that no named mistake reaches is the weakest option there is: it
+    // carries only "a factor of 10^k out" and a candidate strikes it off on sight. The ordering above
+    // keeps those last, and no more than two of them may ever be used — which is what it costs to let
+    // the answer be the smallest or the largest option in a variant whose mistakes all pull one way.
+    let far = 0;
     const take = (c: { k: number; trap: string; named: boolean }): boolean => {
       if (chosen.length >= 4) return false;
       const isFar = !c.named && Math.abs(c.k) >= 3;
-      if (isFar && (far >= 1 || (Math.abs(c.k) >= 4 && !allowFar))) return false;
+      if (isFar && far >= 2) return false;
       if (cleanNum(round(target * Math.pow(10, c.k))) === null) return false;
       if (isFar) far++;
       chosen.push(c);
@@ -181,7 +181,6 @@ function estimate(rng: RNG, e: Est): Generated | null {
     };
     drain(below, rng.int(Math.max(0, 4 - above.length), Math.min(4, below.length)));
     drain(above, 4 - chosen.length);
-    allowFar = true;
     drain(below, 4 - chosen.length);
     drain(above, 4 - chosen.length);
     if (chosen.length < 4) return null;

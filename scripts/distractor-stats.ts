@@ -9,7 +9,8 @@
  *   rank      distribution of where the correct numeric answer sits when options are sorted by value
  *             (min … max); a heavy bias (e.g. always the median) gives the answer away
  *   extreme%  share of questions whose answer is the smallest or largest numeric option
- *   spread    median of max/min ratio across numeric options (huge spreads make distractors implausible)
+ *   gap       median of the largest ratio between neighbouring option values: a big gap means one
+ *             option sits far from the rest and reads as implausible (an even ladder is fine)
  *   dup%      share of questions where two options have the same numeric value to 3 s.f. (near duplicates)
  *   ms        mean generation time
  */
@@ -59,7 +60,14 @@ for (const t of TEMPLATES) {
           // is not a defect. Detect it and leave it out of the spread statistic.
           const lo = Math.min(...abs);
           const ladder = abs.every((x) => Math.abs(Math.log10(x / lo) - Math.round(Math.log10(x / lo))) < 0.02);
-          if (!ladder) s.spreads.push(Math.max(...abs) / lo);
+          if (!ladder) {
+            // The defect is one option marooned far from the others, not a wide but even
+            // spread (squares and reciprocals legitimately span two orders of magnitude).
+            const sortedAbs = abs.slice().sort((a, b) => a - b);
+            let worst = 1;
+            for (let k = 1; k < sortedAbs.length; k++) worst = Math.max(worst, sortedAbs[k] / sortedAbs[k - 1]);
+            s.spreads.push(worst);
+          }
         }
         const keys = new Set(nums.map((x) => Number(x.toPrecision(3))));
         if (keys.size < nums.length) s.dup++;
@@ -73,12 +81,12 @@ for (const t of TEMPLATES) {
     for (const r of s.ranks) rankHist[r < 0.34 ? 0 : r < 0.67 ? 1 : 2]++;
     const rk = s.ranks.length ? rankHist.map((c) => pct(c, s.ranks.length).trim()).join('/') : '–';
     const spread = s.spreads.length ? s.spreads.slice().sort((a, b) => a - b)[Math.floor(s.spreads.length / 2)] : NaN;
-    const warn = (s.unlabeled / Math.max(1, s.wrong) > 0.2 ? 'P' : '') + (s.ranks.length && rankHist.some((c) => c / s.ranks.length > 0.6) ? 'R' : '') + (s.numeric && s.extreme / s.numeric > 0.6 ? 'E' : '') + (spread > 50 ? 'S' : '') + (s.stems.size < N / 5 ? 'V' : '');
+    const warn = (s.unlabeled / Math.max(1, s.wrong) > 0.2 ? 'P' : '') + (s.ranks.length && rankHist.some((c) => c / s.ranks.length > 0.6) ? 'R' : '') + (s.numeric && s.extreme / s.numeric > 0.6 ? 'E' : '') + (spread > 25 ? 'S' : '') + (s.stems.size < N / 5 ? 'V' : '');
     if (warn) flagged++;
-    return `L${i + 1} pad${pct(s.unlabeled, s.wrong)}% rank ${rk.padEnd(8)} ext${pct(s.extreme, s.numeric)}% spr${(Number.isFinite(spread) ? spread.toFixed(0) : '–').padStart(4)} dup${pct(s.dup, s.numeric)}% var${String(s.stems.size).padStart(4)} ${warn.padEnd(4)}`;
+    return `L${i + 1} pad${pct(s.unlabeled, s.wrong)}% rank ${rk.padEnd(8)} ext${pct(s.extreme, s.numeric)}% gap${(Number.isFinite(spread) ? spread.toFixed(0) : '–').padStart(4)} dup${pct(s.dup, s.numeric)}% var${String(s.stems.size).padStart(4)} ${warn.padEnd(4)}`;
   });
   rows.push(`${t.id}\n   ${line.join('\n   ')}`);
 }
-console.log(`N=${N} per level. Flags: P = >20% unlabelled/padded options, R = answer rank biased (>60% low/mid/high), E = answer is an extreme option >60%, S = median max/min option spread > 50, V = fewer than N/5 distinct stems\n`);
+console.log(`N=${N} per level. Flags: P = >20% unlabelled/padded options, R = answer rank biased (>60% low/mid/high), E = answer is an extreme option >60%, S = one option marooned from the rest (median neighbour gap > 25x), V = fewer than N/5 distinct stems\n`);
 console.log(rows.join('\n'));
 console.log(`\n${rows.length} templates, ${flagged} template-levels flagged`);

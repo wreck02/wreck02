@@ -89,17 +89,46 @@ export function buildOptions(rng: RNG, answer: Exact, distractors: (Exact | Dist
   const chosen: Distractor[] = [];
   // Distractors must be exam-plausible numbers too: drop anything failing the clean-number rule.
   const isNew = (v: Exact) => Number.isFinite(v.toNumber()) && isCleanExact(v).ok && !seen.some((s) => s.equals(v));
+  const take = (d: Distractor): boolean => {
+    if (chosen.length >= count - 1 || !isNew(d.value)) return false;
+    seen.push(d.value);
+    chosen.push(d);
+    return true;
+  };
   const candidates = rng.shuffle(distractors.map((d) => (d instanceof Exact ? { value: d } : d)));
-  // Headline traps first (in their own shuffled order), then everything else.
+
+  /**
+   * Balance the options around the answer. If every question's distractors sit mostly
+   * on one side, the answer lands in the same sorted position every time and a candidate
+   * can pick it without doing the maths. So aim for a random split of "smaller than the
+   * answer" and "larger than the answer", taking headline traps first within each side.
+   */
+  const target = answer.toNumber();
+  const below = candidates.filter((c) => c.value.toNumber() < target);
+  const above = candidates.filter((c) => c.value.toNumber() > target);
+  const wanted = count - 1;
+  const lo = Math.max(0, wanted - above.length);
+  const hi = Math.min(wanted, below.length);
+  const nBelow = hi >= lo ? rng.int(lo, hi) : 0;
+  const bySide = (side: Distractor[], n: number) => {
+    let taken = 0;
+    for (const d of [...side.filter((c) => c.must), ...side.filter((c) => !c.must)]) {
+      if (taken >= n) break;
+      if (take(d)) taken++;
+    }
+  };
+  bySide(below, nBelow);
+  bySide(above, wanted - nBelow);
+  // Anything still missing: fall back to the full pool, headline traps first.
   for (const d of [...candidates.filter((c) => c.must), ...candidates.filter((c) => !c.must)]) {
-    if (chosen.length >= count - 1) break;
-    if (isNew(d.value)) { seen.push(d.value); chosen.push(d); }
+    if (chosen.length >= wanted) break;
+    take(d);
   }
   for (const v of [...(cfg.fallback ?? []), ...genericPerturbations(answer)]) {
-    if (chosen.length >= count - 1) break;
-    if (isNew(v)) { seen.push(v); chosen.push({ value: v }); }
+    if (chosen.length >= wanted) break;
+    take({ value: v });
   }
-  if (chosen.length < count - 1) throw new Error('buildOptions: could not build enough distinct options');
+  if (chosen.length < wanted) throw new Error('buildOptions: could not build enough distinct options');
   const all: Option[] = [
     { key: '', display: fmt(answer, cfg), correct: true, value: answer },
     ...chosen.map((d) => ({ key: '', display: fmt(d.value, cfg), correct: false, trap: d.trap, value: d.value })),

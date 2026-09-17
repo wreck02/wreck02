@@ -68,9 +68,15 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     nums.push(x);
     out.push(d);
   };
-  must.forEach(take);
-  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
-  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
+  // One headline trap always survives; the others are preferred within their own side of the answer.
+  // Taking *both* of a bracketing pair every time (v·T above, ½v·T below) is what made the trapezium's
+  // total distance the median option two questions in three.
+  const heads = rng.shuffle(must);
+  if (heads.length > 0) take(heads[0]);
+  const rest = heads.slice(1);
+  const side = (lo: boolean) => [...rest, ...rng.shuffle(extra)].filter((d) => (lo ? d.value.toNumber() < a : d.value.toNumber() > a));
+  const below = side(true);
+  const above = side(false);
   let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
   while (out.length < count && (below.length > 0 || above.length > 0)) {
     const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
@@ -146,6 +152,7 @@ function constantVelocity(rng: RNG): Generated | null {
     { value: rest === 0 ? null : 2 * v * t, trap: 'counted the area under the graph twice' },
     { value: v, trap: 'quoted the velocity as the distance' },
     { value: 0.25 * v * t, trap: 'halved the rectangle twice' },
+    { value: v * t * t, trap: 'multiplied by the time twice' },
   ]),
   `Distance is the area under the velocity–time graph: a rectangle of height $${v}$ and width $${t}$, so $${v} \\times ${t} = ${s}$ m.`,
   'Area under a v–t graph gives distance; for constant velocity it is a rectangle v × t (no ½).',
@@ -160,12 +167,13 @@ function straightST(rng: RNG): Generated | null {
   const stem = `The displacement–time graph for ${who} is a straight line from the origin to the point $(${t}\\ \\text{s},\\ ${s}\\ \\text{m})$. Find the speed.`;
   return finish(stem, v, U.v, physOptions(rng, v, U.v, [
     { value: t / s, trap: 'inverted the gradient: speed is displacement ÷ time' },
-    { value: 0.5 * s * t, trap: 'found the area under the graph: for an s–t graph the gradient is what matters' },
-  ], [
     { value: s * t, trap: 'multiplied instead of dividing' },
+  ], [
     { value: s, trap: 'quoted the final displacement as the speed' },
-    { value: 0.5 * v, trap: 'halved the gradient' },
+    { value: s / (t * t), trap: 'divided by the time twice' },
+    { value: (s - t) / t, trap: 'subtracted the time from the displacement before dividing' },
     { value: 2 * v, trap: 'read the gradient as the displacement over half the time' },
+    { value: s / t + t, trap: 'added the time to the gradient' },
   ]),
   `Speed is the gradient of the displacement–time graph: $\\frac{${s}}{${t}} = ${v}$ m s$^{-1}$.`,
   'On a displacement–time graph the gradient is the velocity (area under it means nothing useful).',
@@ -203,6 +211,8 @@ function uniformRise(rng: RNG): Generated | null {
       { value: u === 0 ? null : 2 * s, trap: 'counted the area twice' },
       { value: (v - u) / t, trap: 'found the gradient (the acceleration) instead of the area' },
       { value: 0.5 * v / t, trap: 'halved the gradient' },
+      { value: s + v * t, trap: 'added the enclosing rectangle to the area under the line' },
+      { value: 0.5 * v * t * t, trap: 'used ½vt², treating the velocity as an acceleration' },
     ]),
     u === 0
       ? `Distance is the area of the triangle: $\\tfrac{1}{2} \\times ${t} \\times ${v} = ${s}$ m.`
@@ -221,6 +231,8 @@ function uniformRise(rng: RNG): Generated | null {
     { value: u === 0 ? null : t / (v - u), trap: 'inverted the gradient: acceleration is change in velocity ÷ time' },
     { value: u === 0 ? null : (u + v) / t, trap: 'added the velocities instead of subtracting them' },
     { value: (v - u) * t, trap: 'multiplied instead of dividing' },
+    { value: (v - u) / (t * t), trap: 'divided by the time twice' },
+    { value: u === 0 ? null : u / t, trap: 'used the initial velocity instead of the change in velocity' },
     { value: 0.5 * a, trap: 'put a ½ into the gradient' },
     { value: 2 * a, trap: 'used half the time' },
   ]),
@@ -246,7 +258,7 @@ function accelThenCruise(rng: RNG): Generated | null {
     { value: v * (t1 + t2), trap: 'treated the whole graph as a rectangle (forgot the ½ for the triangle)' },
     { value: 0.5 * v * (t1 + t2), trap: 'treated the whole graph as a triangle' },
   ], [
-    { value: total + s1, trap: 'counted the accelerating triangle twice' },
+    { value: total + s2, trap: 'counted the constant-velocity stage twice' },
     { value: s1 + 0.5 * s2, trap: 'halved the rectangle as well as the triangle' },
     { value: s2, trap: 'forgot the accelerating stage' },
     { value: s1, trap: 'forgot the constant-velocity stage' },
@@ -258,7 +270,7 @@ function accelThenCruise(rng: RNG): Generated | null {
   ['graphs', 'v-t', 'area', 'two-segment'], { kind: 'vt', segs, ask: 'distance' });
 }
 
-function threeSegmentST(rng: RNG): Generated | null {
+function threeSegmentST(rng: RNG, askAvg: boolean): Generated | null {
   const v1 = rng.pick([2, 3, 4, 5, 6, 8]);
   const t1 = rng.pick([4, 5, 6, 8, 10]);
   const t2 = rng.pick([4, 5, 6, 8, 10]);
@@ -268,7 +280,7 @@ function threeSegmentST(rng: RNG): Generated | null {
   const s2 = s1 + v3 * t3;
   const T = t1 + t2 + t3;
   const avg = s2 / T;
-  const askAvg = rng.bool(0.3) && Number.isInteger(avg * 2);
+  if (askAvg && !Number.isInteger(avg * 2)) return null; // redraw until the average is a clean number
   const who = rng.pick(['a walker', 'a cyclist', 'a delivery van', 'a robot']);
   const graph = `On a displacement–time graph for ${who}, the displacement rises uniformly from $0$ to ${q(s1, U.s)} in the first ${q(t1, U.t)}, stays at ${q(s1, U.s)} for the next ${q(t2, U.t)}, then rises uniformly from ${q(s1, U.s)} to ${q(s2, U.s)} in the final ${q(t3, U.t)}.`;
   const segs: Seg[] = [[t1, 0, s1], [t2, s1, s1], [t3, s1, s2]];
@@ -298,6 +310,8 @@ function threeSegmentST(rng: RNG): Generated | null {
     { value: v1 + v3, trap: 'added the speeds of the two moving segments' },
     { value: (s2 - s1) / t1, trap: 'divided by the time of the first segment' },
     { value: s1 / t3, trap: 'used the displacement of the first segment over the final time' },
+    { value: (s2 - s1) / t2, trap: 'divided by the stationary time' },
+    { value: (s2 - s1) / (t1 + t3), trap: 'used the two moving times together' },
   ]),
   `Gradient of the final segment: $\\frac{${s2} - ${s1}}{${t3}} = \\frac{${s2 - s1}}{${t3}} = ${v3}$ m s$^{-1}$.`,
   'Speed in a segment is the gradient of that segment: change in displacement over the time of that segment only.',
@@ -306,7 +320,7 @@ function threeSegmentST(rng: RNG): Generated | null {
 
 // ------------------------------------------------------------------------------------------ level 4
 
-function trapezium(rng: RNG): Generated | null {
+function trapezium(rng: RNG, askAvg: boolean): Generated | null {
   const v = rng.pick([6, 8, 10, 12, 15, 16, 20, 24, 30]);
   const t1 = rng.pick([2, 4, 5, 6, 8, 10]);
   const t2 = rng.pick([5, 6, 8, 10, 12, 15, 20]);
@@ -316,7 +330,7 @@ function trapezium(rng: RNG): Generated | null {
   const T = t1 + t2 + t3;
   const avg = total / T;
   if (!Number.isInteger(total) || total > 1500) return null;
-  const askAvg = rng.bool(0.4) && Number.isInteger(avg * 2);
+  if (askAvg && !Number.isInteger(avg * 2)) return null; // redraw until the average is a clean number
   const segs: Seg[] = [[t1, 0, v], [t2, v, v], [t3, v, 0]];
   const who = rng.pick(MOVER);
   const graph = `${cap(who)} starts from rest and comes to rest again. Its velocity–time graph is a trapezium: ${describeVT(segs).replace(/^For/, 'for')}`;
@@ -346,7 +360,7 @@ function trapezium(rng: RNG): Generated | null {
     { value: v * (t1 + t2) + s3, trap: 'forgot the ½ on the accelerating triangle only' },
     { value: s1 + s2 + v * t3, trap: 'forgot the ½ on the decelerating triangle only' },
     { value: total + s1 + s3, trap: 'counted both triangles twice' },
-    { value: total + s1, trap: 'counted the accelerating triangle twice' },
+    { value: total + s2, trap: 'counted the constant-velocity stage twice' },
   ]),
   `Trapezium area: $\\tfrac{1}{2} \\times ${t1} \\times ${v} + ${v} \\times ${t2} + \\tfrac{1}{2} \\times ${t3} \\times ${v} = ${s1} + ${s2} + ${s3} = ${total}$ m. (Equivalently $\\tfrac{1}{2}(${t2} + ${T}) \\times ${v}$.)`,
   'Add the two triangles and the rectangle (or use ½(a + b)h for the trapezium); each triangle carries a ½.',
@@ -395,6 +409,8 @@ function reversal(rng: RNG): Generated | null {
       { value: forward, trap: 'stopped when the velocity became negative' },
       { value: forward - neg, trap: 'forgot the final constant-velocity segment' },
       { value: disp - 2 * neg, trap: 'subtracted the triangle below the axis twice' },
+      { value: disp - pos, trap: 'left out the triangle above the axis in the middle segment' },
+      { value: disp - v1 * t1 + v1 * t1 / 2, trap: 'halved the first rectangle' },
     ]),
     `${solutionAreas} Displacement $= ${v1 * t1} + ${num(pos)} - ${num(neg)} - ${v2 * t3} = ${disp}$ m.`,
     'Displacement is the signed area: regions below the time axis count negative; distance travelled adds them all as positive.',
@@ -494,8 +510,8 @@ export default defineTemplate({
       switch (level) {
         case 1: return pickVariant(rng, [constantVelocity, constantVelocity, straightST]);
         case 2: return pickVariant(rng, [uniformRise]);
-        case 3: return pickVariant(rng, [accelThenCruise, threeSegmentST]);
-        case 4: return pickVariant(rng, [trapezium]);
+        case 3: return pickVariant(rng, [accelThenCruise, accelThenCruise, (r) => threeSegmentST(r, false), (r) => threeSegmentST(r, false), (r) => threeSegmentST(r, true)]);
+        case 4: return pickVariant(rng, [(r) => trapezium(r, false), (r) => trapezium(r, false), (r) => trapezium(r, false), (r) => trapezium(r, true)]);
         default: return pickVariant(rng, [reversal, accelerationGraph]);
       }
     });

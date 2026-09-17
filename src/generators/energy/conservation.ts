@@ -23,11 +23,15 @@ import type { RNG } from '../../core/rng';
 const G = 10;
 const U_J = '\\text{J}', U_KJ = '\\text{kJ}', U_M = '\\text{m}', U_MS = '\\text{m s}^{-1}', U_KG = '\\text{kg}';
 const TAKE_G = 'Take $g = 10\\ \\text{m s}^{-2}$.';
+/** No option in a question answered in m s^-1 may exceed this: nothing here moves at 200 m s^-1. */
+const MAX_SPEED = 120;
 
 /**
  * A candidate distractor. `wide` marks a unit slip (joules read as kilojoules): that is 1000x out, so it is
  * offered alone and only in a minority of draws; every other candidate must sit within a factor of 12 of
  * the answer, because 400 m s^-1 beside 20 m s^-1 is eliminated on sight and gives the answer away.
+ * A speed question has an absolute ceiling too: nothing dropped, swung or freewheeled here travels at
+ * 200 m s^-1, so v-squared is only ever offered while it could still pass for a speed.
  */
 type Candidate = { value: Exact | null; trap: string; wide?: boolean };
 type Ranked = Distractor & { wide?: boolean };
@@ -65,14 +69,14 @@ function approx(x: number): Exact | null {
 }
 
 /** Positive, finite, clean candidates that sit close enough to the answer to be weighed against it. */
-function cleanOnly(ds: Candidate[], answer: Exact): Ranked[] {
+function cleanOnly(ds: Candidate[], answer: Exact, ceiling = Infinity): Ranked[] {
   const a = answer.toNumber();
   const out: Ranked[] = [];
   for (const d of ds) {
     const v = d.value;
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !isCleanExact(v).ok) continue;
     const x = v.toNumber();
-    if (x < 0.01 || x > 2e6) continue;
+    if (x < 0.01 || x > 2e6 || x > ceiling) continue;
     const span = d.wide ? 1000 : 12;
     if (x > span * a || x < a / span) continue;
     if (v.isRational() && !Number.isInteger(r(x * 1000))) continue; // decimals must terminate
@@ -147,7 +151,8 @@ interface Pack {
 
 function pack(rng: RNG, p: Pack): Generated | null {
   if (!p.answer || !isCleanExact(p.answer).ok || p.answer.sign() <= 0) return null;
-  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer), cleanOnly(p.extra, p.answer));
+  const ceiling = p.unit === U_MS ? MAX_SPEED : Infinity;
+  const ds = ranked(rng, p.answer, cleanOnly(p.must, p.answer, ceiling), cleanOnly(p.extra, p.answer, ceiling));
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -230,8 +235,7 @@ function keQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: E(m * v * scale), trap: 'forgot the ½ and the square: gave the momentum' },
-      { value: E(0.5 * m * m * v * v * scale), trap: 'squared the mass as well as the speed' },
-      { value: inKJ ? E(KE) : null, trap: 'left the answer in joules', wide: true },
+      { value: E(0.5 * m * (v + 1) * (v + 1) * scale), trap: `slipped when squaring the speed: used ${v + 1}^2` },
       { value: E(KE * scale * 10), trap: 'slipped a decimal place' },
       { value: E(0.25 * m * v * v * scale), trap: 'halved twice' },
       { value: E(r(m * v * v * scale * 2)), trap: 'used 2mv² instead of ½mv²' },
@@ -324,7 +328,6 @@ function gpeQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: E(m * G * h * h * scale), trap: 'squared the height (as if it were a speed)' },
-      { value: inKJ ? E(PE) : null, trap: 'left the answer in joules', wide: true },
       { value: E(PE * scale * 10), trap: 'slipped a decimal place' },
       { value: E(2 * PE * scale), trap: 'doubled the energy' },
       { value: E(r((m * G * h * scale) / 4)), trap: 'quartered the energy' },
@@ -372,7 +375,6 @@ function dropQ(rng: RNG): Generated | null {
       { value: root(2 * h), trap: 'forgot g' },
       { value: E(2 * G * h), trap: 'forgot to take the square root: gave v²' },
       { value: E(G * h), trap: 'forgot the 2 and the square root' },
-      { value: m ? E(m * G * h) : null, trap: 'gave the kinetic energy in joules instead of the speed' },
       { value: E(2 * v), trap: 'doubled the speed' },
       { value: E(r(v / 2)), trap: 'halved the speed' },
       { value: root(G * h / 2), trap: 'used v = √(gh/2): halved instead of doubling' },
@@ -403,7 +405,6 @@ function throwUpQ(rng: RNG): Generated | null {
     extra: [
       { value: E((u * u) / 2), trap: 'forgot g' },
       { value: E((2 * u * u) / G), trap: 'put the factor 2 on the wrong side' },
-      { value: m ? E(0.5 * m * u * u) : null, trap: 'gave the kinetic energy in joules instead of the height' },
       { value: E(r(h / 2)), trap: 'halved twice' },
       { value: E(r(h / 4)), trap: 'divided by 4g instead of 2g' },
       { value: E(r(u / (2 * G))), trap: 'forgot to square the speed' },
@@ -436,7 +437,6 @@ function pendulumQ(rng: RNG): Generated | null {
       ],
       extra: [
         { value: E(2 * G * L), trap: 'used the whole length as the drop and forgot the square root' },
-        { value: E(0.5 * m * G * L), trap: 'gave the kinetic energy at the bottom in joules' },
         { value: E(2 * v), trap: 'doubled the speed' },
         { value: E(r(v / 2)), trap: 'halved the speed' },
         { value: root(2 * G * L * (1 - Math.cos(Math.PI / 6))), trap: 'used cos 30° instead of cos 60° for the drop' },
@@ -463,7 +463,6 @@ function pendulumQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: E(G * h), trap: 'forgot the 2 and the square root' },
-      { value: E(m * G * h), trap: 'gave the kinetic energy at the bottom in joules' },
       { value: E(2 * v), trap: 'doubled the speed' },
       { value: E(r(v / 2)), trap: 'halved the speed' },
       { value: root(4 * G * h), trap: 'doubled g as well as using the 2' },

@@ -71,13 +71,18 @@ function cleanOnly(ds: Cand[], step: number): Distractor[] {
 }
 
 /**
- * `must` traps get their slot first, nearest the answer first; the extras follow in random order.
- * Two rules decide what may join the list:
+ * `must` traps get their slot first inside each side of the answer, nearest the answer first; the
+ * extras follow in random order. Three rules decide what may join the list:
  *  · the whole list — the answer and everything already chosen — may span at most `spread`, because an
  *    option orders of magnitude from the answer is struck out on sight, which turns a five-option
  *    question into a three-option one;
  *  · no option may sit within 2% of another (or of the answer): a pair a candidate cannot tell apart
- *    is a wasted slot, and it makes the question turn on arithmetic no one would do in 90 seconds.
+ *    is a wasted slot, and it makes the question turn on arithmetic no one would do in 90 seconds;
+ *  · the number of options *below* the answer is drawn uniformly and clamped to what the candidate
+ *    list can supply. Whole families of mistakes here sit on one side by construction — every
+ *    "forgot a piece" slip is smaller than p₀ + ρgh, everything but "left g out" is bigger than ρVg —
+ *    so without this the answer sits in the same slot in every instance of a variant and can be
+ *    picked out without doing any physics.
  */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spread: number, count = 4): Distractor[] {
   const a = answer.toNumber();
@@ -97,8 +102,20 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
     hi = Math.max(hi, v);
   };
   const closest = (x: Distractor) => Math.abs(Math.log(x.value.toNumber() / a));
-  must.slice().sort((x, y) => closest(x) - closest(y)).forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const ordered = [...must.slice().sort((x, y) => closest(x) - closest(y)), ...rng.shuffle(extra)];
+  /** Could stand next to the answer on its own — the interactions are settled by take(). */
+  const plausible = (d: Distractor) => {
+    const v = d.value.toNumber();
+    return v > 0 && Math.max(a, v) / Math.min(a, v) <= spread * (1 + 1e-9) && Math.abs(v - a) >= 0.02 * Math.max(v, a);
+  };
+  const below = ordered.filter((d) => plausible(d) && d.value.toNumber() < a);
+  const above = ordered.filter((d) => plausible(d) && d.value.toNumber() > a);
+  const floor = Math.max(0, count - above.length);
+  const ceil = Math.min(count, below.length);
+  const nBelow = Math.max(Math.min(rng.int(0, count), ceil), Math.min(floor, ceil));
+  for (const d of below) { if (out.length >= nBelow) break; take(d); }
+  for (const d of above) take(d);
+  for (const d of below) take(d);
   return out;
 }
 
@@ -292,6 +309,8 @@ function depthPressureQ(rng: RNG): Generated | null {
       { value: pk / 2, trap: 'used $\\tfrac12 \\rho g h$' },
       { value: pk * 2, trap: 'took the pressure at twice the depth' },
       { value: (G * h) / 1000, trap: 'left the density out' },
+      { value: pk - P_ATM, trap: 'subtracted atmospheric pressure, although only the liquid was asked for' },
+      { value: pk / 5, trap: 'used $g = 2$ instead of $10$' },
     ],
     solution: `$p = \\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(pPa)}\\ \\text{Pa} = ${n(pk)}\\ \\text{kPa}$.`,
     trap: 'ρgh needs all three factors and the depth in metres; the question asks for the liquid’s pressure only, so atmospheric pressure is not added.',
@@ -318,8 +337,10 @@ function depthFromPressureQ(rng: RNG): Generated | null {
       { value: round(((pk - P_ATM) * 1000) / (rho * G)), trap: 'subtracted atmospheric pressure, although the stem gives the liquid’s pressure' },
     ],
     extra: [
-      { value: round(h * 100), trap: 'gave the depth in centimetres' },
+      { value: round(h * 10), trap: 'a power of ten gained turning kPa into Pa' },
       { value: round(h / 10), trap: 'a power of ten lost turning kPa into Pa' },
+      { value: round(h * 2), trap: 'doubled the depth' },
+      { value: round((pk * 1000 * G) / rho), trap: 'multiplied by $g$ instead of dividing by it' },
       { value: round(pk / (rho * G)), trap: 'used the pressure in kPa instead of Pa' },
       { value: round(h / 2), trap: 'used $\\tfrac12 \\rho g h$' },
     ],
@@ -350,11 +371,15 @@ function totalPressureQ(rng: RNG): Generated | null {
       { value: round((rho * h) / 1000 + P_ATM), trap: 'left $g$ out of $\\rho g h$' },
       { value: round(pk - P_ATM), trap: 'subtracted atmospheric pressure instead of adding it' },
     ],
+    // Every "forgot a piece" mistake is necessarily smaller than p₀ + ρgh, so the overshoots below are
+    // what keep the answer out of the top two slots.
     extra: [
       { value: round(pk / 2 + P_ATM), trap: 'used $\\tfrac12 \\rho g h$' },
       { value: round(2 * pk + P_ATM), trap: 'took the pressure at twice the depth' },
       { value: round(P_ATM - pk), trap: 'took the liquid’s pressure away from atmospheric pressure' },
       { value: round(10 * pk + P_ATM), trap: 'a power of ten lost turning the liquid’s pressure into kPa' },
+      { value: round(pk + 10 * P_ATM), trap: 'used $1000\\ \\text{kPa}$ for atmospheric pressure' },
+      { value: round(pk + 2 * P_ATM), trap: 'added atmospheric pressure twice, at the surface and again at the diver' },
     ],
     solution: `Liquid: $\\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(pk * 1000)}\\ \\text{Pa} = ${n(pk)}\\ \\text{kPa}$. Total $= 100 + ${n(pk)} = ${n(total)}\\ \\text{kPa}$.`,
     trap: 'Total pressure includes the atmosphere pressing on the surface: p = p₀ + ρgh.',
@@ -412,6 +437,9 @@ function upthrustQ(rng: RNG): Generated | null {
     stem: `A metal block of volume $${n(vCm3)}\\ \\text{cm}^{3}$ and density $${n(rhoBody)}\\ \\text{kg m}^{-3}$ is held completely submerged in ${fluid.a} of density $${n(rho)}\\ \\text{kg m}^{-3}$. Take $g = 10\\ \\text{m s}^{-2}$.\n\nFind the upthrust on the block.`,
     answer: U,
     unit: U_N,
+    // The block is always denser than the liquid, so ρ_body·V·g, the apparent weight and twice the
+    // difference all sit above ρ_liquid·V·g. Without the undercounts below, the only option under the
+    // answer is "left g out" and "second smallest" answers the question.
     must: [
       { value: round(rhoBody * V * G), trap: 'used the block’s own density instead of the liquid’s' },
       { value: round(rho * V), trap: 'left $g$ out of $\\rho V g$' },
@@ -420,7 +448,9 @@ function upthrustQ(rng: RNG): Generated | null {
       { value: round(rhoBody * V * G - U), trap: 'gave the apparent weight instead of the upthrust' },
       { value: round((rhoBody - rho) * V * G * 2), trap: 'counted the difference in densities twice' },
       { value: round(U * 10), trap: 'a power of ten gained in the volume conversion' },
-      { value: round(U / 2), trap: 'halved the weight of the displaced liquid' },
+      { value: round(rho * (V / 2) * G), trap: 'used half the volume, as if only half the block displaced liquid' },
+      { value: round((rho * V) / G), trap: 'divided by $g$ instead of multiplying by it' },
+      { value: round(rho * V * G * (rho / rhoBody)), trap: 'multiplied by the ratio of the densities as well' },
     ],
     solution: `Upthrust $=$ weight of liquid displaced $= \\rho_{\\text{liquid}} V g = ${n(rho)} \\times ${n(vCm3)} \\times 10^{-6} \\times 10 = ${n(U)}\\ \\text{N}$.`,
     trap: 'The upthrust uses the density of the fluid displaced, never the density of the object.',
@@ -440,14 +470,19 @@ function fractionSubmergedQ(rng: RNG): Generated | null {
     stem: `A block of wood of density $${n(rhoB)}\\ \\text{kg m}^{-3}$ floats in a liquid of density $${n(rhoF)}\\ \\text{kg m}^{-3}$.\n\nWhat fraction of the block’s volume is below the surface?`,
     answer: f,
     format: 'fraction',
+    // A fraction of a volume cannot exceed 1, and the trap line says so, so exactly one option is
+    // allowed above 1: the classic inverted ratio the question is built around. Everything else here
+    // is a fraction of the block, which is what makes it worth reading.
     must: [
       { value: round(rhoF / rhoB), trap: 'the ratio of densities taken upside down' },
       { value: round(1 - f), trap: 'gave the fraction above the surface' },
-      { value: round(rhoB / (rhoF - rhoB)), trap: 'divided by the difference of the densities instead of the liquid’s density' },
+      { value: round(rhoB / (rhoF + rhoB)), trap: 'divided by the total of the two densities instead of the liquid’s density' },
     ],
     extra: [
       { value: round((1 + f) / 2), trap: 'averaged the ratio with 1' },
       { value: round(f * f), trap: 'squared the ratio' },
+      { value: round(f / 2), trap: 'halved the ratio' },
+      { value: round((1 - f) / 2), trap: 'halved the fraction above the surface' },
       { value: 0.5, trap: 'assumed half of any floating body is submerged' },
     ],
     solution: `Floating: weight $=$ upthrust, so $\\rho_{\\text{block}} V g = \\rho_{\\text{liquid}} (fV) g$ and $f = \\dfrac{${n(rhoB)}}{${n(rhoF)}} = ${E(f).toLatex({ format: 'fraction' })}$.`,

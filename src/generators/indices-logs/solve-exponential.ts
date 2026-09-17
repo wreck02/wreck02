@@ -26,9 +26,47 @@ import type { RNG } from '../../core/rng';
 interface Side { base: number; m: number; s: number }
 interface LogTerm { coef: number; base: number; num: number; den: number }
 
-/** Keep only distractors the exam could print. */
-function clean(ds: Distractor[]): Distractor[] {
-  return ds.filter((d) => Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
+/** A candidate whose value may not exist for this draw. */
+type Cand = { value: Exact | null; trap: string };
+
+/** Keep only distractors that exist and that the exam could print. */
+function clean(ds: Cand[]): Distractor[] {
+  return ds.filter((d): d is { value: Exact; trap: string } =>
+    d.value !== null && Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
+}
+
+/**
+ * Fill the four wrong options from both sides of the answer, aiming for a random number of them
+ * below it. Without this every "which power?" mistake overshoots (n + 1, 2n, b·n, b^(n−1)) and the
+ * answer is the smallest or second smallest option every single time — "take the second smallest"
+ * then scores about 80% at level 1 with no knowledge of logs at all.
+ */
+function pick4(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const seen: Exact[] = [answer];
+  const out: Distractor[] = [];
+  const take = (d: Distractor) => {
+    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    seen.push(d.value);
+    out.push(d);
+  };
+  must.forEach(take);
+  const wantBelow = rng.int(0, count);
+  const pool = rng.shuffle(extra).filter((d) => !seen.some((s) => s.equals(d.value)));
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  while (out.length < count && pool.length > 0) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    let i = pool.findIndex((d) => isBelow(d) === needBelow);
+    if (i < 0) i = 0;
+    take(pool[i]);
+    pool.splice(i, 1);
+  }
+  return out;
+}
+
+/** Drop options orders of magnitude away from a log value: 10000 beside 5 is eliminated on sight. */
+function nearby(ds: Distractor[], answer: Exact, factor = 12): Distractor[] {
+  const m = Math.max(1, Math.abs(answer.toNumber()));
+  return ds.filter((d) => Math.abs(d.value.toNumber()) <= factor * m);
 }
 
 /** Try `fn` up to n times; null if it never succeeds. */
@@ -54,14 +92,27 @@ function coefTex(k: number): string {
 
 /** (base, exponent) pairs for the "which power?" questions; picked uniformly over pairs so the answers spread out. */
 const PLAIN_POWERS: Record<1 | 2, [number, number][]> = {
-  1: [[2, 3], [2, 4], [2, 5], [2, 6], [2, 7], [3, 2], [3, 3], [3, 4], [5, 2], [5, 3], [10, 2], [10, 3], [10, 4], [10, 5], [4, 2], [4, 3]],
+  1: [[2, 3], [2, 4], [2, 5], [2, 6], [2, 7], [2, 8], [3, 2], [3, 3], [3, 4], [5, 2], [5, 3], [10, 2], [10, 3], [10, 4], [10, 5], [4, 2], [4, 3], [6, 2], [6, 3], [7, 2], [8, 2], [9, 2], [11, 2], [12, 2]],
   2: [[2, 3], [2, 4], [2, 5], [2, 6], [2, 7], [2, 8], [3, 3], [3, 4], [3, 5], [5, 3], [5, 4], [10, 3], [10, 4], [10, 5], [10, 6], [4, 3], [4, 4], [6, 3], [7, 3]],
 };
 
+/** The exam asks "solve" and "find the value of" in several ways; the maths is identical. */
+function solveAsk(rng: RNG, lhs: string, rhs: string): string {
+  return rng.pick([
+    `Solve $${lhs} = ${rhs}$.`,
+    `Find the value of $x$ for which $${lhs} = ${rhs}$.`,
+    `Given that $${lhs} = ${rhs}$, find the value of $x$.`,
+  ]);
+}
+
+function logAsk(rng: RNG, expr: string): string {
+  return rng.pick([`Find the value of $${expr}$.`, `Evaluate $${expr}$.`]);
+}
+
 /** Prime-power pool for the common-base questions: p^a with a ≥ 2 as the base, p^c as the argument. */
 const COMMON_BASE: { p: number; maxA: number; maxC: number }[] = [
-  { p: 2, maxA: 5, maxC: 7 },
-  { p: 3, maxA: 4, maxC: 5 },
+  { p: 2, maxA: 6, maxC: 8 },
+  { p: 3, maxA: 4, maxC: 6 },
   { p: 5, maxA: 3, maxC: 4 },
   { p: 10, maxA: 3, maxC: 4 },
 ];
@@ -82,17 +133,33 @@ function pickPlain(rng: RNG, lv: 1 | 2): { b: number; n: number } {
 
 const TAGS = ['indices', 'logarithms', 'exponential-equations'];
 
-/** Integer mistakes for "which power of b gives b^n?" (asked as an equation or as a log). */
-function whichPowerDistractors(b: number, n: number): Distractor[] {
+/**
+ * Integer mistakes for "which power of b gives b^n?" (asked as an equation or as a log).
+ * The undershooting mistakes matter as much as the overshooting ones: a pool of n + 1, 2n, b·n and
+ * b^(n−1) alone would put the answer at the bottom of the option list every time.
+ */
+function whichPowerOptions(rng: RNG, b: number, n: number): Distractor[] {
   const bn = b ** n;
-  return clean([
+  const answer = E(n);
+  const keep = (ds: Cand[]): Distractor[] => clean(ds).filter((d) => d.value.toNumber() > 0);
+  const must = keep([
     { value: E(n - 1), trap: 'counted one power too few' },
     { value: E(n + 1), trap: 'counted one power too many' },
-    { value: E(bn / b), trap: `divided ${bn} by ${b} instead of asking "which power of ${b}?"` },
-    { value: E(b * n), trap: 'multiplied the base by the power instead of raising it' },
-    { value: E(2 * n), trap: 'doubled the power' },
-    { value: E(n + 2), trap: 'counted two powers too many' },
   ]);
+  const extra = nearby(keep([
+    { value: E(n - 2), trap: 'counted two powers too few' },
+    { value: E(n + 2), trap: 'counted two powers too many' },
+    { value: E(2 * n), trap: 'doubled the power' },
+    { value: n % 2 === 0 ? E(n / 2) : null, trap: 'halved the power' },
+    { value: E(b * n), trap: 'multiplied the base by the power instead of raising it' },
+    // small n has almost no whole numbers below it, so the undershooting slips have to be fractions
+    { value: frac(1, n), trap: 'confused the power with a root: gave 1/n' },
+    { value: frac(n, b), trap: `divided the power by the base instead of asking "which power of ${b}?"` },
+    { value: E(`${bn}`.length), trap: `counted the digits of ${bn} instead of the powers` },
+    { value: E(b), trap: `gave the base ${b} instead of the power` },
+    { value: E(bn / b), trap: `divided ${bn} by ${b} instead of asking "which power of ${b}?"` },
+  ]), answer);
+  return pick4(rng, answer, must, extra);
 }
 
 // ----------------------------------------------------------------------------
@@ -104,9 +171,9 @@ function plainExp(rng: RNG, lv: 1 | 2): Generated {
   const bn = b ** n;
   const answer = E(n);
   return {
-    stem: `Solve $${b}^{x} = ${bn}$.`,
+    stem: solveAsk(rng, `${b}^{x}`, `${bn}`),
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, whichPowerDistractors(b, n)),
+    options: buildOptions(rng, answer, whichPowerOptions(rng, b, n)),
     solution: `$${bn} = ${b}^{${n}}$, so $x = ${n}$.`,
     trap: `x is the power, not the quotient: ${b}^x = ${bn} asks "which power of ${b} is ${bn}?"`,
     tags: TAGS,
@@ -120,9 +187,9 @@ function plainLog(rng: RNG, lv: 1 | 2): Generated {
   const bn = b ** n;
   const answer = E(n);
   return {
-    stem: `Find the value of $${logTex(b, bn)}$.`,
+    stem: logAsk(rng, logTex(b, bn)),
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, whichPowerDistractors(b, n)),
+    options: buildOptions(rng, answer, whichPowerOptions(rng, b, n)),
     solution: `$${bn} = ${b}^{${n}}$, so $${logTex(b, bn)} = ${n}$.`,
     trap: 'log_b N is the power to which b must be raised to give N.',
     tags: TAGS,
@@ -141,17 +208,19 @@ function level2(rng: RNG): Generated | null {
     if (x === 0 || Math.abs(x) > 9) return null;
     const answer = E(x);
     const exp = linear(1, s);
-    const distractors = clean([
+    const distractors = pick4(rng, answer, clean([
       { value: E(n + s), trap: 'moved the constant across with the wrong sign' },
       { value: E(n), trap: 'ignored the constant in the exponent' },
+    ]), nearby(clean([
       { value: E(s - n), trap: `sign error: solved ${exp} = ${n} as x = ${s} − ${n}` },
       { value: E(bn / b - s), trap: `read ${b}^{${exp}} as ${b}(${exp})` },
       { value: E(bn / b), trap: `divided ${bn} by ${b} and ignored the constant` },
       { value: E(x + 1), trap: `miscounted the power: ${bn} is ${b}^${n}, not ${b}^${n + 1}` },
       { value: E(x - 1), trap: `miscounted the power: ${bn} is ${b}^${n}, not ${b}^${n - 1}` },
-    ]);
+      { value: E(2 * x), trap: 'doubled after solving' },
+    ]), answer));
     return {
-      stem: `Solve $${b}^{${exp}} = ${bn}$.`,
+      stem: solveAsk(rng, `${b}^{${exp}}`, `${bn}`),
       answer: { kind: 'exact', value: answer },
       options: buildOptions(rng, answer, distractors),
       solution: `$${bn} = ${b}^{${n}}$, so $${exp} = ${n}$ and $x = ${x}$.`,
@@ -166,20 +235,21 @@ function level2(rng: RNG): Generated | null {
     const n = rng.int(2, b === 2 ? 5 : b === 3 ? 4 : 3);
     const bn = b ** n;
     const answer = E(-n);
-    // The three instructive mistakes always appear (the two reciprocals come as a pair), plus one integer slip.
-    const slip = rng.pick([
+    // The two instructive mistakes always appear; the rest are drawn from both sides of −n, so the
+    // answer is not simply the smallest number on the page.
+    const distractors = pick4(rng, answer, clean([
+      { value: E(n), trap: 'dropped the minus sign: 1/b^n = b^(−n)' },
+      { value: frac(-1, n), trap: 'took the reciprocal of the power instead of its negative' },
+    ]), nearby(clean([
+      { value: frac(1, n), trap: 'swapped the base and the argument' },
       { value: E(-(n - 1)), trap: 'counted one power too few' },
       { value: E(-(n + 1)), trap: 'counted one power too many' },
+      { value: E(-2 * n), trap: 'doubled the power' },
       { value: E(-(bn / b)), trap: 'divided the number by the base' },
-    ]);
-    const distractors = clean([
-      { value: E(n), trap: 'dropped the minus sign: 1/b^n = b^(−n)' },
-      { value: frac(1, n), trap: 'took the reciprocal of the log instead of a negative power' },
-      { value: frac(-1, n), trap: 'swapped the base and the argument' },
-      slip,
-    ]);
+      { value: n % 2 === 0 ? E(-n / 2) : null, trap: 'halved the power' },
+    ]), answer));
     return {
-      stem: `Find the value of $${logTex(b, recipTex(bn))}$.`,
+      stem: logAsk(rng, logTex(b, recipTex(bn))),
       answer: { kind: 'exact', value: answer },
       options: buildOptions(rng, answer, distractors),
       solution: `$\\frac{1}{${bn}} = ${b}^{-${n}}$, so the value is $-${n}$.`,
@@ -198,16 +268,20 @@ function level3(rng: RNG): Generated | null {
   const { p, a, c } = d;
   const B = p ** a, N = p ** c;
   const answer = frac(c, a);
-  const distractors = clean([
+  const distractors = pick4(rng, answer, clean([
     { value: frac(a, c), trap: 'divided the exponents the wrong way round' },
+    { value: E(c), trap: `forgot to write ${B} as a power of ${p}` },
+  ]), nearby(clean([
     { value: frac(N, B), trap: `divided the numbers: ${N} ÷ ${B}` },
     { value: E(c - a), trap: 'subtracted the exponents' },
-    { value: E(c), trap: `forgot to write ${B} as a power of ${p}` },
     { value: E(a * c), trap: 'multiplied the exponents' },
     { value: answer.neg(), trap: 'sign error' },
-  ]);
+    { value: answer.add(E(1)), trap: 'slip of one after equating the exponents' },
+    { value: frac(c, a + 1), trap: `misread ${B} as ${p}^{${a + 1}}` },
+    { value: frac(c + 1, a), trap: `misread ${N} as ${p}^{${c + 1}}` },
+  ]), answer));
   return {
-    stem: `Solve $${B}^{x} = ${N}$.`,
+    stem: solveAsk(rng, `${B}^{x}`, `${N}`),
     answer: { kind: 'exact', value: answer },
     options: buildOptions(rng, answer, distractors),
     solution: `Write both sides as powers of $${p}$: $${B}^{x} = ${p}^{${a}x}$ and $${N} = ${p}^{${c}}$, so $${a}x = ${c}$ and $x = ${answer.toLatex()}$.`,
@@ -226,15 +300,18 @@ function level4(rng: RNG): Generated | null {
   const variant = rng.pick(['expneg', 'logfrac', 'logneg'] as const);
   if (variant === 'expneg') {
     const answer = frac(-c, a);
-    const distractors = clean([
+    const distractors = pick4(rng, answer, clean([
       { value: frac(c, a), trap: 'dropped the minus sign from 1/N = p^(−c)' },
       { value: frac(-a, c), trap: 'divided the exponents the wrong way round' },
+    ]), nearby(clean([
       { value: E(a - c), trap: 'subtracted the exponents' },
       { value: frac(-N, B), trap: `divided the numbers: −${N} ÷ ${B}` },
       { value: E(-c), trap: `forgot to write ${B} as a power of ${p}` },
-    ]);
+      { value: frac(-c, a + 1), trap: `misread ${B} as ${p}^{${a + 1}}` },
+      { value: frac(-c - 1, a), trap: `misread ${N} as ${p}^{${c + 1}}` },
+    ]), answer));
     return {
-      stem: `Solve $${B}^{x} = \\frac{1}{${N}}$.`,
+      stem: solveAsk(rng, `${B}^{x}`, `\\frac{1}{${N}}`),
       answer: { kind: 'exact', value: answer },
       options: buildOptions(rng, answer, distractors),
       solution: `$${B} = ${p}^{${a}}$ and $\\frac{1}{${N}} = ${p}^{-${c}}$, so $${a}x = -${c}$ and $x = ${answer.toLatex()}$.`,
@@ -247,17 +324,20 @@ function level4(rng: RNG): Generated | null {
   const neg = variant === 'logneg';
   const answer = neg ? frac(-c, a) : frac(c, a);
   const argTex = neg ? recipTex(N) : `${N}`;
-  const distractors = clean([
+  const distractors = pick4(rng, answer, clean([
     { value: answer.neg(), trap: neg ? 'dropped the minus sign' : 'sign error' },
     { value: neg ? frac(-a, c) : frac(a, c), trap: 'swapped the base and the argument' },
+  ]), nearby(clean([
     { value: neg ? frac(a, c) : frac(-a, c), trap: 'inverted and sign error' },
     { value: E(neg ? a - c : c - a), trap: 'subtracted the exponents' },
     { value: neg ? frac(-N, B) : frac(N, B), trap: `divided the numbers: ${N} ÷ ${B}` },
     { value: E(neg ? -c : c), trap: `forgot that the base is ${p}^${a}, not ${p}` },
-  ]);
+    { value: neg ? frac(-c, a + 1) : frac(c, a + 1), trap: `misread the base as ${p}^{${a + 1}}` },
+    { value: neg ? frac(-c - 1, a) : frac(c + 1, a), trap: `misread the argument as ${p}^{${c + 1}}` },
+  ]), answer));
   const ySign = neg ? '-' : '';
   return {
-    stem: `Find the value of $${logTex(B, argTex)}$.`,
+    stem: logAsk(rng, logTex(B, argTex)),
     answer: { kind: 'exact', value: answer },
     options: buildOptions(rng, answer, distractors),
     solution: `Let $y = ${logTex(B, argTex)}$, so $${B}^{y} = ${neg ? `\\frac{1}{${N}}` : N}$. In powers of $${p}$: $${p}^{${a}y} = ${p}^{${ySign}${c}}$, so $${a}y = ${ySign}${c}$ and $y = ${answer.toLatex()}$.`,
@@ -321,15 +401,22 @@ function difference(rng: RNG): Generated | null {
   const M = N * b ** k;
   if (M > 1000) return null;
   const answer = E(k);
-  const distractors = clean([
-    { value: E(b ** k), trap: `stopped at ${M} ÷ ${N} = ${b ** k} and forgot to take the log` },
+  // One ±1 slip only, in its own wording, and "forgot to take the log" only while b^k could still
+  // pass for a log value: 100 and 891 next to 2 are eliminated without reading the question.
+  const distractors = pick4(rng, answer, clean([
     { value: E(-k), trap: 'subtracted the other way round' },
-    { value: E(k + 1), trap: `miscounted the power: ${b ** k} is ${b}^${k}` },
-    { value: E(k - 1), trap: `miscounted the power: ${b ** k} is ${b}^${k}` },
-    { value: E(M - N), trap: 'subtracted the arguments: log a − log b is not log(a − b)' },
-  ]);
+    k >= 3 && rng.bool()
+      ? { value: E(k - 1), trap: `counted one power too few: ${M} ÷ ${N} = ${b}^{${k}}` }
+      : { value: E(k + 1), trap: `counted one power too many: ${M} ÷ ${N} = ${b}^{${k}}` },
+  ]), nearby(clean([
+    { value: b ** k <= 25 ? E(b ** k) : null, trap: `stopped at ${M} ÷ ${N} = ${b ** k} and forgot to take the log` },
+    { value: E(2 * k), trap: 'doubled the power' },
+    { value: frac(k, 2), trap: `used ${logTex(b * b, `\\frac{${M}}{${N}}`)}: the base was misread as ${b * b}` },
+    { value: k >= 3 ? E(k - 2) : null, trap: 'counted two powers too few' },
+    { value: E(k + 2), trap: 'counted two powers too many' },
+  ]), answer));
   return {
-    stem: `Find the value of $${logTex(b, M)} - ${logTex(b, N)}$.`,
+    stem: logAsk(rng, `${logTex(b, M)} - ${logTex(b, N)}`),
     answer: { kind: 'exact', value: answer },
     options: buildOptions(rng, answer, distractors),
     solution: `$${logTex(b, M)} - ${logTex(b, N)} = ${logTex(b, `\\frac{${M}}{${N}}`)} = ${logTex(b, b ** k)} = ${k}$.`,
@@ -352,16 +439,22 @@ function sum(rng: RNG): Generated | null {
   let [M, N] = rng.pick(pairs);
   if (rng.bool()) [M, N] = [N, M];
   const answer = E(k);
-  const distractors = clean([
-    { value: E(M + N), trap: 'added the arguments: log a + log b is not log(a + b)' },
-    { value: E(P), trap: `stopped at ${M} × ${N} = ${P} and forgot to take the log` },
-    { value: E(k + 1), trap: `miscounted the power: ${P} is ${b}^${k}` },
-    { value: E(k - 1), trap: `miscounted the power: ${P} is ${b}^${k}` },
-    { value: E(2 * k), trap: 'doubled' },
+  // Same rule as the difference: one ±1 slip, and no option orders of magnitude from a log value.
+  const distractors = pick4(rng, answer, clean([
     { value: E(-k), trap: 'sign error' },
-  ]);
+    k >= 3 && rng.bool()
+      ? { value: E(k - 1), trap: `counted one power too few: ${M} \\times ${N} = ${b}^{${k}}` }
+      : { value: E(k + 1), trap: `counted one power too many: ${M} \\times ${N} = ${b}^{${k}}` },
+  ]), nearby(clean([
+    { value: M + N <= 6 * k ? E(M + N) : null, trap: 'added the arguments: log a + log b is not log(a + b)' },
+    { value: P <= 25 ? E(P) : null, trap: `stopped at ${M} × ${N} = ${P} and forgot to take the log` },
+    { value: E(2 * k), trap: 'doubled' },
+    { value: frac(k, 2), trap: `used ${logTex(b * b, `(${M} \\times ${N})`)}: the base was misread as ${b * b}` },
+    { value: E(k + 2), trap: 'counted two powers too many' },
+    { value: k >= 3 ? E(k - 2) : null, trap: 'counted two powers too few' },
+  ]), answer));
   return {
-    stem: `Find the value of $${logTex(b, M)} + ${logTex(b, N)}$.`,
+    stem: logAsk(rng, `${logTex(b, M)} + ${logTex(b, N)}`),
     answer: { kind: 'exact', value: answer },
     options: buildOptions(rng, answer, distractors),
     solution: `$${logTex(b, M)} + ${logTex(b, N)} = ${logTex(b, `(${M} \\times ${N})`)} = ${logTex(b, P)} = ${k}$ since $${P} = ${b}^{${k}}$.`,

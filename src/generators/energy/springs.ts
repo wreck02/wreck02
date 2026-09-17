@@ -97,7 +97,7 @@ function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count 
     if (d.wide && wideSlots <= 0) return;
     if (d.ladder && ladderSlots <= 0) return;
     // the list as a whole must stay readable: never 250 N beside 0.25 N
-    if (out.length > 0 && Math.max(...nums, x) / Math.min(...nums, x) > 150) return;
+    if (out.length > 0 && Math.max(...nums, x) / Math.min(...nums, x) > 250) return;
     if (d.wide) wideSlots--;
     if (d.ladder) ladderSlots--;
     seen.push(d.value);
@@ -323,9 +323,11 @@ function hangingMassQ(rng: RNG): Generated | null {
     must: [
       { value: E(r((m / k) * s)), trap: 'forgot g: used the mass instead of the weight' },
       { value: E(r(((2 * m * G) / k) * s)), trap: 'used F = ½kx for the spring force' },
+      // the cm/m slip is 100x out, so it is rationed by `ranked`; asking for it here keeps it in the
+      // questions that have room for it instead of losing it to the shuffle
+      { value: inCm ? E(x) : E(xcm), trap: inCm ? 'found the extension in metres and called it cm' : 'gave the extension in cm', wide: true },
     ],
     extra: [
-      { value: inCm ? E(x) : E(xcm), trap: inCm ? 'found the extension in metres and called it cm' : 'gave the extension in cm', wide: true },
       { value: E(r(((m * G) / (2 * k)) * s)), trap: 'used F = 2kx, as if the spring were stretched at both ends' },
       { value: E(r(x * s * 10)), trap: 'slipped a decimal place', ladder: true },
       { value: E(r((x * s) / 10)), trap: 'slipped a decimal place the other way', ladder: true },

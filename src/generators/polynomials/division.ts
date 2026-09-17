@@ -273,7 +273,8 @@ function linearRemainderQ(rng: RNG): Generated | null {
     { display: poly([s, r]), trap: 'coefficients of the remainder swapped' },
     { display: poly(quotient), trap: 'gave the quotient instead of the remainder' },
     { display: poly([2 * p * m + r, 2 * qd * m + s]), trap: 'added instead of subtracting in the last step' },
-    { display: poly([r, s + m]), trap: 'arithmetic slip in the constant' },
+    { display: poly([r, dividend[3]]), trap: 'copied the constant term of the dividend instead of subtracting qm' },
+    { display: poly([dividend[2], s]), trap: 'copied the x-coefficient of the dividend instead of subtracting' },
   ];
   const opts = choiceOrNull(rng, correct, wrong);
   if (!opts) return null;

@@ -44,16 +44,38 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
   return out;
 }
 
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+/**
+ * One headline trap always goes in; the remaining musts are preferred within their own side of the
+ * answer and the rest are chosen towards a randomly drawn number of options *below* it. Without that
+ * the landing-speed question offers two mistakes below and two above in every single instance and
+ * "pick the middle option" scores 100%. Candidates that would stretch the option list beyond
+ * `maxSpread` are skipped: 900 m s⁻¹ has no business in a list whose answer is 30 m s⁻¹.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 40): Distractor[] {
+  const a = answer.toNumber();
   const seen: Exact[] = [answer];
+  const mags: number[] = Math.abs(a) > 0 ? [Math.abs(a)] : [];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
     if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+    const x = Math.abs(d.value.toNumber());
+    if (x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread) return;
     seen.push(d.value);
+    if (x > 0) mags.push(x);
     out.push(d);
   };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  const heads = rng.shuffle(must);
+  if (heads.length > 0) take(heads[0]);
+  const rest = heads.slice(1);
+  const side = (lo: boolean) => [...rest, ...rng.shuffle(extra)].filter((d) => (lo ? d.value.toNumber() < a : d.value.toNumber() > a));
+  const below = side(true);
+  const above = side(false);
+  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
+  while (out.length < count && (below.length > 0 || above.length > 0)) {
+    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
+    take((useBelow ? below : above).shift()!);
+    if (useBelow) wantBelow--;
+  }
   return out;
 }
 
@@ -87,13 +109,18 @@ function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generat
 }
 
 /** Heights that fall in a whole number of seconds: 5t². */
-const DROP_HEIGHTS = [5, 20, 45, 80, 125, 180];
-const DROPPED = ['A stone is dropped from rest from the top of a cliff', 'A ball is dropped from rest from a bridge', 'A coin is dropped from rest from a balcony', 'A stone is released from rest from a hovering helicopter'];
+const DROP_HEIGHTS = [5, 20, 45, 80, 125, 180, 245, 320];
+const DROPPED = [
+  'A stone is dropped from rest from the top of a cliff', 'A ball is dropped from rest from a bridge',
+  'A coin is dropped from rest from a balcony', 'A stone is released from rest from a hovering helicopter',
+  'A spanner is dropped from rest from some scaffolding', 'A brick is dropped from rest from the top of a tower',
+  'A pebble is dropped from rest down a well', 'A parcel is released from rest from a hovering drone',
+];
 
 // ------------------------------------------------------------------------------------------ level 1
 
 function dropTime(rng: RNG): Generated | null {
-  const h = rng.pick(DROP_HEIGHTS.slice(1, 5));
+  const h = rng.pick(DROP_HEIGHTS);
   const t = Math.sqrt((2 * h) / G);
   const stem = `${rng.pick(DROPPED)} ${q(h, U.s)} above the ground. ${G_NOTE} How long does it take to reach the ground?`;
   return finish(stem, t, U.t, physOptions(rng, t, U.t, [
@@ -101,8 +128,10 @@ function dropTime(rng: RNG): Generated | null {
     { value: h / G, trap: 'used s = gt (no ½, no square)' },
   ], [
     { value: rootOrNull(h / G), trap: 'forgot the 2: h = ½gt² gives t² = 2h/g' },
+    { value: rootOrNull(h / (2 * G)), trap: 'divided by 2 instead of multiplying: t² = 2h/g, not h/(2g)' },
     { value: 2 * t, trap: 'doubled the time (that would be the flight time of a ball thrown up and caught)' },
     { value: h / 20, trap: 'used h = 20t' },
+    { value: t / G, trap: 'divided by g after taking the root as well' },
   ]),
   `$h = \\tfrac{1}{2}gt^2$, so $t^2 = \\frac{2h}{g} = \\frac{${2 * h}}{10} = ${t * t}$ and $t = ${t}$ s.`,
   'From rest, h = ½gt² so t = √(2h/g): keep the 2 and finish with the square root.',
@@ -110,39 +139,86 @@ function dropTime(rng: RNG): Generated | null {
 }
 
 function dropSpeed(rng: RNG): Generated | null {
-  const h = rng.pick(DROP_HEIGHTS.slice(1, 5));
+  const h = rng.pick(DROP_HEIGHTS);
   const t = Math.sqrt((2 * h) / G);
   const v = G * t;
   const stem = `${rng.pick(DROPPED)} ${q(h, U.s)} above the ground. ${G_NOTE} Find its speed just before it hits the ground.`;
   return finish(stem, v, U.v, physOptions(rng, v, U.v, [
     { value: h / t, trap: 'found the average speed h/t, not the final speed (which is twice that)' },
-    { value: 9.8 * t, trap: 'used g = 9.8 m s⁻² instead of the stated 10 m s⁻²' },
+    { value: rng.bool(0.4) ? 9.8 * t : null, trap: 'used g = 9.8 m s⁻² instead of the stated 10 m s⁻²' },
   ], [
     { value: 2 * G * h, trap: 'forgot the square root in v² = 2gh' },
     { value: G * t * t, trap: 'used gt² instead of gt' },
     { value: h, trap: 'quoted the height as the speed' },
     { value: rootOrNull(G * h), trap: 'forgot the 2 in v² = 2gh' },
+    { value: t, trap: 'quoted the time of fall instead of the speed' },
+    { value: G * t * 2, trap: 'doubled: v = gt already uses the whole fall' },
   ]),
   `Either $v^2 = 2gh = 2 \\times 10 \\times ${h} = ${2 * G * h}$, so $v = ${v}$ m s$^{-1}$; or fall time $t = \\sqrt{2h/g} = ${t}$ s and $v = gt = ${v}$ m s$^{-1}$.`,
   'The landing speed is gt (or √(2gh)); h/t is the average speed, which is only half of it.',
   ['projectiles', 'free fall', 'speed'], { ask: 'drop-speed', h });
 }
 
+/** Level 1, third shape: the first t seconds of a free fall (speed gt, or distance ½gt²). */
+function dropAfterT(rng: RNG): Generated | null {
+  const t = rng.pick([1, 2, 3, 4, 5, 6]);
+  const v = G * t;
+  const h = 0.5 * G * t * t;
+  const who = rng.pick(['A stone', 'A ball', 'A coin', 'A spanner', 'A brick', 'A pebble', 'A parcel', 'A marble']);
+  const where = rng.pick(['a tall building', 'a high cliff', 'a tall tower', 'a hovering helicopter']);
+  const askSpeed = rng.bool(0.5);
+  if (askSpeed) {
+    const stem = `${who} is dropped from rest from ${where}. ${G_NOTE} Find its speed after ${q(t, U.t)}.`;
+    return finish(stem, v, U.v, physOptions(rng, v, U.v, [
+      { value: h, trap: 'found the distance fallen ½gt² instead of the speed' },
+      { value: G * t * t, trap: 'used gt² instead of gt' },
+    ], [
+      { value: 0.5 * G * t, trap: 'slipped a ½ into v = gt (the ½ belongs to the distance)' },
+      { value: G, trap: 'quoted g: the speed after t seconds is gt' },
+      { value: t / G, trap: 'divided by g instead of multiplying' },
+      { value: G / t, trap: 'divided g by the time' },
+      { value: rng.bool(0.4) ? 9.8 * t : null, trap: 'used g = 9.8 m s⁻² instead of the stated 10 m s⁻²' },
+      { value: G * t + G, trap: 'added an extra second of falling' },
+    ]),
+    `From rest, $v = gt = 10 \\times ${t} = ${v}$ m s$^{-1}$.`,
+    'From rest the speed after t seconds is gt; ½gt² is the distance fallen.',
+    ['projectiles', 'free fall', 'speed'], { ask: 'drop-after-v', t });
+  }
+  const stem = `${who} is dropped from rest from ${where}. ${G_NOTE} How far does it fall in the first ${q(t, U.t)}?`;
+  return finish(stem, h, U.s, physOptions(rng, h, U.s, [
+    { value: G * t * t, trap: 'forgot the ½ in ½gt²' },
+    { value: G * t, trap: 'found the speed gt instead of the distance' },
+  ], [
+    { value: 0.5 * G * t, trap: 'forgot to square the time' },
+    { value: t * t, trap: 'forgot g as well as the ½' },
+    { value: 0.5 * 9.8 * t * t, trap: 'used g = 9.8 m s⁻² instead of the stated 10 m s⁻²' },
+    { value: 0.5 * G * t * t * t, trap: 'cubed the time' },
+    { value: 0.25 * G * t * t, trap: 'halved twice' },
+  ]),
+  `$s = \\tfrac{1}{2}gt^2 = \\tfrac{1}{2} \\times 10 \\times ${t}^2 = ${num(h)}$ m.`,
+  'From rest the distance fallen is ½gt²: keep the ½ and square the time.',
+  ['projectiles', 'free fall', 'distance'], { ask: 'drop-after-s', t });
+}
+
 // ------------------------------------------------------------------------------------------ level 2
 
-const THROWN_UP = ['A ball is thrown vertically upwards', 'A stone is projected vertically upwards', 'A tennis ball is hit vertically upwards'];
+const THROWN_UP = [
+  'A ball is thrown vertically upwards', 'A stone is projected vertically upwards', 'A tennis ball is hit vertically upwards',
+  'A coin is flicked vertically upwards', 'A firework is launched vertically upwards', 'A cricket ball is hit vertically upwards',
+];
 
 function upHeight(rng: RNG): Generated | null {
-  const u = rng.pick([10, 20, 30, 40, 50]);
+  const u = rng.pick([5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50]);
   const H = (u * u) / (2 * G);
   const stem = `${rng.pick(THROWN_UP)} with speed ${q(u, U.v)}. ${G_NOTE} Find the maximum height it reaches above the point of projection.`;
   return finish(stem, H, U.s, physOptions(rng, H, U.s, [
     { value: (u * u) / G, trap: 'forgot the 2 in v² = u² − 2gh (used h = u²/g)' },
     { value: u / G, trap: 'used u instead of u²: u/g is the time to the top, not the height' },
   ], [
-    { value: (u * u) / (4 * G), trap: 'an extra factor of ½ crept in' },
-    { value: 2 * u, trap: 'used 2u/g × 10' },
-    { value: u * (u / G), trap: 'multiplied u by the time to the top without halving (average speed is u/2)' },
+    { value: (u * u) / (4 * G), trap: 'used the average speed u/2 and the time to the top, then halved again' },
+    { value: u * u, trap: 'forgot to divide by 2g altogether' },
+    { value: (u * u) / (2 * G * G), trap: 'divided by g twice' },
+    { value: (2 * u * u) / G, trap: 'used ½gt² with the whole flight time 2u/g instead of the time to the top' },
   ]),
   `At the top $v = 0$: $0 = u^2 - 2gH$, so $H = \\frac{u^2}{2g} = \\frac{${u * u}}{20} = ${num(H)}$ m.`,
   'Maximum height is u²/(2g): square the speed and keep the 2 (average speed u/2 × time u/g).',
@@ -150,7 +226,7 @@ function upHeight(rng: RNG): Generated | null {
 }
 
 function upTime(rng: RNG): Generated | null {
-  const u = rng.pick([10, 15, 20, 25, 30, 40, 50]);
+  const u = rng.pick([5, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50]);
   const total = rng.bool(0.35);
   const tTop = u / G;
   if (total) {
@@ -163,6 +239,8 @@ function upTime(rng: RNG): Generated | null {
       { value: 4 * tTop, trap: 'doubled twice' },
       { value: u / 20, trap: 'used u/(2g)' },
       { value: (u * u) / G, trap: 'used u²/g' },
+      { value: u / (G * G), trap: 'divided by g twice' },
+      { value: (u * u) / (2 * G * G), trap: 'found u²/2g and divided by g again' },
     ]),
     `Time to the top is $\\frac{u}{g} = \\frac{${u}}{10} = ${num(tTop)}$ s; by symmetry the total time is $2 \\times ${num(tTop)} = ${num(T)}$ s.`,
     'Up-and-down flight time is 2u/g: the trip up takes u/g and the trip down takes the same again.',
@@ -175,7 +253,10 @@ function upTime(rng: RNG): Generated | null {
   ], [
     { value: u / 20, trap: 'used u/(2g)' },
     { value: (u * u) / G, trap: 'used u²/g' },
-    { value: u / 9.8, trap: 'used g = 9.8 instead of the stated 10' },
+    { value: u / (G * G), trap: 'divided by g twice' },
+    { value: G / u, trap: 'inverted: divided g by the speed' },
+    { value: u, trap: 'quoted the speed of projection as the time' },
+    { value: rng.bool(0.4) ? u / 9.8 : null, trap: 'used g = 9.8 instead of the stated 10' },
   ]),
   `At the top $v = 0$, so $0 = u - gt$ and $t = \\frac{u}{g} = \\frac{${u}}{10} = ${num(tTop)}$ s.`,
   'Time to the top is u/g (v = 0 there); 2u/g is the whole flight back to the launch height.',
@@ -203,7 +284,9 @@ function horizontalLaunch(rng: RNG): Generated | null {
     ], [
       { value: h / G, trap: 'used h = gt' },
       { value: rootOrNull(h / G), trap: 'forgot the 2 in t² = 2h/g' },
+      { value: rootOrNull(h / (2 * G)), trap: 'divided by 2 instead of multiplying: t² = 2h/g, not h/(2g)' },
       { value: 2 * t, trap: 'doubled the fall time' },
+      { value: t / G, trap: 'divided by g after taking the root as well' },
     ]),
     `Vertically the motion is a free fall from rest: $h = \\tfrac{1}{2}gt^2$, so $t = \\sqrt{\\frac{2 \\times ${h}}{10}} = \\sqrt{${t * t}} = ${t}$ s. The horizontal speed is irrelevant.`,
     'Horizontal and vertical motions are independent: the fall time comes from h = ½gt² alone.',
@@ -228,8 +311,10 @@ function horizontalLaunch(rng: RNG): Generated | null {
 
 function components(rng: RNG): Generated | null {
   const ask = rng.pick(['time', 'range', 'height'] as const);
-  const uy = rng.pick(ask === 'height' ? [10, 20, 30, 40] : [10, 15, 20, 25, 30, 40]);
-  const ux = rng.pick([5, 8, 10, 12, 15, 20, 25, 30]);
+  // For the time of flight, u_y and u_x are multiples of 10 and 5: otherwise 2u_y/g is the only whole
+  // number in the list (u_y/g and 2u_x/g are halves) and the answer can be spotted by its form alone.
+  const uy = rng.pick(ask === 'height' ? [10, 20, 30, 40] : ask === 'time' ? [10, 20, 30, 40] : [10, 15, 20, 25, 30, 40]);
+  const ux = rng.pick(ask === 'time' ? [5, 10, 15, 20, 25, 30] : [5, 8, 10, 12, 15, 20, 25, 30]);
   const T = (2 * uy) / G;
   const R = ux * T;
   const H = (uy * uy) / (2 * G);
@@ -249,6 +334,8 @@ function components(rng: RNG): Generated | null {
       { value: (2 * speed) / G, trap: 'used the full speed instead of the vertical component' },
       { value: uy / 20, trap: 'used u_y/(2g)' },
       { value: (uy * uy) / (2 * G), trap: 'found the maximum height instead of the time' },
+      { value: (4 * uy) / G, trap: 'doubled the flight time again' },
+      { value: (2 * uy) / (G * G), trap: 'divided by g twice' },
     ]),
     `${compNote}Vertically: $0 = u_y t - \\tfrac{1}{2}gt^2$, so $T = \\frac{2u_y}{g} = \\frac{2 \\times ${uy}}{10} = ${num(T)}$ s.`,
     'Time of flight is 2u_y/g: only the vertical component matters, and u_y/g is just the time to the top.',
@@ -263,6 +350,8 @@ function components(rng: RNG): Generated | null {
       { value: speed * T, trap: 'multiplied the flight time by the full speed' },
       { value: (ux * ux) / G, trap: 'used u_x²/g' },
       { value: (uy * uy) / (2 * G), trap: 'found the maximum height instead of the range' },
+      { value: 2 * ux * T, trap: 'doubled the flight time, which is already the whole flight' },
+      { value: ux * T + uy * T, trap: 'added the two components before multiplying by the time' },
     ]),
     `${compNote}Time of flight $T = \\frac{2u_y}{g} = ${num(T)}$ s; horizontally there is no acceleration, so range $= u_x T = ${ux} \\times ${num(T)} = ${num(R)}$ m.`,
     'Range = horizontal component × total flight time (2u_y/g); the half-time gives only half the range.',
@@ -276,6 +365,7 @@ function components(rng: RNG): Generated | null {
     { value: (speed * speed) / (2 * G), trap: 'used the full speed instead of the vertical component' },
     { value: uy * (uy / G), trap: 'multiplied u_y by the time to the top without averaging (u_y/2)' },
     { value: (uy * uy) / (4 * G), trap: 'an extra ½ crept in' },
+    { value: (uy * uy) / (2 * G * G), trap: 'divided by g twice' },
   ]),
   `${compNote}At the top the vertical velocity is zero: $0 = u_y^2 - 2gH$, so $H = \\frac{u_y^2}{2g} = \\frac{${uy * uy}}{20} = ${num(H)}$ m.`,
   'Maximum height uses the vertical component only: H = u_y²/(2g); with ½gt² you must use the time to the top, not the whole flight.',
@@ -286,11 +376,14 @@ function components(rng: RNG): Generated | null {
 
 /** (u, h) pairs with u² − 20h a positive perfect square: speed v = √(u² − 2gh) at height h. */
 const SPEED_AT_HEIGHT: { u: number; h: number; v: number }[] = [];
-for (const u of [15, 20, 25, 30, 35, 40, 45, 50]) {
-  for (let h = 5; h < (u * u) / 20; h += 5) {
+for (const u of [15, 20, 22, 24, 25, 26, 28, 30, 32, 34, 35, 36, 38, 40, 42, 44, 45, 46, 48, 50]) {
+  for (let h = 5; h < (u * u) / 20; h++) {
     const v2 = u * u - 20 * h;
     const v = Math.sqrt(v2);
-    if (Number.isInteger(v) && v > 0 && v < u) SPEED_AT_HEIGHT.push({ u, h, v });
+    // u/2 ≤ v ≤ 20: the cap keeps every option in a plausible band ("forgot the square root" is then at
+    // most 20 times the answer), and v ≥ u/2 makes u − v, the loss in speed, land *below* the answer, so
+    // the correct option is not the smallest one in every single question.
+    if (Number.isInteger(v) && v > 0 && v <= 20 && 2 * v >= u) SPEED_AT_HEIGHT.push({ u, h, v });
   }
 }
 
@@ -312,12 +405,17 @@ function speedAtHeight(rng: RNG): Generated | null {
   const stem = `${rng.pick(THROWN_UP)} with speed ${q(u, U.v)}. ${G_NOTE} Find its speed when it is ${q(h, U.s)} above the point of projection.`;
   return finish(stem, v, U.v, physOptions(rng, v, U.v, [
     { value: u * u - 2 * G * h, trap: 'forgot the square root: u² − 2gh is v², not v' },
-    { value: rootOrNull(u * u - G * h), trap: 'forgot the 2 in v² = u² − 2gh' },
+    { value: (u * u - 2 * G * h) / u, trap: 'divided v² by u instead of taking the square root' },
   ], [
+    { value: rootOrNull(u * u - G * h), trap: 'forgot the 2 in v² = u² − 2gh' },
     { value: rootOrNull(u * u + 2 * G * h), trap: 'sign error: the ball is rising against gravity, so v² = u² − 2gh' },
     { value: r2gh === null ? null : u - r2gh, trap: 'subtracted speeds instead of squares of speeds' },
-    { value: u - h, trap: 'subtracted the height from the speed' },
-    { value: u - 2 * h, trap: 'subtracted 2h from u' },
+    { value: u - (G * h) / u, trap: 'used t = h/u (as if the speed were constant) and then v = u − gt' },
+    { value: u - G, trap: 'subtracted g once, as if h were a time' },
+    { value: u, trap: 'assumed the speed is unchanged' },
+    { value: u - v, trap: 'quoted the loss in speed rather than the speed' },
+    { value: (u + v) / 2, trap: 'averaged the speed at the start and at that height' },
+    { value: u / 2, trap: 'halved the speed of projection' },
   ]),
   `$v^2 = u^2 - 2gh = ${u * u} - 2 \\times 10 \\times ${h} = ${v * v}$, so $v = ${v}$ m s$^{-1}$ (the same by energy: $\\tfrac{1}{2}v^2 = \\tfrac{1}{2}u^2 - gh$).`,
   'Use v² = u² − 2gh (energy per unit mass): subtract 2gh from u², then square-root.',
@@ -334,9 +432,10 @@ function launchSpeed(rng: RNG): Generated | null {
     { value: rootOrNull((2 * H) / G), trap: 'found the time to the top √(2H/g) instead of the speed' },
   ], [
     { value: rootOrNull(G * H), trap: 'forgot the 2 in u² = 2gH' },
-    { value: 2 * u, trap: 'doubled the speed' },
-    { value: u / 2, trap: 'halved the speed' },
-    { value: H / G, trap: 'used H = gu' },
+    { value: rootOrNull((2 * H) / G) === null ? null : 2 * rootOrNull((2 * H) / G)!, trap: 'found the total time of flight instead of the speed' },
+    { value: rootOrNull((2 * H) / G) === null ? null : H / rootOrNull((2 * H) / G)!, trap: 'used the average speed H/t, which is only half the speed of projection' },
+    { value: H, trap: 'quoted the height as the speed' },
+    { value: G * H, trap: 'used u = gH' },
   ]),
   `At the top $v = 0$: $0 = u^2 - 2gH$, so $u^2 = 2 \\times 10 \\times ${H} = ${2 * G * H}$ and $u = ${u}$ m s$^{-1}$.`,
   'Launch speed for height H is √(2gH): the same equation as max height, rearranged; keep the 2 and take the root.',
@@ -357,6 +456,9 @@ function cliffThrow(rng: RNG): Generated | null {
       { value: fallRest === null ? null : u + G * fallRest, trap: 'added speeds instead of squares of speeds' },
       { value: rootOrNull(u * u - 2 * G * h), trap: 'sign error: the sea is below the start, so v² = u² + 2gh' },
       { value: u, trap: 'assumed it lands at the speed it was thrown (true only back at the launch height)' },
+      { value: v - u, trap: 'quoted the gain in speed rather than the landing speed' },
+      { value: (u + v) / 2, trap: 'averaged the launch speed and the landing speed' },
+      { value: G * T, trap: 'used v = gT, as if it were dropped from rest at the cliff edge' },
     ]),
     `Taking downwards as positive over the whole flight: $v^2 = u^2 + 2gh = ${u * u} + 2 \\times 10 \\times ${h} = ${v * v}$, so $v = ${v}$ m s$^{-1}$ (the direction of the throw does not matter for the speed).`,
     'By energy (or v² = u² + 2gh with the displacement h below the start) the landing speed is √(u² + 2gh); the throw direction only affects the time.',
@@ -371,6 +473,8 @@ function cliffThrow(rng: RNG): Generated | null {
     { value: fallRest, trap: 'ignored the throw: treated it as dropped from rest' },
     { value: 2 * T, trap: 'forgot the 2a in the quadratic formula denominator' },
     { value: u / G + (fallRest ?? 0), trap: 'time to the top plus a fall from rest through h' },
+    { value: (u + v) / G + upTime, trap: 'added the time back to the launch height to the whole flight time' },
+    { value: (2 * v) / G, trap: 'added the two roots of the quadratic instead of taking the positive one' },
   ]),
   `Upwards positive, displacement $-${h}$ m: $-${h} = ${u}t - 5t^2$, i.e. $${poly([1, -u / 5, -h / 5], 't')} = 0$, so $(t - ${num(T)})(t + ${num((v - u) / 10)}) = 0$ and $t = ${num(T)}$ s.`,
   'Set up s = ut − ½gt² with s = −h (below the start) and solve the quadratic; take the positive root, and remember 2u/g is only the return to the launch height.',
@@ -386,8 +490,9 @@ function topSpeed(rng: RNG): Generated | null {
     { value: uy, trap: 'quoted the vertical component instead of the horizontal one' },
   ], [
     { value: speed, trap: 'assumed the speed is unchanged' },
-    { value: speed / 2, trap: 'halved the speed' },
+    { value: ux + uy, trap: 'added the two components instead of resolving' },
     { value: (uy * uy) / (2 * G), trap: 'found the maximum height instead of the speed' },
+    { value: (2 * uy) / G, trap: 'found the time of flight instead of the speed' },
   ]),
   `$\\cos\\theta = ${frac(ux, speed).toLatex()}$, so the horizontal component is $${num(speed)} \\times ${frac(ux, speed).toLatex()} = ${ux}$ m s$^{-1}$. At the top the vertical component is zero and the horizontal component is unchanged, so the speed is $${ux}$ m s$^{-1}$.`,
   'At the top only the vertical component is zero; the horizontal component (u cos θ) is untouched, so the speed is not zero.',
@@ -420,7 +525,7 @@ export default defineTemplate({
   topic: 'kinematics',
   title: 'Projectiles with g = 10',
   levels: {
-    1: 'dropped from 20, 45, 80, 125 m: time to fall or landing speed',
+    1: 'dropped from 5–320 m: time to fall or landing speed; the speed and the distance after t seconds',
     2: 'thrown vertically up at 10–50 m/s: max height u²/20, time to the top u/10, total time 2u/10',
     3: 'horizontal launch from a cliff: range = u_x × fall time (or the fall time)',
     4: 'given components (or speed with sin θ = 3/5): time of flight, range, maximum height',
@@ -429,7 +534,7 @@ export default defineTemplate({
   generate(rng, level: Level) {
     return retry(rng, () => {
       switch (level) {
-        case 1: return pickVariant(rng, [dropTime, dropSpeed]);
+        case 1: return pickVariant(rng, [dropTime, dropSpeed, dropAfterT]);
         case 2: return pickVariant(rng, [upHeight, upTime]);
         case 3: return pickVariant(rng, [horizontalLaunch]);
         case 4: return pickVariant(rng, [components]);
@@ -450,6 +555,14 @@ export default defineTemplate({
       case 'drop-speed': { // generator: v = gt (t from ½gt²). Numeric route: landing time by bisection, v = g t.
         const t = landingTime((t) => p.h - 0.5 * G * t * t);
         return close(ans, G * t);
+      }
+      case 'drop-after-v': { // generator: v = gt. Energy route: h = ½gt², v = √(2gh).
+        const h = 0.5 * G * p.t * p.t;
+        return close(ans, Math.sqrt(2 * G * h));
+      }
+      case 'drop-after-s': { // generator: ½gt². Route: average speed ½gt over t seconds.
+        const v = G * p.t;
+        return close(ans, 0.5 * v * p.t);
       }
       case 'up-height': { // generator: H = u²/2g. Kinematic route: t = u/g, H = ut − ½gt².
         const t = p.u / G;

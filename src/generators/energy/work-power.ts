@@ -71,7 +71,7 @@ function cleanOnly(ds: Candidate[], answer: Exact, pct = false): Ranked[] {
     const x = v.toNumber();
     if (x < 0.001 || x > 2e6) continue;
     if (pct) {
-      if (x >= 100 || !v.isRational()) continue;
+      if (x > 100 || !v.isRational()) continue;
       const den = v.toRat().d;
       if (!(den <= 2n || (x < 1 && Number.isInteger(r(x * 100))))) continue;
     } else {
@@ -115,15 +115,19 @@ function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count 
     nums.push(x);
     out.push(d);
   };
-  must.forEach(take);
-  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
-  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
-  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
-  while (out.length < count && below.length + above.length > 0) {
-    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
-    take((useBelow ? below : above).shift()!);
-    if (useBelow) wantBelow--;
-  }
+  const ordered = [...must, ...rng.shuffle(extra)];
+  const below = ordered.filter((d) => d.value.toNumber() < a);
+  const above = ordered.filter((d) => d.value.toNumber() > a);
+  // Whole families of mistake here sit on one side by construction: F + d and Fd/2 are both smaller
+  // than Fd, mg sin 30 and the whole weight are both bigger than the answer on a slope. Taking every
+  // `must` first therefore pins the answer to the same slot in every instance of a variant, so the
+  // number of options below it is drawn uniformly and then clamped to what the list can supply.
+  const floor = Math.max(0, count - above.length);
+  const ceil = Math.min(count, below.length);
+  const nBelow = Math.max(Math.min(rng.int(0, count), ceil), Math.min(floor, ceil));
+  for (const d of below) { if (out.length >= nBelow) break; take(d); }
+  for (const d of above) take(d);
+  for (const d of below) take(d);
   return out.map((d) => ({ value: d.value, trap: d.trap }));
 }
 
@@ -189,6 +193,8 @@ function workQ(rng: RNG): Generated | null {
     extra: [
       { value: F % d === 0 ? E(F / d) : d % F === 0 ? E(d / F) : null, trap: 'divided instead of multiplying' },
       { value: F - d > 0 ? E(F - d) : null, trap: 'subtracted the distance from the force' },
+      { value: E(F * (d + 1)), trap: 'counted one metre too many' },
+      { value: d > 2 ? E(F * (d - 1)) : null, trap: 'counted one metre too few' },
       { value: E(2 * W), trap: 'doubled the product' },
       { value: E(W / 1000), trap: 'gave the answer in kJ', wide: true },
       { value: E(W * 10), trap: 'slipped a decimal place' },
@@ -412,6 +418,9 @@ function efficiencyPctQ(rng: RNG): Generated | null {
       { value: E(e / 2), trap: 'halved the ratio' },
       { value: E(100 - 2 * e), trap: 'doubled the ratio and then took the wasted percentage' },
       { value: E((100 - e) / 2), trap: 'halved the wasted percentage' },
+      { value: E(e + 10), trap: 'arithmetic slip of ten in the ratio' },
+      { value: e > 10 ? E(e - 10) : null, trap: 'arithmetic slip of ten in the ratio the other way' },
+      { value: E((100 + e) / 2), trap: 'averaged the efficiency with 100%, as if half the loss were recovered' },
     ],
     solution: `Efficiency $= \\dfrac{\\text{useful}}{\\text{total}} \\times 100\\% = \\dfrac{${use}}{${tot}} \\times 100\\% = ${e}\\%$.`,
     trap: 'Efficiency is useful ÷ total (never above 100%), and the question asks for the useful fraction, not the wasted one.',
@@ -441,6 +450,8 @@ function inputPowerQ(rng: RNG): Generated | null {
       { value: tryE(() => E(100 * pout).div(E(100 - e))), trap: 'divided by the wasted fraction' },
       { value: E((pout * (100 + e)) / 100), trap: `added ${e}% to the output` },
       { value: E(pout + e), trap: 'added the percentage as if it were watts' },
+      { value: E(pout), trap: 'forgot the losses: took the input to equal the useful output' },
+      { value: tryE(() => E(10000 * pout).div(E(e * e))), trap: 'divided by the efficiency twice' },
       { value: E(pin * 10), trap: 'slipped a decimal place' },
     ],
     solution: `Useful $= ${e}\\%$ of input, so input $= \\dfrac{${pout}}{${n(e / 100)}} = ${pin}\\ \\text{W}$.`,
@@ -535,6 +546,8 @@ function liftPowerQ(rng: RNG): Generated | null {
       { value: E((m * G * scale) / t), trap: 'forgot the height: used mg/t' },
       { value: E((h / t) * scale), trap: 'gave the speed h/t, not the power' },
       { value: E(2 * P * scale), trap: 'doubled the power' },
+      { value: t > 1 ? E((W * scale) / (t * t)) : null, trap: 'divided by the time twice' },
+      { value: E((P * scale) / 10), trap: 'slipped a decimal place the other way' },
       { value: scenario === 'pump' ? E(W * scale) : E(P * scale * 10), trap: scenario === 'pump' ? 'used the time in minutes, not seconds' : 'slipped a decimal place' },
     ],
     solution: `Work done $= mgh = ${m} \\times 10 \\times ${h} = ${W}\\ \\text{J}$, so $P = \\dfrac{${W}}{${t}} = ${P}\\ \\text{W}${inKW ? ` = ${n(P / 1000)}\\ \\text{kW}` : ''}$${scenario === 'pump' ? ' (one minute is 60 s)' : ''}.`,

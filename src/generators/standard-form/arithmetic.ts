@@ -133,14 +133,17 @@ function convert(rng: RNG): Generated | null {
   const mant = second === 0 ? first : first + second / 10;
   const k = rng.bool(0.6) ? rng.int(2, 7) : -rng.int(2, 5);
   const ans = sf(mant, k);
-  // The sign slip is only offered for a number below 1, where writing 3.2 x 10^{3} for 0.0032 is the
-  // mistake the mark scheme records. A number in the millions with a negative exponent is discarded
-  // on sight, and two such options would leave only two live distractors.
+  // The sign slip is offered whichever side of 1 the number lies: writing 3.2 x 10^{3} for 0.0032 and
+  // 1.8 x 10^{-4} for 18 000 are the same confusion, and it is the one the mark scheme records. Only
+  // one such option is ever built, so the list never spends two slots on it.
   const flip: { value: Exact | null; trap: string } = k < 0
     ? (rng.bool()
       ? { value: sf(mant, -k), trap: 'wrong sign on the exponent' }
       : { value: sf(mant, -k + 1), trap: 'wrong sign on the exponent and an off-by-one' })
-    : { value: null, trap: '' };
+    : { value: sf(mant, -k), trap: 'wrong sign on the exponent: a number bigger than 1 needs a positive one' };
+  // Seven exponent slips, four of them below the answer and four above (k ± 4 and the sign flip reach
+  // further than k ± 3 alone), so `balance` can seat the answer anywhere in the sorted list. A pool of
+  // k ± 1, 2, 3 is symmetric and three deep: the answer could then never be the largest option.
   const ds = keep([
     { value: sf(mant, k + 1), trap: k > 0 ? 'counted the digits instead of the places the point moves' : 'counted the zeros after the point rather than the places the point moves' },
     { value: sf(mant, k - 1), trap: 'counted one place too few' },
@@ -149,6 +152,8 @@ function convert(rng: RNG): Generated | null {
     { value: sf(mant, k - 2), trap: 'moved the decimal point two places too few' },
     { value: sf(mant, k + 3), trap: 'a whole group of three zeros counted twice' },
     { value: sf(mant, k - 3), trap: 'a whole group of three zeros missed' },
+    { value: sf(mant, k + 4), trap: 'counted the digits of the whole number, not the places the point moves' },
+    { value: sf(mant, k - 4), trap: 'lost a group of four places' },
   ]);
   const num = ordinary(digits, k);
   const stem = `Write $${num}$ in standard form.`;
@@ -172,8 +177,10 @@ function easyProduct(rng: RNG): Generated | null {
     { value: sf(a * b, Math.abs(m - n)), trap: 'subtracted the exponents' },
     { value: sf(a + b, m * n), trap: 'added the mantissas and multiplied the exponents' },
     { value: sf(a * b, m + n + 1), trap: 'added an extra 1 to the exponent' },
+    { value: sf(a * b, m + n + 2), trap: 'counted the digits of each number instead of its zeros: one power of ten too many from each' },
     { value: sf(a * b, m + n - 1), trap: 'lost 1 from the exponent' },
     { value: sf(a * b, Math.max(m, n)), trap: 'kept the larger power of ten instead of adding the exponents' },
+    { value: sf(E(a).div(E(b)), m + n), trap: 'divided the mantissas instead of multiplying them' },
   ]);
   const stem = `Find the value of $${br(a, m)} \\times ${br(b, n)}$, ${IN_SF}.`;
   const solution = `Multiply the mantissas and add the exponents: $${a} \\times ${b} = ${a * b}$ and $10^{${m}} \\times 10^{${n}} = 10^{${m + n}}$, so the answer is $${ansTex(ans)}$.`;

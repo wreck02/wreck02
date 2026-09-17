@@ -8,13 +8,14 @@ real constraint: **27 multiple-choice questions in 40 minutes, no calculator, ab
 **92 templates across 26 topics** cover Mathematics 1, Mathematics 2 and Physics, each parameterised over
 five difficulty levels, so no two sessions are the same.
 
-Nothing leaves your machine. There is no backend; progress lives in your browser's localStorage.
+Nothing leaves your machine. There is no backend, and the built app makes no network requests at all:
+KaTeX and its fonts are bundled, and your progress lives in your browser's localStorage.
 
 ## Run it
 
 ```sh
 npm install      # once
-npm start        # opens the dev server on http://localhost:5173
+npm start        # dev server at http://localhost:5173
 ```
 
 For a fully offline copy: `npm run build` then `npm run preview` (serves `dist/` on port 4173), or copy `dist/`

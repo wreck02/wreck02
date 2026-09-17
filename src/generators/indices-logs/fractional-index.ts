@@ -99,6 +99,24 @@ function countAbove(answer: Exact, pool: Distractor[]): number {
 }
 
 /**
+ * How many of the options should sit below the answer. The part of the sorted list the answer lands in
+ * — near the bottom, in the middle, near the top — is drawn uniformly from the parts the candidate
+ * mistakes can actually reach, so a candidate who recognises the variant learns nothing from where the
+ * correct option sits. When every mistake falls on one side there is nothing to choose and the answer
+ * sits where the mathematics puts it.
+ */
+function belowCount(rng: RNG, belowAvail: number, aboveAvail: number, count: number): number {
+  const lo = Math.max(0, count - aboveAvail);
+  const hi = Math.min(count, belowAvail);
+  if (lo >= hi) return Math.min(lo, hi);
+  const feasible: number[] = [];
+  for (let k = lo; k <= hi; k++) feasible.push(k);
+  const third = (k: number) => (2 * k < count ? 0 : 2 * k > count ? 2 : 1);
+  const part = rng.pick([...new Set(feasible.map(third))]);
+  return rng.pick(feasible.filter((k) => third(k) === part));
+}
+
+/**
  * Take `count` of them with a randomly drawn number below the answer, so the correct option is not
  * pinned to one slot in the sorted list. The draw is uniform over all five positions and then clamped
  * to what the candidate list can actually supply, which means the scarcer side is always used in full:
@@ -108,9 +126,7 @@ function splitPick(rng: RNG, answer: Exact, pool: Distractor[], count = 4): Dist
   const a = answer.toNumber();
   const below = pool.filter((d) => d.value.toNumber() < a);
   const above = pool.filter((d) => d.value.toNumber() > a);
-  const lo = Math.max(0, count - above.length);
-  const hi = Math.min(count, below.length);
-  const nBelow = Math.max(Math.min(rng.int(0, count), hi), Math.min(lo, hi));
+  const nBelow = belowCount(rng, below.length, above.length, count);
   return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
 }
 

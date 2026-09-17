@@ -71,6 +71,24 @@ function cleanOnly(ds: Cand[], step: number): Distractor[] {
 }
 
 /**
+ * How many of the options should sit below the answer. The part of the sorted list the answer lands in
+ * — near the bottom, in the middle, near the top — is drawn uniformly from the parts the candidate
+ * mistakes can actually reach, so a candidate who recognises the variant learns nothing from where the
+ * correct option sits. When every mistake falls on one side there is nothing to choose and the answer
+ * sits where the mathematics puts it.
+ */
+function belowCount(rng: RNG, belowAvail: number, aboveAvail: number, count: number): number {
+  const lo = Math.max(0, count - aboveAvail);
+  const hi = Math.min(count, belowAvail);
+  if (lo >= hi) return Math.min(lo, hi);
+  const feasible: number[] = [];
+  for (let k = lo; k <= hi; k++) feasible.push(k);
+  const third = (k: number) => (2 * k < count ? 0 : 2 * k > count ? 2 : 1);
+  const part = rng.pick([...new Set(feasible.map(third))]);
+  return rng.pick(feasible.filter((k) => third(k) === part));
+}
+
+/**
  * `must` traps get their slot first inside each side of the answer, nearest the answer first; the
  * extras follow in random order. Three rules decide what may join the list:
  *  · the whole list — the answer and everything already chosen — may span at most `spread`, because an
@@ -110,9 +128,7 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   };
   const below = ordered.filter((d) => plausible(d) && d.value.toNumber() < a);
   const above = ordered.filter((d) => plausible(d) && d.value.toNumber() > a);
-  const floor = Math.max(0, count - above.length);
-  const ceil = Math.min(count, below.length);
-  const nBelow = Math.max(Math.min(rng.int(0, count), ceil), Math.min(floor, ceil));
+  const nBelow = belowCount(rng, below.length, above.length, count);
   for (const d of below) { if (out.length >= nBelow) break; take(d); }
   for (const d of above) take(d);
   for (const d of below) take(d);

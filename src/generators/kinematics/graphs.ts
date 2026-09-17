@@ -173,7 +173,6 @@ function straightST(rng: RNG): Generated | null {
     { value: s / (t * t), trap: 'divided by the time twice' },
     { value: (s - t) / t, trap: 'subtracted the time from the displacement before dividing' },
     { value: 2 * v, trap: 'read the gradient as the displacement over half the time' },
-    { value: s / t + t, trap: 'added the time to the gradient' },
   ]),
   `Speed is the gradient of the displacement–time graph: $\\frac{${s}}{${t}} = ${v}$ m s$^{-1}$.`,
   'On a displacement–time graph the gradient is the velocity (area under it means nothing useful).',

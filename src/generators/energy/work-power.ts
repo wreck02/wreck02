@@ -85,6 +85,24 @@ function cleanOnly(ds: Candidate[], answer: Exact, pct = false): Ranked[] {
 }
 
 /**
+ * How many of the options should sit below the answer. The part of the sorted list the answer lands in
+ * — near the bottom, in the middle, near the top — is drawn uniformly from the parts the candidate
+ * mistakes can actually reach, so a candidate who recognises the variant learns nothing from where the
+ * correct option sits. When every mistake falls on one side there is nothing to choose and the answer
+ * sits where the mathematics puts it.
+ */
+function belowCount(rng: RNG, belowAvail: number, aboveAvail: number, count: number): number {
+  const lo = Math.max(0, count - aboveAvail);
+  const hi = Math.min(count, belowAvail);
+  if (lo >= hi) return Math.min(lo, hi);
+  const feasible: number[] = [];
+  for (let k = lo; k <= hi; k++) feasible.push(k);
+  const third = (k: number) => (2 * k < count ? 0 : 2 * k > count ? 2 : 1);
+  const part = rng.pick([...new Set(feasible.map(third))]);
+  return rng.pick(feasible.filter((k) => third(k) === part));
+}
+
+/**
  * Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes are never
  * shuffled out. The remaining slots are filled towards a randomly chosen number of options *below* the
  * answer, so where the correct option lands in the sorted list is a property of the draw and not of the
@@ -122,9 +140,7 @@ function ranked(rng: RNG, answer: Exact, must: Ranked[], extra: Ranked[], count 
   // than Fd, mg sin 30 and the whole weight are both bigger than the answer on a slope. Taking every
   // `must` first therefore pins the answer to the same slot in every instance of a variant, so the
   // number of options below it is drawn uniformly and then clamped to what the list can supply.
-  const floor = Math.max(0, count - above.length);
-  const ceil = Math.min(count, below.length);
-  const nBelow = Math.max(Math.min(rng.int(0, count), ceil), Math.min(floor, ceil));
+  const nBelow = belowCount(rng, below.length, above.length, count);
   for (const d of below) { if (out.length >= nBelow) break; take(d); }
   for (const d of above) take(d);
   for (const d of below) take(d);

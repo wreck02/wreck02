@@ -66,6 +66,24 @@ function cleanOnly(ds: Cand[], answer: number, format: NumberFormat): Distractor
 }
 
 /**
+ * How many of the options should sit below the answer. The part of the sorted list the answer lands in
+ * — near the bottom, in the middle, near the top — is drawn uniformly from the parts the candidate
+ * mistakes can actually reach, so a candidate who recognises the variant learns nothing from where the
+ * correct option sits. When every mistake falls on one side there is nothing to choose and the answer
+ * sits where the mathematics puts it.
+ */
+function belowCount(rng: RNG, belowAvail: number, aboveAvail: number, count: number): number {
+  const lo = Math.max(0, count - aboveAvail);
+  const hi = Math.min(count, belowAvail);
+  if (lo >= hi) return Math.min(lo, hi);
+  const feasible: number[] = [];
+  for (let k = lo; k <= hi; k++) feasible.push(k);
+  const third = (k: number) => (2 * k < count ? 0 : 2 * k > count ? 2 : 1);
+  const part = rng.pick([...new Set(feasible.map(third))]);
+  return rng.pick(feasible.filter((k) => third(k) === part));
+}
+
+/**
  * The two headline traps of this topic — "gave the amount decayed" and "treated the decay as linear" —
  * fall on the same side of the answer in every variant, so taking each `must` first pins the correct
  * option to one of two slots in every instance of a variant, and a candidate who can see which variant
@@ -84,9 +102,7 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   }
   const below = pool.filter((d) => d.value.toNumber() < a);
   const above = pool.filter((d) => d.value.toNumber() > a);
-  const lo = Math.max(0, count - above.length);
-  const hi = Math.min(count, below.length);
-  const nBelow = Math.max(Math.min(rng.int(0, count), hi), Math.min(lo, hi));
+  const nBelow = belowCount(rng, below.length, above.length, count);
   return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
 }
 
@@ -141,7 +157,7 @@ const SLOW_UNITS = TIME_UNITS.filter((u) => u.word !== 'seconds');
 // ------------------------------------------------------------------------------------------ level 1
 
 function fractionRemaining(rng: RNG): Generated | null {
-  const k = rng.int(1, 4);
+  const k = rng.weighted([2, 3, 4], [1, 2, 2]);
   const [T, u] = halfLife(rng);
   const t = T * k;
   const ans = 1 / 2 ** k;
@@ -157,11 +173,11 @@ function fractionRemaining(rng: RNG): Generated | null {
       { value: 1 / 2 ** (k + 1), trap: 'used one half-life too many' },
       { value: 1 / 2 ** Math.max(1, k - 1), trap: 'used one half-life too few' },
       { value: 1 / (2 * k) === 1 / k ? null : 1 / k, trap: 'treated the decay as linear' },
-      { value: 1 / 2 ** (2 * k), trap: 'halved twice per half-life' },
       { value: 1 / (k * 2 ** k), trap: 'halved k times and then divided by k as well' },
       { value: 1 / 2 ** (k + 2), trap: 'used two half-lives too many' },
+      { value: 1 - 1 / 2 ** (k + 1), trap: 'gave the fraction decayed, one half-life too late' },
     ],
-    solution: `${t} ${u.word} is $${t} \\div ${T} = ${k}$ half-${k === 1 ? 'life' : 'lives'}, so the fraction remaining is $\\left(\\tfrac12\\right)^{${k}} = \\tfrac{1}{${2 ** k}}$.`,
+    solution: `${t} ${u.word} is $${t} \\div ${T} = ${k}$ half-lives, so the fraction remaining is $\\left(\\tfrac12\\right)^{${k}} = \\tfrac{1}{${2 ** k}}$.`,
     trap: 'Each half-life halves what is left: after k half-lives the fraction is (1/2)^k, never 1/k.',
     tags: ['nuclear', 'half-life', 'fractions'],
     params: { variant: 'fraction-remaining', T, t },
@@ -169,7 +185,7 @@ function fractionRemaining(rng: RNG): Generated | null {
 }
 
 function massRemaining(rng: RNG): Generated | null {
-  const k = rng.int(2, 4);
+  const k = rng.weighted([2, 3, 4], [1, 2, 2]);
   const [T, u] = halfLife(rng);
   const m0 = rng.pick([32, 48, 64, 80, 96, 120, 160, 240, 320, 800]);
   const ans = m0 / 2 ** k;
@@ -226,7 +242,7 @@ function timeToFraction(rng: RNG): Generated | null {
 }
 
 function activityAfter(rng: RNG): Generated | null {
-  const k = rng.int(2, 4);
+  const k = rng.weighted([2, 3, 4], [1, 2, 2]);
   const [T, u] = halfLife(rng);
   const A0 = rng.pick([160, 320, 480, 640, 800, 960, 1280, 1600]);
   const ans = A0 / 2 ** k;
@@ -323,7 +339,9 @@ function decayedRatio(rng: RNG): Generated | null {
   const k = rng.int(2, 6);
   const ans = 2 ** k - 1;
   return pack(rng, {
-    stem: `After ${k} half-lives, the ratio of the number of nuclei that have decayed to the number that remain is $k : 1$. Find the value of $k$.`,
+    stem: rng.bool(0.5)
+      ? `After ${k} half-lives, the ratio of the number of nuclei that have decayed to the number that remain is $N : 1$. Find the value of $N$.`
+      : `A radioactive sample is left for ${k} half-lives. The number of nuclei that have decayed is $N$ times the number still remaining. Find the value of $N$.`,
     answer: ans,
     must: [
       { value: 2 ** k, trap: 'gave 2^k: the decayed nuclei are 2^k − 1 parts to 1 part remaining' },
@@ -337,7 +355,7 @@ function decayedRatio(rng: RNG): Generated | null {
       { value: 2 ** k - 2, trap: 'subtracted two instead of one' },
       { value: 2 ** (k - 1), trap: 'used one half-life too few and forgot to subtract the part remaining' },
     ],
-    solution: `After ${k} half-lives $\\tfrac{1}{${2 ** k}}$ remains, so $\\tfrac{${ans}}{${2 ** k}}$ has decayed. The ratio is $${ans} : 1$, so $k = ${ans}$.`,
+    solution: `After ${k} half-lives $\\tfrac{1}{${2 ** k}}$ remains, so $\\tfrac{${ans}}{${2 ** k}}$ has decayed. The ratio is $${ans} : 1$, so $N = ${ans}$.`,
     trap: 'Decayed : remaining after k half-lives is (2^k − 1) : 1, so 3 half-lives give 7 : 1, not 8 : 1.',
     tags: ['nuclear', 'half-life', 'ratio'],
     params: { variant: 'decayed-ratio', k },
@@ -414,7 +432,9 @@ function decayDuringNth(rng: RNG): Generated | null {
   const ans = 1 / 2 ** k;
   const ord = ORDINALS[k];
   return pack(rng, {
-    stem: `${rng.pick(SOURCE)} decays with a constant half-life. Find the fraction of the original nuclei that decay during the ${ord} half-life, giving your answer as a fraction.`,
+    stem: rng.bool(0.5)
+      ? `${rng.pick(SOURCE)} decays with a constant half-life. Find the fraction of the original nuclei that decay during the ${ord} half-life, giving your answer as a fraction.`
+      : `${rng.pick(SOURCE)} decays with a constant half-life. Of the nuclei present at the start, what fraction decays during the ${ord} half-life alone? Give your answer as a fraction.`,
     answer: ans,
     format: 'fraction',
     must: [

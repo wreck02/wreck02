@@ -247,7 +247,52 @@ const L1_QUANTITIES: { q: string; name: string; unit: string; note: string; near
     near: ['time', 'speed', 'accel', 'length'],
     trap: 'A frequency is one over a time: s⁻¹, the reciprocal of the period, with no metres in it.',
   },
+  {
+    q: 'resistance', name: 'electrical resistance', unit: 'the ohm', note: '$R = V/I$, so $\\Omega = \\text{V A}^{-1} = \\text{kg m}^{2}\\text{s}^{-3}\\text{A}^{-2}$',
+    near: ['voltage', 'power', 'charge', 'current'],
+    trap: 'Dividing the volt by the ampere gives a second A⁻¹: kg m² s⁻³ A⁻², not the A⁻¹ of the volt.',
+  },
+  {
+    q: 'voltage', name: 'potential difference', unit: 'the volt', note: '$V = P/I$, so $\\text{V} = \\text{W A}^{-1} = \\text{kg m}^{2}\\text{s}^{-3}\\text{A}^{-1}$',
+    near: ['power', 'energy', 'charge', 'resistance'],
+    trap: 'A volt is a joule per coulomb — a watt per ampere — so it carries A⁻¹, not A.',
+  },
+  {
+    q: 'accel', name: 'gravitational field strength', unit: 'the unit of gravitational field strength',
+    note: '$g = F/m$, so the units are $\\text{N kg}^{-1} = \\text{m s}^{-2}$ — the units of an acceleration',
+    near: ['force', 'speed', 'freq', 'spring', 'length'],
+    trap: 'Field strength is force per unit mass: the kilograms cancel, leaving m s⁻², not N (kg m s⁻²).',
+  },
+  {
+    q: 'energy', name: 'the moment of a force', unit: 'the newton metre',
+    note: 'a moment is a force times a perpendicular distance, so the units are $\\text{N m} = \\text{kg m}^{2}\\text{s}^{-2}$',
+    near: ['force', 'power', 'momentum', 'pressure', 'spring'],
+    trap: 'A moment is a force × a distance, so it has one power of m more than the newton (and the same units as an energy).',
+  },
+  {
+    q: 'momentum', name: 'impulse', unit: 'the newton second',
+    note: 'an impulse is a force times a time, so the units are $\\text{N s} = \\text{kg m s}^{-1}$',
+    near: ['force', 'energy', 'speed', 'mass', 'spring'],
+    trap: 'Impulse = force × time, so the newton gains one power of s: kg m s⁻¹, the units of momentum.',
+  },
+  {
+    q: 'linearDensity', name: 'the mass per unit length of a wire', unit: 'the unit of mass per unit length',
+    note: '$\\mu = m/L$, so the units are $\\text{kg m}^{-1}$',
+    near: ['density', 'mass', 'spring', 'pressure', 'length'],
+    trap: 'Mass per unit length divides by one power of m, not three: kg m⁻³ is a density.',
+  },
 ];
+
+/**
+ * Two ways of asking, chosen from the content rather than at random, so a re-wording always comes
+ * with a different quantity: asking the same question twice in a session in two guises is worse
+ * than asking it once.
+ */
+function phrasing<T>(key: string, options: T[]): T {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return options[h % options.length];
+}
 
 function baseUnitsQ(rng: RNG): Generated | null {
   const item = rng.pick(L1_QUANTITIES);
@@ -261,7 +306,11 @@ function baseUnitsQ(rng: RNG): Generated | null {
     ['units', 'base units', item.q],
     { shape: 'vec', spec: { num: [[item.q, 1]] } },
   );
-  return { ...g, stem: `Which of the following gives ${item.unit === 'the unit of density' ? 'the SI base units of density' : `the SI base units of ${item.name}`}?` };
+  const named = !item.unit.startsWith('the unit of');
+  const stem = named && phrasing(item.name, [0, 1]) === 1
+    ? `${item.unit.charAt(0).toUpperCase()}${item.unit.slice(1)} is the SI unit of ${item.name}. Which of the following gives it in SI base units?`
+    : `Which of the following gives the SI base units of ${item.name}?`;
+  return { ...g, stem };
 }
 
 // ----------------------------------------------------------------------------- level 2
@@ -323,6 +372,34 @@ const CONSTANTS: { sym: string; eq: string; where: string; spec: Spec; note: str
     near: ['accel', 'energy', 'freq', 'length'],
     trap: 'E/m gives c², not c: take the square root, which halves both powers, to get m s⁻¹.',
   },
+  {
+    sym: 'E', eq: '\\sigma = E\\varepsilon', where: '$\\sigma$ is a stress (a force per unit area) and $\\varepsilon$ is a strain (a ratio of two lengths)',
+    spec: { num: [['pressure', 1]] },
+    note: 'a strain is a pure number, so $E$ has the units of a stress: $\\text{N m}^{-2} = \\text{kg m}^{-1}\\text{s}^{-2}$',
+    near: ['pressure', 'spring', 'force', 'density', 'energy'],
+    trap: 'Strain is a ratio of two lengths and has no units, so the Young modulus has the units of a stress, not of a force.',
+  },
+  {
+    sym: '\\rho', eq: 'R = \\dfrac{\\rho L}{A}', where: '$R$ is a resistance, $L$ is a length and $A$ is an area',
+    spec: { num: [['resistance', 1], ['length', 2]], den: [['length', 1]] },
+    note: '$\\rho = RA/L$, so the units are $\\Omega\\ \\text{m} = \\text{kg m}^{3}\\text{s}^{-3}\\text{A}^{-2}$',
+    near: ['resistance', 'voltage', 'power', 'density'],
+    trap: 'The area is on top and the length underneath, so the ohm gains one power of m: Ω m, not Ω m⁻¹.',
+  },
+  {
+    sym: '\\lambda', eq: 'N = N_0 e^{-\\lambda t}', where: '$N$ and $N_0$ are numbers of nuclei and $t$ is a time',
+    spec: { num: [['freq', 1]] },
+    note: 'the exponent $\\lambda t$ must be a pure number, so $\\lambda$ has the units of $1/t$: $\\text{s}^{-1}$',
+    near: ['time', 'freq', 'speed', 'accel'],
+    trap: 'Anything in an exponent has no units, so λt is dimensionless and λ is one over a time — a decay constant is not a time.',
+  },
+  {
+    sym: 'k', eq: 'F = \\dfrac{k q_1 q_2}{r^{2}}', where: '$F$ is a force, $q_1$ and $q_2$ are charges and $r$ is a distance',
+    spec: { num: [['force', 1], ['length', 2]], den: [['charge', 2]] },
+    note: '$k = Fr^{2}/(q_1 q_2)$, so the units are $\\text{kg m}^{3}\\text{s}^{-4}\\text{A}^{-2}$',
+    near: ['voltage', 'resistance', 'resistivity', 'force'],
+    trap: 'Two charges divide, so the A power is −2 and the two seconds in C = A s push the s power to −4.',
+  },
 ];
 
 function constantUnitsQ(rng: RNG): Generated | null {
@@ -339,7 +416,11 @@ function constantUnitsQ(rng: RNG): Generated | null {
     ['units', 'base units', 'constants'],
     { shape: 'vec', spec },
   );
-  return { ...g, stem: `In the equation $${item.eq}$, ${item.where}.\n\nWhich of the following gives the SI base units of $${item.sym}$?` };
+  const ask = phrasing(item.eq + item.sym, [
+    `Which of the following gives the SI base units of $${item.sym}$?`,
+    `What are the SI base units of the constant $${item.sym}$?`,
+  ]);
+  return { ...g, stem: `In the equation $${item.eq}$, ${item.where}.\n\n${ask}` };
 }
 
 // ----------------------------------------------------------------------------- level 3

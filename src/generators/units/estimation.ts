@@ -465,7 +465,6 @@ function kettleTimeQ(rng: RNG): Generated | null {
       { value: round((m * c * dT) / (kw * 1000) / 3600), trap: 'gave the time in hours' },
       { value: round((m * c * dT * 10) / (kw * 1000)), trap: 'used a specific heat capacity of $42\\,000\\ \\text{J kg}^{-1}\\text{K}^{-1}$' },
       { value: round(m * c * dT), trap: 'gave the energy in joules, not the time' },
-      { value: round((kw * 1000) / (m * c * dT)), trap: 'divided the power by the energy instead of the energy by the power' },
       { value: round((m * 1000 * dT) / (kw * 1000)), trap: 'used $1000\\ \\text{J kg}^{-1}\\text{K}^{-1}$, the value for air' },
     ],
     solution: `$E = mc\\Delta\\theta = ${n(m * c * dT)}\\ \\text{J}$ and $t = E/P = ${n(m * c * dT)} / ${n(kw * 1000)} \\approx ${napp(value)}\\ \\text{s}$, i.e. about $${n(sf1(value))}\\ \\text{s}$.`,

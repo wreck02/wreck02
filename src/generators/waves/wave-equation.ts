@@ -602,20 +602,39 @@ function echoTime(rng: RNG): Generated | null {
   });
 }
 
+/**
+ * The speed is what the question asks for, so the scene must not give it away and must not
+ * contradict it. The old version always printed an air scene (a pulse sent at a wall) and then, in
+ * half of its instances, answered 1400 or 1500 m s^-1 — the speed of sound in water — while
+ * offering 340 m s^-1 as a labelled distractor, so the candidate who knew the physics was steered
+ * to the wrong option; in the other half the same general knowledge scored the mark with no
+ * arithmetic at all.
+ *
+ * Now the medium is named and the speed belongs to it, and it is never the textbook value: the
+ * speed of sound in air really does run from about 300 m s^-1 in very cold air to 360 m s^-1 in hot
+ * air, and in water from about 1400 to 1550 m s^-1, so only the data fixes it. That is what makes
+ * "quoted the remembered speed" the headline trap rather than the answer.
+ */
 function echoSpeed(rng: RNG): Generated | null {
-  const v = rng.pick([340, 1500, 1400, 300]);
+  const inAir = rng.bool(0.5);
+  const v = inAir ? rng.pick([300, 320, 330, 350, 360]) : rng.pick([1400, 1440, 1450, 1520, 1550]);
   const t = rng.pick([0.2, 0.4, 0.5, 1, 2, 3, 4]);
   const d = r((v * t) / 2);
   if (!Number.isInteger(d) || d < 30 || d > 5000) return null;
+  const remembered = inAir ? 340 : 1500;
+  const other = inAir ? 1500 : 340;
   return pack(rng, {
-    stem: `A pulse of sound is sent towards a wall ${q(d, U.m)} away and the echo is heard ${q(t, U.s)} later. Find the speed of sound.`,
+    stem: inAir
+      ? `A student stands ${q(d, U.m)} from a large cliff, claps once and hears the echo ${q(t, U.s)} later. Find the speed of sound in the air.`
+      : `A ship sends a sonar pulse vertically downwards towards the sea bed ${q(d, U.m)} below it and detects the echo ${q(t, U.s)} later. Find the speed of sound in the sea water.`,
     answer: v,
     unit: U.v,
     must: [
       { value: r(d / t), trap: 'forgot that the pulse travels there and back' },
+      { value: remembered, trap: `quoted the remembered speed of sound in ${inAir ? 'air' : 'water'} instead of using the data` },
     ],
     extra: [
-      { value: v === 340 ? 1500 : 340, trap: 'quoted a remembered speed of sound instead of using the data' },
+      { value: other, trap: `used the speed of sound in ${inAir ? 'water' : 'air'}, not in the medium the question describes` },
       { value: r(t / d), trap: 'divided the wrong way round', wide: true },
       { value: r(d * t), trap: 'multiplied instead of dividing' },
       { value: r(d / (2 * t)), trap: 'halved the distance instead of doubling it' },
@@ -627,7 +646,7 @@ function echoSpeed(rng: RNG): Generated | null {
     ],
     maxSpare: 2,
     solution: `The pulse covers $2 \\times ${num(d)} = ${num(2 * d)}$ m in ${num(t)} s, so $v = \\dfrac{${num(2 * d)}}{${num(t)}} = ${num(v)}\\ \\text{m s}^{-1}$.`,
-    trap: 'Distance travelled by an echo is twice the distance to the wall.',
+    trap: 'An echo covers twice the distance to the reflector; the speed comes from the data, not from a remembered value.',
     tags: ['waves', 'echo', 'speed'],
     params: { variant: 'echo-speed', d, t },
   });
@@ -732,32 +751,44 @@ function lightFrequency(rng: RNG): Generated | null {
   });
 }
 
+/**
+ * The one mistake this question exists to catch is quoting the frequency instead of the period, so
+ * that option has to be on the list. It sits f/T = f² away from the answer, and the span guard drops
+ * anything more than 2000 times it, so f is capped at 40: above that the trap was silently discarded
+ * and the four wrong options degenerated into a power-of-ten lottery with nothing testing the idea.
+ * Requiring f to be a whole number also keeps 166.6666667 Hz out of the worked solution.
+ */
 function periodFromVL(rng: RNG): Generated | null {
-  const v = rng.pick([20, 25, 40, 50, 80, 100, 125, 150, 200, 250, 300, 340, 400, 500, 1200, 1400, 1500, 1600]);
-  const lam = rng.pick([0.4, 0.5, 0.8, 1, 1.25, 1.6, 1.7, 2, 2.5, 3, 4, 5, 8, 10, 16, 25]);
+  const v = rng.pick([20, 25, 40, 50, 80, 100, 120, 125, 150, 160, 200, 240, 250, 300, 320, 400, 500, 600, 800, 1000]);
+  const lam = rng.pick([0.4, 0.5, 0.8, 1, 1.25, 1.6, 2, 2.5, 3, 4, 5, 8, 10, 12.5, 16, 20, 25]);
+  const f = r(v / lam);
   const T = r(lam / v);
+  if (!Number.isInteger(f) || f < 2 || f > 40) return null;
   if (T < 0.001 || T > 1 || lam === v) return null;
   return pack(rng, {
     stem: `A wave travels at ${q(v, U.v)} and has a wavelength of ${q(lam, U.m)}. Find the period of the wave.`,
     answer: T,
     unit: U.s,
     must: [
-      { value: r(v / lam), trap: 'found the frequency v/λ, not the period', wide: true },
-      { value: r(v * lam), trap: 'multiplied instead of dividing' },
+      { value: f, trap: 'found the frequency v/λ, not the period', wide: true },
     ],
     extra: [
+      // Mistakes that are not a power of ten away, so the list is not three-quarters ×10^k. Only one
+      // of the two ×10 near-misses is offered now, for the same reason.
+      { value: r(v * lam), trap: 'multiplied instead of dividing', wide: true },
       { value: r(1 / (v * lam)), trap: 'took the reciprocal of vλ' },
+      { value: r(1 / v), trap: 'inverted the speed, leaving the wavelength out' },
+      { value: lam, trap: 'quoted the wavelength as the period', given: true },
       { value: r(2 * T), trap: 'took the quoted distance as crest to trough, so used twice the wavelength' },
-      { value: r(T / 2), trap: 'read the quoted distance as two whole wavelengths' },
       { value: r(1000 * T), trap: 'gave the period in milliseconds, not in seconds', wide: true },
       { value: r(10 * T), trap: 'slipped one power of ten' },
-      { value: r(T / 10), trap: 'slipped one power of ten the other way' },
       { value: r(T / 60), trap: 'gave the period in minutes', wide: true },
     ],
     spare: [
-      { value: r(T / 2), trap: 'halved the period' },
+      { value: r(T / 2), trap: 'read the quoted distance as two whole wavelengths' },
     ],
-    solution: `$f = \\dfrac{v}{\\lambda} = \\dfrac{${num(v)}}{${num(lam)}} = ${num(r(v / lam))}\\ \\text{Hz}$, so $T = \\dfrac{1}{f} = ${num(T)}\\ \\text{s}$ (that is $T = \\lambda/v$).`,
+    // The fastest route is the direct one; the frequency is a cross-check, not a step.
+    solution: `$T = \\dfrac{\\lambda}{v} = \\dfrac{${num(lam)}}{${num(v)}} = ${num(T)}\\ \\text{s}$. (Check: $f = \\dfrac{v}{\\lambda} = ${num(f)}\\ \\text{Hz}$ and $T = 1/f$.)`,
     trap: 'The period is λ/v; v/λ is the frequency.',
     tags: ['waves', 'period', 'wave-equation'],
     params: { variant: 'T-from-v-lambda', v, lam },
@@ -924,7 +955,14 @@ function crestCount(rng: RNG): Generated | null {
   });
 }
 
-const MEDIA: [number, string][] = [[1500, 'water'], [1200, 'paraffin'], [4000, 'concrete'], [5000, 'steel'], [6000, 'steel']];
+const MEDIA: [number, string][] = [[1500, 'water'], [1200, 'paraffin'], [3000, 'brick'], [4000, 'concrete'], [5000, 'steel']];
+
+/**
+ * No material carries sound faster than about 10^4 m s^-1 (diamond, the fastest there is, manages
+ * roughly 1.2 × 10^4). An option of 60 000 m s^-1 is struck out by any physics candidate on sight,
+ * so it does none of a distractor's work — it only widens the spread.
+ */
+const MAX_SOUND_SPEED = 10000;
 
 function mediumChange(rng: RNG): Generated | null {
   const f = rng.pick([500, 1000, 2000]);
@@ -945,12 +983,11 @@ function mediumChange(rng: RNG): Generated | null {
       { value: r((340 * (lam1cm / 100)) / lam2), trap: 'inverted the wavelength ratio' },
       { value: r(340 * lam2), trap: 'multiplied the speed in air by the second wavelength' },
       { value: r(f / lam2), trap: 'divided the frequency by the second wavelength instead of multiplying' },
-      { value: r(100 * v2), trap: `converted the wavelength in ${medium} to centimetres as well`, wide: true },
-      { value: r(v2 * 10), trap: 'slipped a power of ten in the cm → m conversion' },
+      { value: r(2 * v2), trap: `took the quoted wavelength in ${medium} to be half a wavelength` },
+      { value: 10 * v2 <= MAX_SOUND_SPEED ? r(v2 * 10) : null, trap: 'slipped a power of ten in the cm → m conversion' },
       { value: r(v2 / 10), trap: 'slipped a power of ten in the cm → m conversion the other way' },
     ],
     spare: [
-      { value: r(2 * v2), trap: 'doubled the speed' },
       { value: r(v2 / 2), trap: 'halved the speed' },
     ],
     solution: `The frequency is the same in both media: $f = \\dfrac{340}{${num(lam1cm / 100)}} = ${f}\\ \\text{Hz}$. Then $v = f\\lambda = ${f} \\times ${num(lam2)} = ${num(v2)}\\ \\text{m s}^{-1}$.`,

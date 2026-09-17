@@ -37,7 +37,18 @@ type Mode = 'decimal' | 'fraction';
  * question's R = V/P and I = P/V slips, which are a factor of V² and V away from V²/P but are
  * exactly the two numbers a candidate writes down when they pick the wrong combination.
  */
-type Candidate = { value: Exact | null; trap: string; wide?: boolean };
+type Candidate = {
+  value: Exact | null;
+  trap: string;
+  wide?: boolean;
+  /**
+   * The mistake family this candidate belongs to, when the ratio to the answer does not say it:
+   * 'given' for an option that merely repeats a number printed in the stem, 'squared' for the
+   * family that squares the wrong quantity. At most `FAMILY_MAX` of each may appear in a list.
+   */
+  fam?: 'given' | 'squared';
+};
+type Marked = Distractor & { fam?: string };
 
 /** Plain number for a stem: 1200, 0.05, 21.6. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
@@ -138,9 +149,9 @@ function ratio(a: number, b: number): Exact | null {
  * dropped, an option no candidate would consider. The limit is 100 rather than 20 because the named
  * "left the time in minutes" slip is exactly a factor of 60; only a `wide` candidate may go further.
  */
-function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
+function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Marked[] {
   const a = answer.toNumber();
-  const out: Distractor[] = [];
+  const out: Marked[] = [];
   for (const d of ds) {
     const v = d.value;
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !v.isRational() || !isCleanExact(v).ok) continue;
@@ -155,44 +166,75 @@ function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact): Distractor[] {
       if (!readable(v)) continue;
       if (den > 24n && !Number.isInteger(r(x * 1000))) continue;
     }
-    out.push({ value: v, trap: d.trap });
+    out.push({ value: v, trap: d.trap, fam: d.fam });
   }
   return out;
 }
 
 /**
- * Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled
- * out. At most one `spare` near-miss (doubled, halved, a decimal place out) may ever be used, and
- * only after every named mistake has been tried: ×2 and ÷2 must never cluster an option list
- * geometrically around the answer. Fewer than four candidates means the parameters are redrawn.
+ * The family a candidate belongs to, read off its ratio to the answer. A doubled or halved answer and
+ * a decimal place out are the two shapes every electrical formula throws off by the dozen; `given`
+ * marks an option that is simply a number copied from the stem. Capping each keeps a five-option list
+ * from being three near-misses and a restatement.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4, maxSpare = 1): Distractor[] {
+function family(x: number, a: number): '' | 'two' | 'ten' {
+  if (!(x > 0) || !(a > 0)) return '';
+  const l10 = Math.log10(x / a);
+  if (Math.abs(l10 - Math.round(l10)) < 1e-9) return 'ten';
+  const l2 = Math.log2(x / a);
+  if (Math.abs(l2 - Math.round(l2)) < 1e-9) return 'two';
+  return '';
+}
+
+/** At most this many of the four wrong options may come from one family. */
+const FAMILY_MAX: Record<string, number> = { two: 2, ten: 2, given: 1, squared: 1 };
+
+/**
+ * Choose the four distractors with a *randomly drawn number of them below the answer*.
+ *
+ * The draw happens before any candidate is seated. Seating every `must` trap first — as this function
+ * used to — defeated the balancing that follows it: the headline pair straddles the answer in every
+ * variant (V × I above, V ÷ I below), so whole ranks became unreachable and a candidate could delete
+ * an option or two without doing any physics. Inside each side the order is headline traps, then the
+ * other named mistakes, then the near-misses, with `spare` last; a list holds at most `maxSpare`
+ * spares and never both a doubled and a halved answer.
+ */
+function ranked(rng: RNG, answer: Exact, must: Marked[], extra: Marked[], spare: Marked[], count = 4, maxSpare = 1): Distractor[] {
   const a = answer.toNumber();
+  interface Seat { d: Marked; tier: number; fam: string }
+  const seats = (ds: Marked[], tier: number): Seat[] => rng.shuffle(ds).map((d) => ({ d, tier, fam: d.fam ?? family(d.value.toNumber(), a) }));
+  const pool = [...seats(must, 0), ...seats(extra, 1), ...seats(spare, 2)];
+  const order = (xs: Seat[]) => xs.slice().sort((p, q) => p.tier - q.tier || (p.fam ? 1 : 0) - (q.fam ? 1 : 0));
+  const below = order(pool.filter((p) => p.d.value.cmp(answer) < 0));
+  const above = order(pool.filter((p) => p.d.value.cmp(answer) > 0));
+
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
-  const take = (d: Distractor): boolean => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return false;
-    seen.push(d.value);
-    out.push(d);
+  const fams = new Map<string, number>();
+  const spareRatios: number[] = [];
+  let spares = 0;
+  const take = (p: Seat): boolean => {
+    if (out.length >= count || seen.some((s) => s.equals(p.d.value))) return false;
+    if (p.fam && (fams.get(p.fam) ?? 0) >= (FAMILY_MAX[p.fam] ?? count)) return false;
+    const x = p.d.value.toNumber();
+    if (p.tier === 2) {
+      if (spares >= maxSpare) return false;
+      // never a doubled *and* a halved answer: that clusters the list geometrically around it
+      if (spareRatios.some((rt) => Math.abs(rt * (x / a) - 1) < 1e-9)) return false;
+      spares++;
+      spareRatios.push(x / a);
+    }
+    seen.push(p.d.value);
+    out.push({ value: p.d.value, trap: p.d.trap });
+    if (p.fam) fams.set(p.fam, (fams.get(p.fam) ?? 0) + 1);
     return true;
   };
-  must.forEach(take);
-  // Fill the remaining slots towards a randomly drawn number of options *below* the answer. Most slips
-  // in an energy question leave a factor out, so without this the answer sits third or fourth of five in
-  // almost every instance and both extremes can be discarded unread.
-  const below = rng.shuffle(extra.filter((d) => d.value.toNumber() < a));
-  const above = rng.shuffle(extra.filter((d) => d.value.toNumber() > a));
-  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
-  while (out.length < count && (below.length > 0 || above.length > 0)) {
-    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
-    take((useBelow ? below : above).shift()!);
-    if (useBelow) wantBelow--;
-  }
-  let used = 0;
-  for (const d of rng.shuffle(spare)) {
-    if (out.length >= count || used >= maxSpare) break;
-    if (take(d)) used++;
-  }
+  const drain = (q: Seat[], want: number) => { while (want > 0 && q.length > 0) if (take(q.shift()!)) want--; };
+  drain(below, rng.int(Math.max(0, count - above.length), Math.min(count, below.length)));
+  drain(above, count - out.length);
+  // a side that ran short (a duplicate or a family cap) is topped up from the other
+  drain(below, count - out.length);
+  drain(above, count - out.length);
   return out;
 }
 
@@ -213,8 +255,14 @@ interface Pack {
   mode?: Mode;
   must: Candidate[];
   extra: Candidate[];
-  /** generic near-misses; at most one is ever used, and only if the named mistakes ran short */
+  /** generic near-misses; at most `maxSpare` are ever used, and only if the named mistakes ran short */
   spare?: Candidate[];
+  /**
+   * How many near-misses a list may hold. Two only where every named mistake pulls the same way —
+   * V = IR offers nothing above the answer but the power, so without a second near-miss the answer
+   * could never be the largest option.
+   */
+  maxSpare?: number;
   solution: string;
   trap: string;
   tags: string[];
@@ -232,6 +280,8 @@ function pack(rng: RNG, p: Pack): Generated | null {
     cleanOnly(p.must, mode, p.answer),
     cleanOnly(p.extra, mode, p.answer),
     cleanOnly(p.spare ?? [], mode, p.answer),
+    4,
+    p.maxSpare ?? 1,
   );
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
@@ -268,15 +318,19 @@ function ohmVQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(I / R), trap: 'inverted the product: divided the current by the resistance' },
-      { value: val(R), trap: 'quoted the resistance as the p.d.' },
-      { value: val(I * R * R), trap: 'multiplied by the resistance twice' },
-      { value: val(I), trap: 'quoted the current as the p.d.' },
+      { value: val(R / (I * I)), trap: 'divided by the current twice (that mixes V = IR with P = I²R)' },
+      { value: val(R), trap: 'quoted the resistance as the p.d.', fam: 'given' },
+      { value: val(I), trap: 'quoted the current as the p.d.', fam: 'given' },
     ],
     spare: [
       { value: val(2 * V), trap: 'doubled the p.d.' },
       { value: val(V / 2), trap: 'halved the p.d.' },
       { value: val(10 * V), trap: 'slipped a decimal place' },
+      { value: val(V / 10), trap: 'slipped a decimal place the other way' },
     ],
+    // I = V/R and its inversions all fall below IR when the current is more than an amp: without a
+    // second near-miss above, the answer could never be the largest option
+    maxSpare: 2,
     solution: `$V = IR = ${n(I)} \\times ${R} = ${n(V)}\\ \\text{V}$.`,
     trap: 'V = IR is a product: dividing gives neither the p.d. nor the power.',
     tags: ['ohms-law', 'pd'],
@@ -302,15 +356,16 @@ function ohmIQ(rng: RNG): Generated | null {
     extra: [
       { value: val((V * V) / R), trap: 'gave the power V²/R in watts, not the current' },
       { value: val(V / (R * R)), trap: 'divided by R² instead of R' },
-      { value: val(V), trap: 'quoted the supply p.d. as the current' },
-      { value: val(R), trap: 'quoted the resistance as the current' },
-      { value: val((V / R) * (V / R)), trap: 'squared the current' },
+      { value: val(V), trap: 'quoted the supply p.d. as the current', fam: 'given' },
+      { value: val(R), trap: 'quoted the resistance as the current', fam: 'given' },
     ],
     spare: [
       { value: val(2 * I), trap: 'doubled the current' },
       { value: val(I / 2), trap: 'halved the current' },
       { value: val(10 * I), trap: 'slipped a decimal place' },
+      { value: val(I / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$I = \\dfrac{V}{R} = \\dfrac{${n(V)}}{${R}} = ${n(I)}\\ \\text{A}$.`,
     trap: 'I = V/R: the current is the p.d. divided by the resistance, not their product.',
     tags: ['ohms-law', 'current'],
@@ -336,16 +391,17 @@ function ohmRQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(V / (I * I)), trap: 'divided by I² instead of I (that mixes R = V/I with P = I²R)' },
-      { value: val(I * I * V), trap: 'multiplied by the current twice' },
-      { value: val(V), trap: 'quoted the supply p.d. as the resistance' },
-      { value: val((V * V) / I), trap: 'squared the p.d. as well' },
-      { value: val(I), trap: 'quoted the current as the resistance' },
+      { value: val((V * V) / I), trap: 'squared the p.d.: that is V²/I, not V/I' },
+      { value: val(V), trap: 'quoted the supply p.d. as the resistance', fam: 'given' },
+      { value: val(I), trap: 'quoted the current as the resistance', fam: 'given' },
     ],
     spare: [
       { value: val(2 * R), trap: 'doubled the resistance' },
       { value: val(R / 2), trap: 'halved the resistance' },
       { value: val(10 * R), trap: 'slipped a decimal place' },
+      { value: val(R / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$R = \\dfrac{V}{I} = \\dfrac{${n(V)}}{${n(I)}} = ${R}\\ \\Omega$.`,
     trap: 'R = V/I. The product V × I is the power in watts, not the resistance.',
     tags: ['ohms-law', 'resistance'],
@@ -370,17 +426,18 @@ function powerVIQ(rng: RNG): Generated | null {
       { value: val(V / I), trap: 'divided instead of multiplying (that is the resistance)' },
     ],
     extra: [
-      { value: val(V * V * I), trap: 'squared the p.d. as well' },
-      { value: val(V * I * I * I), trap: 'cubed the current' },
-      { value: val(V), trap: 'quoted the supply p.d. as the power' },
-      { value: val(I), trap: 'quoted the current as the power' },
-      { value: val(V / (I * I)), trap: 'divided by the current twice' },
+      { value: val(V * V * I), trap: 'used P = V²I: only I²R and V²/R carry a square, and neither squares the p.d. here' },
+      { value: val(I / V), trap: 'divided the current by the p.d.' },
+      { value: val(V), trap: 'quoted the supply p.d. as the power', fam: 'given' },
+      { value: val(I), trap: 'quoted the current as the power', fam: 'given' },
     ],
     spare: [
       { value: val(2 * P), trap: 'doubled the power' },
       { value: val(P / 2), trap: 'halved the power' },
       { value: val(10 * P), trap: 'slipped a decimal place' },
+      { value: val(P / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$P = VI = ${V} \\times ${n(I)} = ${n(P)}\\ \\text{W}$.`,
     trap: 'P = VI. Squaring belongs to the other two forms: P = I²R and P = V²/R.',
     tags: ['power', 'ohms-law'],
@@ -403,21 +460,25 @@ function powerI2RQ(rng: RNG): Generated | null {
     unit: U_W,
     must: [
       { value: val(I * R), trap: 'used P = IR — that product is the p.d. across the resistor, not the power' },
-      { value: val(I * R * R), trap: 'squared the resistance instead of the current' },
+      { value: val(I * R * R), trap: 'squared the resistance instead of the current', fam: 'squared' },
     ],
     extra: [
       { value: val(2 * I * R), trap: 'doubled the current instead of squaring it' },
       { value: val((I * I) / R), trap: 'divided by R instead of multiplying' },
-      { value: val(I * I * R * R), trap: 'squared the resistance as well as the current' },
       { value: val(I * I), trap: 'squared the current but forgot to multiply by the resistance' },
-      { value: val(I * R * I * R), trap: 'used V² without dividing by the resistance' },
-      { value: val(R), trap: 'quoted the resistance as the power' },
+      // one member of the "squared the wrong quantity" family is a test; two of them are one
+      // observation filling two slots, so `fam` lets only the first of these three through
+      { value: val(I * I * R * R), trap: 'squared the resistance as well as the current', fam: 'squared' },
+      { value: val(I * R * I * R), trap: 'used V² without dividing by the resistance', fam: 'squared' },
+      { value: val(R), trap: 'quoted the resistance as the power', fam: 'given' },
     ],
     spare: [
       { value: val(2 * P), trap: 'doubled the power' },
       { value: val(P / 2), trap: 'halved the power' },
       { value: val(10 * P), trap: 'slipped a decimal place' },
+      { value: val(P / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$P = I^2 R = ${n(I)}^2 \\times ${R} = ${n(I * I)} \\times ${R} = ${n(P)}\\ \\text{W}$.`,
     trap: 'In P = I²R only the current is squared; IR is the p.d. across the resistor.',
     tags: ['power', 'i2r'],
@@ -442,12 +503,12 @@ function powerV2RQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(V * V), trap: 'squared the p.d. but forgot to divide by the resistance' },
-      { value: val((V * V) / (R * R)), trap: 'squared the resistance as well' },
       { value: val((2 * V) / R), trap: 'doubled the p.d. instead of squaring it' },
       { value: val(V * V * R), trap: 'multiplied by the resistance instead of dividing by it' },
       { value: val(R / V), trap: 'inverted the fraction: divided the resistance by the p.d.' },
-      { value: val(R), trap: 'quoted the resistance as the power' },
-      { value: val(V), trap: 'quoted the supply p.d. as the power' },
+      { value: val((V * V) / (R * R)), trap: 'squared the resistance as well', fam: 'squared' },
+      { value: val(R), trap: 'quoted the resistance as the power', fam: 'given' },
+      { value: val(V), trap: 'quoted the supply p.d. as the power', fam: 'given' },
     ],
     spare: [
       { value: val(2 * P), trap: 'doubled the power' },
@@ -498,7 +559,7 @@ function energyPtQ(rng: RNG): Generated | null {
       { value: inKW ? val(Pstated * t * scale) : null, trap: 'left the power in kilowatts instead of converting it to watts' },
       { value: inKJ ? val(Ej / 100) : null, trap: 'divided the joules by 100 instead of 1000 to reach kilojoules' },
       { value: val(P * 60 * scale), trap: 'used 60 s instead of the stated number of minutes' },
-      { value: inKJ ? null : val(t), trap: 'quoted the time in seconds as the energy' },
+      { value: inKJ ? null : val(t), trap: 'quoted the time in seconds as the energy', fam: 'given' },
     ],
     spare: [
       { value: val(2 * Ej * scale), trap: 'doubled the energy' },
@@ -506,6 +567,8 @@ function energyPtQ(rng: RNG): Generated | null {
       { value: val(3 * Ej * scale), trap: 'tripled the energy' },
       { value: val((Ej * scale) / 4), trap: 'quartered the energy' },
     ],
+    // every named slip here but the double conversion undershoots, so a second near-miss is allowed
+    maxSpare: 2,
     solution: `$E = Pt = ${n(P)} \\times ${t} = ${n(Ej)}\\ \\text{J}${inKJ ? ` = ${n(Ej / 1000)}\\ \\text{kJ}` : ''}$ (${tText} $= ${t}$ s).`,
     trap: inKW
       ? 'E = Pt needs watts and seconds: turn the kW into W and the minutes into seconds before multiplying.'
@@ -550,12 +613,14 @@ function energyVItQ(rng: RNG): Generated | null {
       { value: val((I / V) * t * scale), trap: 'divided the current by the p.d. instead of multiplying' },
       { value: val(V * V * I * t * scale), trap: 'squared the p.d. as well' },
       { value: val(P * 60 * scale), trap: 'used 60 s instead of the stated number of minutes' },
-      { value: inKJ ? null : val(t), trap: 'quoted the time in seconds as the energy' },
+      { value: inKJ ? null : val(t), trap: 'quoted the time in seconds as the energy', fam: 'given' },
     ],
     spare: [
       { value: val(2 * Ej * scale), trap: 'doubled the energy' },
       { value: val((Ej * scale) / 2), trap: 'halved the energy' },
+      { value: val(10 * Ej * scale), trap: 'slipped a decimal place' },
     ],
+    maxSpare: 2,
     solution: `$P = VI = ${V} \\times ${n(I)} = ${n(P)}\\ \\text{W}$, so $E = Pt = ${n(P)} \\times ${t} = ${n(Ej)}\\ \\text{J}${inKJ ? ` = ${n(Ej / 1000)}\\ \\text{kJ}` : ''}$.`,
     trap: 'Find the power VI first, then multiply by the time in seconds — the minutes must be converted.',
     tags: ['energy', 'power', 'time'],
@@ -586,9 +651,9 @@ function currentFromRatingQ(rng: RNG): Generated | null {
       { value: inKW ? val(Pstated) : null, trap: 'quoted the power rating in kilowatts as the current' },
       { value: val(P * V), trap: 'multiplied instead of dividing: I = P/V' },
       { value: val(Math.sqrt(P / V)), trap: 'used P = VI² and took a square root' },
-      { value: val(P / (V * V)), trap: 'divided by V² instead of V' },
-      { value: val(V), trap: 'quoted the supply p.d. as the current' },
-      { value: val(P), trap: 'quoted the power rating in watts as the current' },
+      { value: inKW ? val(P / (V * V)) : null, trap: 'divided by V² instead of V' },
+      { value: val(V), trap: 'quoted the supply p.d. as the current', fam: 'given' },
+      { value: val(P), trap: 'quoted the power rating in watts as the current', fam: 'given' },
       { value: inKW ? val(Pstated * V) : null, trap: 'multiplied the rating in kilowatts by the supply p.d. instead of dividing' },
     ],
     spare: [
@@ -630,16 +695,18 @@ function bulbResistanceQ(rng: RNG): Generated | null {
       { value: val(P / V), trap: 'gave the current the device draws, not its resistance', wide: true },
     ],
     extra: [
-      { value: val(P), trap: 'quoted the power rating as the resistance' },
-      { value: val(V), trap: 'quoted the rated p.d. as the resistance' },
       { value: val(V * P), trap: 'multiplied instead of dividing' },
-      { value: val((P * P) / V), trap: 'squared the power instead of the p.d.' },
-      { value: val((V * V) / (P * P)), trap: 'squared the power as well as the p.d.' },
+      { value: val((V * V) / (P * P)), trap: 'squared the power as well as the p.d.', fam: 'squared' },
+      { value: val(P), trap: 'quoted the power rating as the resistance', fam: 'given' },
+      { value: val(V), trap: 'quoted the rated p.d. as the resistance', fam: 'given' },
     ],
     spare: [
       { value: val(2 * R), trap: 'doubled the resistance' },
       { value: val(R / 2), trap: 'halved the resistance' },
+      { value: val(10 * R), trap: 'slipped a decimal place' },
+      { value: val(R / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$I = \\dfrac{P}{V} = \\dfrac{${P}}{${V}} = ${n(I)}\\ \\text{A}$, so $R = \\dfrac{V}{I} = ${R}\\ \\Omega$ (i.e. $R = \\dfrac{V^2}{P} = \\dfrac{${V * V}}{${P}}$).`,
     trap: 'R = V²/P, not V/P: the rating gives the power, so find the current P/V first if that is quicker.',
     tags: ['power', 'resistance', 'rating'],
@@ -671,10 +738,10 @@ function heatInResistorQ(rng: RNG): Generated | null {
     ],
     extra: [
       { value: val(2 * I * R * t * scale), trap: 'doubled the current instead of squaring it' },
-      { value: val(I * I * R * R * t * scale), trap: 'squared the resistance as well' },
+      { value: val(I * I * R * R * t * scale), trap: 'squared the resistance as well', fam: 'squared' },
       // the power in watts is only a plausible wrong answer when the answer itself is in joules
       { value: inKJ ? null : val(P), trap: 'gave the power in watts, not the energy' },
-      { value: val(I * R * R * t * scale), trap: 'squared the resistance instead of the current' },
+      { value: val(I * R * R * t * scale), trap: 'squared the resistance instead of the current', fam: 'squared' },
       { value: val(I * I * t * scale), trap: 'forgot the resistance' },
       { value: inMin ? null : val((P * t * scale) / 60), trap: 'divided by 60, as if the time had been given in minutes' },
       { value: inKJ ? val(Ej / 100) : null, trap: 'divided the joules by 100 instead of 1000 to reach kilojoules' },
@@ -712,12 +779,17 @@ function currentFromPRQ(rng: RNG): Generated | null {
       { value: val(P / (R * R)), trap: 'divided by R² instead of R' },
       { value: val(R / P), trap: 'inverted the fraction' },
       { value: val(P / (2 * R)), trap: 'halved P/R instead of taking its square root' },
-      { value: val(R), trap: 'quoted the resistance as the current' },
+      { value: val(Math.sqrt(R / P)), trap: 'divided the wrong way round inside the square root' },
+      { value: val(R), trap: 'quoted the resistance as the current', fam: 'given' },
+      { value: val(P), trap: 'quoted the power as the current', fam: 'given' },
     ],
     spare: [
       { value: val(2 * I), trap: 'doubled the current' },
       { value: val(I / 2), trap: 'halved the current' },
+      { value: val(10 * I), trap: 'slipped a decimal place' },
+      { value: val(I / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$P = I^2R$, so $I^2 = \\dfrac{${P}}{${R}} = ${I * I}$ and $I = ${I}\\ \\text{A}$.`,
     trap: 'P = I²R gives I² = P/R — the square root is the last step, and it is easy to forget.',
     tags: ['power', 'current', 'i2r'],

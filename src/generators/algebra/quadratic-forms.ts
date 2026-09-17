@@ -335,18 +335,33 @@ function symmetric(rng: RNG, ask: 'sumsq' | 'recip'): Generated | null {
     const r = answer.toRat();
     if (r.d > 4n || Math.abs(Number(r.n)) > 60) return null;
   }
+  /**
+   * α and β are real (b² − 4ac > 0 is forced above), so α² + β² is a sum of two real squares and
+   * is always positive. A negative option is the exam analogue of a probability above 1: struck
+   * out on sight, doing none of a distractor's work, and the question is effectively 4-option.
+   * Both routes to −(α² + β²) — "2αβ − (α + β)²" and "sign of the whole expression lost" — are
+   * gone, and every remaining candidate is filtered to a value a sum of squares could take.
+   */
+  const positive = (ds: Distractor[]) => clean(ds).filter((d) => d.value.sign() > 0);
   const distractors = ask === 'sumsq'
-    ? balanced(rng, answer, clean([
+    ? balanced(rng, answer, positive([
       { value: S2.add(P.mulRat(2)), trap: 'used (α + β)² + 2αβ' },
       { value: S2, trap: 'forgot the −2αβ' },
-    ]), clean([
+    ]), positive([
+      // (α + β)² − αβ and (α + β)² − 4αβ = (α − β)² are positive whenever b² > 4ac, and they sit on
+      // opposite sides of the answer (αβ > 0 or αβ < 0 decides which), so the rank stays spread.
       { value: S2.sub(P), trap: 'subtracted αβ, not 2αβ' },
-      ...(a !== 1 ? [{ value: E(b * b - 2 * c), trap: 'ignored a when forming α + β and αβ' }] : []),
-      { value: S.sub(P.mulRat(2)), trap: 'forgot to square α + β' },
-      { value: P.mulRat(2).sub(S2), trap: 'sign reversed' },
       { value: S2.sub(P.mulRat(4)), trap: 'used (α + β)² − 4αβ, which is (α − β)²' },
       { value: S2.mulRat(2).sub(P.mulRat(2)), trap: 'doubled (α + β)² instead of αβ' },
-      { value: S2.sub(P.mulRat(2)).neg(), trap: 'sign of the whole expression lost' },
+      { value: P.mulRat(2), trap: 'gave 2αβ, the term that should be subtracted from (α + β)²' },
+      { value: P, trap: 'gave αβ instead of α² + β²' },
+      { value: P.mul(P), trap: 'gave α²β² = (αβ)², the product of the squares' },
+      { value: S.sub(P.mulRat(2)), trap: 'forgot to square α + β' },
+      ...(a !== 1 ? [
+        { value: E(b * b - 2 * c), trap: 'ignored a when forming α + β and αβ' },
+        { value: E(b * b - 2 * a * c), trap: 'forgot to divide by a²' },
+        { value: frac(b * b - 2 * a * c, a), trap: 'divided by a instead of a²' },
+      ] : []),
     ]))
     : balanced(rng, answer, clean([
       { value: P.div(S), trap: 'inverted: gave αβ/(α + β)' },

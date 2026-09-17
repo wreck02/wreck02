@@ -84,6 +84,39 @@ function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]
   return out;
 }
 
+/**
+ * Like `ranked()`, but it also decides where the answer sits in the sorted option list.
+ *
+ * Every identity form's mistake list is dominated by undershoots ("evaluated only the first
+ * product", "forgot the 1", "forgot the factor 2") with one or two overshoots, so a plain
+ * shuffle left the answer strictly inside the option range in 90% of level-4 questions: the
+ * top and bottom options could be struck out with no trigonometry at all. Here one headline
+ * trap is guaranteed, then a target rank is drawn uniformly from whatever the pool allows and
+ * the free slots are filled from below and above the answer.
+ */
+function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const seen: Exact[] = [answer];
+  const keep: Distractor[] = [];
+  // must first and in order, so when two candidates coincide the more specific label wins
+  for (const d of [...must.map((x) => ({ ...x, must: true })), ...rng.shuffle(extra)]) {
+    if (!Number.isFinite(d.value.toNumber()) || seen.some((s) => s.equals(d.value))) continue;
+    seen.push(d.value);
+    keep.push(d);
+  }
+  const musts = keep.filter((d) => d.must);
+  const forced = musts.length ? [rng.pick(musts)] : [];
+  const rest = rng.shuffle(keep.filter((d) => !forced.includes(d)));
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  const need = count - forced.length;
+  const fBelow = forced.filter((d) => d.value.cmp(answer) < 0).length;
+  const lo = fBelow + Math.max(0, need - above.length);
+  const hi = fBelow + Math.min(need, below.length);
+  if (lo > hi) return [...forced, ...rest].slice(0, count);
+  const r = rng.int(lo, hi); // r = how many options end up below the answer, i.e. the answer's rank
+  return [...forced, ...below.slice(0, r - fBelow), ...above.slice(0, need - (r - fBelow))];
+}
+
 interface SetDistractor { values: Exact[]; trap: string }
 
 function sameSet(a: Exact[], b: Exact[]): boolean {
@@ -267,6 +300,12 @@ interface Form {
   fl: (f: FTrig, a: number, b: number) => number;
   /** The first two mistakes are the ones that must appear among the options. */
   mistakes: (f: Trig, a: number, b: number) => { value: () => Exact | null; trap: string }[];
+  /**
+   * The values this expression can possibly take, when that is obvious from its shape.
+   * A sum of two squares can never be negative and $1 + \tan^2 A$ can never be below 1, so
+   * such an option is struck out on sight and does none of a distractor's work.
+   */
+  possible?: (x: number) => boolean;
   /** Identity shortcut for the solution, if any. `A(d)` renders an angle in the current unit. */
   note?: (a: number, b: number, A: (d: number) => string) => string | null;
 }
@@ -283,7 +322,11 @@ const FORMS: Form[] = [
       { value: () => f.s(a).pow(2).sub(f.c(b).pow(2)), trap: 'subtracted the squares' },
       { value: () => f.s(a).pow(2), trap: 'evaluated only the first square' },
       { value: () => f.s(a).mul(f.c(b)), trap: 'multiplied the values instead of adding their squares' },
+      { value: () => f.c(b).pow(2), trap: 'evaluated only the second square' },
+      { value: () => f.s(a).pow(2).mul(f.c(b).pow(2)), trap: 'multiplied the squares instead of adding them' },
     ],
+    // A sum of two squares lies in (0, 2]: anything outside that is eliminated without any work.
+    possible: (x) => x > 1e-9 && x < 2 + 1e-9,
     note: (a, b) => (a === b ? 'Quick route: this is $\\sin^2 A + \\cos^2 A = 1$.' : 'The identity $\\sin^2 A + \\cos^2 A = 1$ does not apply: the angles differ.'),
   },
   {
@@ -322,7 +365,7 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.c(b)).add(f.c(a).mul(f.s(b))), trap: 'sign slip: adding the products gives sin(A + B)' },
       { value: () => f.c(a).mul(f.s(b)).sub(f.s(a).mul(f.c(b))), trap: 'subtraction reversed: that is sin(B − A)' },
       { value: () => f.s(a).mul(f.c(b)), trap: 'evaluated only the first product' },
-      { value: () => f.c(Math.abs(a - b)), trap: 'mixed up the expansions: this is sin(A − B), not cos(A − B)' },
+      { value: () => f.c(Math.abs(a - b)), trap: 'gave cos(A − B): the expression shown expands to sin(A − B)' },
     ],
     note: (a, b, A) => `Quick route: this is the expansion of $\\sin(A - B) = \\sin\\left(${A(a - b)}\\right)$.`,
   },
@@ -334,7 +377,7 @@ const FORMS: Form[] = [
     mistakes: (f, a, b) => [
       { value: () => f.c(a).mul(f.c(b)).sub(f.s(a).mul(f.s(b))), trap: 'sign slip: subtracting the products gives cos(A + B)' },
       { value: () => f.c(a).mul(f.c(b)), trap: 'evaluated only the first product' },
-      { value: () => f.s(Math.abs(a - b)), trap: 'mixed up the expansions: this is cos(A − B), not sin(A − B)' },
+      { value: () => f.s(Math.abs(a - b)), trap: 'gave sin(A − B): the expression shown expands to cos(A − B)' },
       { value: () => E(1), trap: 'treated it like cos²A + sin²A = 1' },
       { value: () => f.c(a).add(f.c(b)), trap: 'treated cos(A − B) as cos A + cos B' },
     ],
@@ -415,7 +458,12 @@ const FORMS: Form[] = [
       { value: () => f.t(a).pow(2), trap: 'forgot the 1' },
       { value: () => E(1).add(f.t(a)), trap: 'forgot to square' },
       { value: () => E(1).div(f.c(a)), trap: 'gave 1/cos A instead of 1/cos² A' },
+      { value: () => f.s(a).pow(2).add(f.c(a).pow(2)), trap: 'used sin²A + cos²A = 1 instead of 1 + tan²A' },
+      { value: () => E(1).add(f.s(a).pow(2)), trap: 'used sin²A in place of tan²A' },
+      { value: () => E(1).add(f.c(a).pow(2)), trap: 'used cos²A in place of tan²A' },
     ],
+    // 1 + tan²A = 1/cos²A ≥ 1: an option below 1 is struck out on sight.
+    possible: (x) => x > 1 - 1e-9,
     note: () => 'Quick route: $1 + \\tan^2 A = \\frac{1}{\\cos^2 A}$.',
   },
   {
@@ -496,10 +544,13 @@ function expressionQ(rng: RNG): Generated | null {
     return power ? `${body}^{${power}}` : body;
   };
   const substituted = form.tex(valPart(a), valPart(b));
-  const singleTerm = (ds: { value: Exact | null; trap: string }[]) => cleanOnly(ds).filter((d) => d.value.isSingleTerm());
+  // Options must be single-term, clean and — where the expression's shape pins them down —
+  // inside the range the expression can actually reach.
+  const usable = (ds: { value: Exact | null; trap: string }[]) =>
+    cleanOnly(ds).filter((d) => d.value.isSingleTerm() && (!form.possible || form.possible(d.value.toNumber())));
   const mistakes = form.mistakes(EXACT_TRIG, a, b).map((m) => ({ value: attempt(m.value), trap: m.trap }));
-  const must = singleTerm(mistakes.slice(0, 2));
-  const extra = singleTerm([
+  const must = usable(mistakes.slice(0, 2));
+  const extra = usable([
     ...mistakes.slice(2),
     { value: attempt(() => form.ex(SWAPPED_TRIG, a, b)), trap: 'sin and cos values swapped' },
     ...(form.usesTan ? [{ value: attempt(() => form.ex(RECIP_TAN_TRIG, a, b)), trap: 'tan 30° and tan 60° confused' }] : []),
@@ -511,7 +562,7 @@ function expressionQ(rng: RNG): Generated | null {
   const stem = rng.bool(0.5) ? `Find the exact value of $${expr}$.` : `Evaluate $${expr}$, giving your answer exactly.`;
   // The trap line names the mistake this form's options were actually built from — the old
   // boilerplate talked about sin²A + cos²B for expressions with no squares anywhere in them.
-  const chosen = ranked(rng, answer, must, extra);
+  const chosen = balanced(rng, answer, must, extra);
   const named = chosen[0]?.trap;
   return {
     stem,
@@ -559,32 +610,59 @@ function solveQ(rng: RNG): Generated | null {
     : `\\${fn}\\theta = ${target.toLatex()}`;
   const range = radians ? '0 \\le \\theta \\le 2\\pi' : '0^{\\circ} \\le \\theta < 360^{\\circ}';
   const t1 = sols[0];
+  const { ref } = quadrant(t1);
   const other: Fn = fn === 'sin' ? 'cos' : 'sin';
   const swappedSols = fn === 'tan' ? solutionsOf('tan', target.inv()) : solutionsOf(other, target);
   const negSols = solutionsOf(fn, target.neg());
+  const sameDegs = (x: number[], y: number[]) => x.length === y.length && x.every((v, i) => v === y[i]);
+  /** The reference angle placed in quadrant q. */
+  const place = (q: 1 | 2 | 3 | 4) => norm360(q === 1 ? ref : q === 2 ? 180 - ref : q === 3 ? 180 + ref : 360 - ref);
+  const QUAD_PAIRS: [1 | 2 | 3 | 4, 1 | 2 | 3 | 4][] = [[1, 2], [1, 3], [1, 4], [2, 3], [2, 4], [3, 4]];
+  /** The reference angle put in the wrong pair of quadrants: CAST misremembered. */
+  const wrongQuadPairs = QUAD_PAIRS
+    .map(([p, q]) => ({ degs: uniqSorted([place(p), place(q)]), p, q }))
+    .filter((d) => d.degs.length === 2 && !sameDegs(d.degs, sols) && !sameDegs(d.degs, negSols));
   /**
-   * At most ONE option may be eliminable by its shape alone — a single value where the answer
-   * always lists two, or degrees where the range is in radians. Offering both wasted 1.5 of the
-   * four distractors and turned a 1-in-5 question into roughly 1-in-3.
+   * At most ONE option may be eliminable by its shape alone: a single value or four values where
+   * the answer lists two, or degrees where the range is in radians. The old budget counted the
+   * single value and the degrees option but not the four-value set, so two options went on sight
+   * in 56% of instances — 1.5 of the four distractors wasted and a 1-in-3 question.
+   *
+   * The degrees option also never holds the correct angles converted. It used to, and as the only
+   * option carrying a ° symbol it could be spotted without reading the maths and divided by 180/π:
+   * 29% of level-5 questions were answerable on layout alone. It now carries a wrong solution set,
+   * so noticing the unit slip costs one option and hands over nothing.
    */
-  const singleOpt: SetDistractor = { values: toVals([t1]), trap: 'missed the second solution' };
-  const degOpt: SetDistractor | null = radians ? { values: sols.map((d) => E(d)), trap: DEGREES_TRAP } : null;
+  const oddShapes: SetDistractor[] = [
+    { values: toVals([t1]), trap: 'missed the second solution' },
+    { values: toVals(uniqSorted([...sols, ...negSols])), trap: 'gave every angle with that reference angle' },
+  ];
+  if (radians && wrongQuadPairs.length > 0) {
+    const w = rng.pick(wrongQuadPairs);
+    oddShapes.push({
+      values: w.degs.map((d) => E(d)),
+      trap: `${DEGREES_TRAP}, and placed the reference angle in the ${QUADRANT_WORD[w.p]} and ${QUADRANT_WORD[w.q]} quadrants`,
+    });
+  }
   const must: SetDistractor[] = [
-    degOpt && rng.bool(0.5) ? degOpt : singleOpt,
+    rng.pick(oddShapes),
     { values: toVals(negSols), trap: 'wrong quadrants: ignored the sign of the value' },
   ];
+  // Every other candidate has the answer's shape: two angles, in the unit the range was given in.
   const extra: SetDistractor[] = [
     { values: toVals(uniqSorted([t1, t1 + 180])), trap: 'added 180° to get the second solution' },
     { values: toVals(uniqSorted([t1, 360 - t1])), trap: 'used 360° − θ for the second solution' },
     { values: toVals(uniqSorted([t1, 180 - t1])), trap: 'used 180° − θ for the second solution' },
     { values: toVals(swappedSols), trap: fn === 'tan' ? 'tan 30° and tan 60° confused' : 'sin and cos swapped' },
-    { values: toVals(uniqSorted([...sols, ...negSols])), trap: 'gave every angle with that reference angle' },
-  ];
+    ...wrongQuadPairs.map((w) => ({
+      values: toVals(w.degs),
+      trap: `placed the reference angle in the ${QUADRANT_WORD[w.p]} and ${QUADRANT_WORD[w.q]} quadrants (CAST the wrong way round)`,
+    })),
+  ].filter((d) => d.values.length === 2);
   const picked = rankedSets(rng, values, must, extra);
   const inDegrees = (s: string) => s.replace(/= (\d+)\$/g, '= $1^{\\circ}$');
   const options = buildSetOptions(rng, values, picked, { variable: '\\theta' })
-    .map((o) => (!radians || o.trap === DEGREES_TRAP ? { ...o, display: inDegrees(o.display) } : o));
-  const { ref } = quadrant(t1);
+    .map((o) => (!radians || o.trap?.includes(DEGREES_TRAP) ? { ...o, display: inDegrees(o.display) } : o));
   const sign = target.sign();
   const quads = POSITIVE_IN[fn].slice() as (1 | 2 | 3 | 4)[];
   const where = (sign > 0 ? quads : ([1, 2, 3, 4] as const).filter((q) => !quads.includes(q))) as (1 | 2 | 3 | 4)[];

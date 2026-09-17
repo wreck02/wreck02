@@ -295,6 +295,7 @@ function threeSegmentST(rng: RNG, askAvg: boolean): Generated | null {
       { value: (s2 - s1) / T, trap: 'counted only the final segment over the whole time' },
       { value: s1 / T, trap: 'counted only the first segment over the whole time' },
       { value: v1 + v3, trap: 'added the two segment speeds' },
+      { value: s1 / (t1 + t2), trap: 'averaged over the first two segments only' },
     ]),
     `Average speed is total distance ÷ total time $= \\frac{${s2}}{${T}} = ${num(avg)}$ m s$^{-1}$.`,
     'Average speed is total distance over total time, including the time spent stationary; never average the gradients.',

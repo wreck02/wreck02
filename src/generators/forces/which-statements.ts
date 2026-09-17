@@ -11,7 +11,7 @@ import type { RNG } from '../../core/rng';
  * Level 2: box accelerating on a rough floor (friction μR, acceleration with/without friction); a ball at the top
  *          of its flight (velocity zero but acceleration not zero)
  * Level 3: lift accelerating up / down / constant velocity (reading on the scales, resultant force, weight);
- *          box that does not move (friction = push, not μR)
+ *          box pushed on a rough floor, either side of limiting friction (friction = push, or μR with an acceleration)
  * Level 4: perfectly inelastic collision (momentum conserved, KE not, common velocity, KE lost, impulse);
  *          block on a smooth slope (normal reaction ≠ weight, a = g sin θ independent of mass)
  * Level 5: lifts described by motion and slowing/speeding (direction of acceleration); collisions with a rebound
@@ -28,8 +28,13 @@ const S = (x: number) => `$${num(x)}\\ \\text{s}$`;
 const J = (x: number) => `$${num(x)}\\ \\text{J}$`;
 const G_NOTE = 'Take $g = 10\\ \\text{m s}^{-2}$.';
 
-/** One candidate statement: `kind` and `claim` are what verify() re-evaluates. */
-interface Stmt { kind: string; claim: number; text: string; truth: boolean }
+/**
+ * One candidate statement: `kind` and `claim` are what verify() re-evaluates.
+ * `computed` marks a statement whose truth depends on this instance's numbers (a quoted value, or a
+ * claim the scenario decides case by case). A statement that is true — or false — in every instance
+ * the scenario can generate can be answered from memory, so every trio must contain at least one.
+ */
+interface Stmt { kind: string; claim: number; text: string; truth: boolean; computed: boolean }
 
 interface Scenario {
   scenario: string;
@@ -47,10 +52,11 @@ const eq = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 function numeric(rng: RNG, kind: string, correct: number, wrongs: number[], text: (claim: number) => string): Stmt {
   const ws = wrongs.map(sig).filter((w) => !eq(w, correct) && Number.isFinite(w) && w >= 0);
   const claim = ws.length > 0 && rng.bool(0.5) ? rng.pick(ws) : sig(correct);
-  return { kind, claim, text: text(claim), truth: eq(claim, correct) };
+  return { kind, claim, text: text(claim), truth: eq(claim, correct), computed: ws.length > 0 };
 }
 
-const bool = (kind: string, text: string, truth: boolean): Stmt => ({ kind, claim: truth ? 1 : 0, text, truth });
+/** `computed` is true when the scenario decides this claim case by case (not the same in every instance). */
+const bool = (kind: string, text: string, truth: boolean, computed = false): Stmt => ({ kind, claim: truth ? 1 : 0, text, truth, computed });
 
 // ------------------------------------------------------------------------------------------ scenarios
 
@@ -66,7 +72,8 @@ function boxConstant(rng: RNG): Scenario {
       bool('resultant-zero', 'The resultant force on the box is zero.', true),
       numeric(rng, 'friction-value', P, [P / 2, 2 * P, m * G], (c) => `The friction force on the box is ${N(c)}.`),
       numeric(rng, 'normal-value', m * G, [m, m * G - P], (c) => `The normal reaction of the floor on the box is ${N(c)}.`),
-      numeric(rng, 'mu-value', mu, [2 * mu, mu / 2, P / m], (c) => `The coefficient of friction between the box and the floor is $${num(c)}$.`),
+      // a coefficient of friction must look like one: only wrong values in (0, 1) that are short decimals
+      numeric(rng, 'mu-value', mu, [2 * mu, mu / 2, 1 - mu, P / (m * G - P)].filter((x) => x > 0 && x < 1 && Number.isInteger(sig(x * 1000))), (c) => `The coefficient of friction between the box and the floor is $${num(c)}$.`),
       bool('friction-less-than-push', `The friction force is less than ${N(P)}.`, false),
       numeric(rng, 'momentum-value', m * v, [0.5 * m * v * v, 0.5 * m * v], (c) => `The momentum of the box is $${num(c)}\\ \\text{kg m s}^{-1}$.`),
     ],
@@ -143,27 +150,38 @@ function boxSliding(rng: RNG): Scenario | null {
   };
 }
 
-function boxStatic(rng: RNG): Scenario {
+function boxStatic(rng: RNG): Scenario | null {
   const m = rng.pick([4, 5, 8, 10, 12, 20]);
   const mu = rng.pick([0.4, 0.5, 0.6]);
   const limit = sig(mu * m * G);
-  const cands = [0.25, 0.5, 0.75].map((k) => sig(k * limit)).filter((x) => Number.isInteger(x * 2));
-  const p = cands.length > 0 ? rng.pick(cands) : sig(limit / 2);
+  // Two thirds of the draws keep the push below the limiting friction (the box stays put); the rest
+  // push it over, so "the box remains at rest", "the friction is μR" and "it accelerates at …" all
+  // have to be decided from the numbers rather than remembered from the last time the scenario came up.
+  const k = rng.pick([0.25, 0.5, 0.75, 0.75, 1.25, 1.5, 2]);
+  const p = sig(k * limit);
+  if (!Number.isInteger(p * 2)) return null;
+  const moves = p > limit;
+  const a = sig((p - limit) / m);
+  if (moves && !Number.isInteger(a * 4)) return null;
+  const friction = moves ? limit : p;
+  const accel: Stmt = moves
+    ? numeric(rng, 'accel-claim', a, [p / m, limit / m], (c) => `The box accelerates at ${MS2(c)}.`)
+    : { kind: 'accel-claim', claim: sig(p / m), text: `The box accelerates at ${MS2(sig(p / m))}.`, truth: false, computed: true };
   return {
     scenario: 'box-static',
     intro: `A box of mass ${KG(m)} rests on a rough horizontal floor. The coefficient of friction between the box and the floor is $${num(mu)}$. A horizontal force of ${N(p)} is applied to the box. ${G_NOTE}`,
     pool: [
-      bool('stays-at-rest', 'The box remains at rest.', true),
-      numeric(rng, 'friction-value', p, [limit, 0], (c) => `The friction force on the box is ${N(c)}.`),
-      bool('friction-is-muR', 'The friction force on the box is equal to $\\mu R$.', false),
-      bool('resultant-zero', 'The resultant force on the box is zero.', true),
+      bool('stays-at-rest', 'The box remains at rest.', !moves, true),
+      numeric(rng, 'friction-value', friction, [moves ? p : limit, 0], (c) => `The friction force on the box is ${N(c)}.`),
+      bool('friction-is-muR', 'The friction force on the box is equal to $\\mu R$.', moves, true),
+      bool('resultant-zero', 'The resultant force on the box is zero.', !moves, true),
       numeric(rng, 'normal-value', m * G, [m, m * G - p], (c) => `The normal reaction of the floor on the box is ${N(c)}.`),
-      bool('accelerates', `The box accelerates at ${MS2(sig(p / m))}.`, false),
+      accel,
       numeric(rng, 'limiting-value', limit, [p, mu * m], (c) => `The maximum friction force the floor can provide is ${N(c)}.`),
     ],
     params: { m, mu, P: p },
-    trap: 'μR is the maximum (limiting) friction; while the box stays at rest the friction only matches the applied force.',
-    note: `Limiting friction $\\mu R = ${num(mu)} \\times ${m * G} = ${num(limit)}$ N exceeds the push $${num(p)}$ N, so the box stays at rest with friction $= ${num(p)}$ N (not $\\mu R$) and zero resultant.`,
+    trap: 'μR is the maximum (limiting) friction: compare the push with it before assuming the box moves, and while it stays at rest the friction only matches the applied force.',
+    note: `Limiting friction $\\mu R = ${num(mu)} \\times ${m * G} = ${num(limit)}$ N ${moves ? `is less than the push $${num(p)}$ N, so the box slides: friction $= \\mu R = ${num(limit)}$ N and $a = \\frac{${num(p)} - ${num(limit)}}{${m}} = ${num(a)}$ m s$^{-2}$` : `exceeds the push $${num(p)}$ N, so the box stays at rest with friction $= ${num(p)}$ N (not $\\mu R$) and zero resultant`}.`,
   };
 }
 
@@ -181,9 +199,9 @@ function lift(rng: RNG, subtle: boolean): Scenario {
     intro: `A person of mass ${KG(m)} stands on weighing scales in a lift. The lift is ${motion}${rate}. ${G_NOTE}`,
     pool: [
       numeric(rng, 'reading-value', R, [m * (G - a), m * G, m * Math.abs(a)], (c) => `The reading on the scales is ${N(c)}.`),
-      bool('reading-exceeds-weight', "The reading on the scales is greater than the person's weight.", a > 0),
-      bool('reading-less-than-weight', "The reading on the scales is less than the person's weight.", a < 0),
-      bool('resultant-zero', 'The resultant force on the person is zero.', a === 0),
+      bool('reading-exceeds-weight', "The reading on the scales is greater than the person's weight.", a > 0, true),
+      bool('reading-less-than-weight', "The reading on the scales is less than the person's weight.", a < 0, true),
+      bool('resultant-zero', 'The resultant force on the person is zero.', a === 0, true),
       ...(a === 0 ? [] : [numeric(rng, 'resultant-value', m * Math.abs(a), [R, m * G], (c) => `The magnitude of the resultant force on the person is ${N(c)}.`)]),
       numeric(rng, 'weight-value', m * G, [R], (c) => `The weight of the person is ${N(c)}.`),
       bool('weight-changes', "The person's weight changes while the lift is in this motion.", false),
@@ -239,8 +257,8 @@ function rebound(rng: RNG): Scenario | null {
     intro: `A ball of mass ${KG(m1)} moving at ${MS(u1)} strikes a stationary ball of mass ${KG(m2)} head-on. After the collision the first ball moves back along its original line at ${MS(w)} and the second ball moves off at ${MS(v2)}.`,
     pool: [
       bool('momentum-conserved', 'Momentum is conserved in the collision.', true),
-      bool('ke-conserved', 'Kinetic energy is conserved in the collision.', elastic),
-      bool('elastic', 'The collision is perfectly elastic.', elastic),
+      bool('ke-conserved', 'Kinetic energy is conserved in the collision.', elastic, true),
+      bool('elastic', 'The collision is perfectly elastic.', elastic, true),
       numeric(rng, 'ke-lost', lost, [before - 0.5 * m2 * v2 * v2, elastic ? before : 0], (c) => `The kinetic energy lost in the collision is ${J(c)}.`),
       numeric(rng, 'impulse-on-first', m1 * (u1 + w), [m1 * (u1 - w), m1 * u1], (c) => `The magnitude of the impulse on the first ball is $${num(c)}\\ \\text{N s}$.`),
       numeric(rng, 'momentum-after', m1 * u1, [m1 * w + m2 * v2, m2 * v2], (c) => `The total momentum after the collision is $${num(c)}\\ \\text{kg m s}^{-1}$.`),
@@ -357,7 +375,7 @@ function truthOf(scenario: string, kind: string, claim: number, p: Record<string
         case 'friction-is-muR': return moves;
         case 'resultant-zero': return !moves;
         case 'normal-value': return eq(claim, R);
-        case 'accelerates': return moves;
+        case 'accel-claim': return moves && eq(claim, (p.P - limit) / p.m);
         case 'limiting-value': return eq(claim, limit);
       }
       return null;
@@ -429,7 +447,7 @@ export default defineTemplate({
   levels: {
     1: 'constant velocity: zero resultant, friction = push, normal reaction = weight, momentum / KE values',
     2: 'box accelerating on a rough floor; ball at the top of its flight (v = 0 but a = g)',
-    3: 'lift accelerating up/down or at constant speed (scale reading, resultant); box that does not move (friction ≠ μR)',
+    3: 'lift accelerating up/down or at constant speed (scale reading, resultant); box pushed on a rough floor, on either side of limiting friction (friction = push or μR)',
     4: 'perfectly inelastic collision (momentum vs energy, common velocity, impulse); block on a smooth slope',
     5: 'lifts described by motion and slowing/speeding up; collisions with a rebound where elastic/inelastic must be computed',
   },
@@ -442,6 +460,10 @@ export default defineTemplate({
       // 'ke-conserved' and 'elastic' say the same thing: never ask both
       if (kinds.includes('ke-conserved') && kinds.includes('elastic')) return null;
       if (kinds.includes('reading-exceeds-weight') && kinds.includes('reading-less-than-weight')) return null;
+      // on a slope the resultant force *is* the component of the weight along the plane
+      if (sc.scenario === 'slope' && kinds.includes('resultant-value') && kinds.includes('along-value')) return null;
+      // at least one statement whose truth this instance's numbers decide, so no question is answerable from memory
+      if (!chosen.some((st) => st.computed)) return null;
       const truth = chosen.map((s) => s.truth) as [boolean, boolean, boolean];
       const options = statementOptions(truth);
       const correct = options.find((o) => o.correct)!.display;

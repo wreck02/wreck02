@@ -150,7 +150,7 @@ function rectanglePerimeterQ(rng: RNG): Generated | null {
       { value: frac(P * P, 32), trap: 'halved the side before squaring' },
     ]
     : [
-      { value: E(P), trap: 'gave the perimeter' },
+      // nothing longer than half the perimeter: such a "side" is impossible for a rectangle
       { value: frac(P, 6), trap: 'divided the perimeter by 6' },
       { value: frac(P, 8), trap: 'halved the side' },
       { value: frac(3 * P, 8), trap: 'took three quarters of the half-perimeter' },

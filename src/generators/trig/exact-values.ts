@@ -355,6 +355,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.c(b)), trap: 'used sin instead of tan' },
       { value: () => f.c(a).mul(f.c(b)), trap: 'used cos for both factors' },
     ],
+    // Both factors are first-quadrant values, so the product is positive: a negative option goes on sight.
+    possible: (x) => x > 1e-9,
     note: (a, b, A) => (a === b ? `Quick route: $\\tan A \\cos A = \\sin A$, so this is $\\sin ${A(a)}$.` : null),
   },
   {
@@ -372,6 +374,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.s(b)), trap: 'paired the two sines' },
       { value: () => f.c(a).mul(f.c(b)), trap: 'paired the two cosines' },
     ],
+    // The expression is sin(A + B): it can never leave [-1, 1], and both products are positive here.
+    possible: (x) => x > 1e-9 && x <= 1 + 1e-9,
     note: (a, b, A) => `Quick route: this is the expansion of $\\sin(A + B) = \\sin ${A(a + b)}$.`,
   },
   {
@@ -389,6 +393,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.s(b)), trap: 'paired the two sines' },
       { value: () => f.c(a).mul(f.c(b)), trap: 'paired the two cosines' },
     ],
+    // The expression is sin(A - B): a sine, so it can never leave [-1, 1].
+    possible: (x) => Math.abs(x) <= 1 + 1e-9,
     note: (a, b, A) => `Quick route: this is the expansion of $\\sin(A - B) = \\sin\\left(${A(a - b)}\\right)$.`,
   },
   {
@@ -407,6 +413,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a).mul(f.c(b)), trap: 'paired sin A with cos B' },
       { value: () => f.c(a).mul(f.s(b)), trap: 'paired cos A with sin B' },
     ],
+    // The expression is cos(A - B) with A, B in the first quadrant: positive and at most 1.
+    possible: (x) => x > 1e-9 && x <= 1 + 1e-9,
     note: (a, b, A) => `Quick route: this is the expansion of $\\cos(A - B) = \\cos ${A(Math.abs(a - b))}$.`,
   },
   {
@@ -423,6 +431,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a).div(f.s(b)), trap: 'used sin in the denominator' },
       { value: () => f.c(a).div(f.c(b)), trap: 'used cos in the numerator' },
     ],
+    // A positive value over a positive value: the quotient cannot be negative.
+    possible: (x) => x > 1e-9,
     note: (a, b, A) => (a === b ? `Quick route: $\\frac{\\sin A}{\\cos A} = \\tan A$, so this is $\\tan ${A(a)}$.` : null),
   },
   {
@@ -439,21 +449,31 @@ const FORMS: Form[] = [
       { value: () => f.c(a).div(f.c(b)), trap: 'used cos in the denominator' },
       { value: () => f.s(a).div(f.s(b)), trap: 'used sin in the numerator' },
     ],
+    // A positive value over a positive value: the quotient cannot be negative.
+    possible: (x) => x > 1e-9,
     note: (a, b, A) => (a === b ? `Quick route: $\\frac{\\cos A}{\\sin A} = \\frac{1}{\\tan A}$, so this is $\\frac{1}{\\tan ${A(a)}}$.` : null),
   },
   {
-    id: 'double-sin', usesB: false, usesTan: false,
+    // A = 45° is excluded: the expression is then exactly 1 and almost every mistake lands on
+    // \u221a2/2, 1/2 or a value above 1, so there are not four distinct admissible options left.
+    id: 'double-sin', usesB: false, usesTan: false, reject: (a) => a === 45,
     tex: (A) => `2 ${A('sin')} ${A('cos')}`,
     ex: (f, a) => f.s(a).mul(f.c(a)).mulRat(2),
     fl: (f, a) => 2 * f.s(a) * f.c(a),
     mistakes: (f, a) => [
       { value: () => f.s(a).mul(f.c(a)), trap: 'forgot the factor 2' },
-      { value: () => f.s(a).mulRat(2), trap: 'dropped the cos factor' },
-      { value: () => f.s(a).add(f.c(a)), trap: 'added instead of multiplying' },
       { value: () => f.c(a).pow(2).sub(f.s(a).pow(2)), trap: 'used cos 2A instead of sin 2A' },
+      { value: () => f.s(a).mulRat(2), trap: 'dropped the cos factor' },
       { value: () => f.c(a).mulRat(2), trap: 'dropped the sin factor' },
+      { value: () => f.s(a).add(f.c(a)), trap: 'added instead of multiplying' },
+      { value: () => f.s(a).div(f.c(a)), trap: 'divided the two factors instead of multiplying them' },
+      { value: () => f.c(a), trap: 'gave cos A, one factor of the product' },
+      { value: () => f.s(a), trap: 'gave sin A: the product is sin 2A, not sin A' },
+      { value: () => f.s(a).mul(f.c(a)).mulRat(HALF), trap: 'used $\\sin A\\cos A = \\tfrac{1}{2}\\sin 2A$ the wrong way round' },
       { value: () => f.s(a).pow(2).mulRat(2), trap: 'squared the sine instead of multiplying by the cosine' },
     ],
+    // The expression is sin 2A with A in the first quadrant: strictly between 0 and 1 inclusive.
+    possible: (x) => x > 1e-9 && x <= 1 + 1e-9,
     note: (a, _b, A) => `Quick route: $2\\sin A \\cos A = \\sin 2A = \\sin ${A(2 * a)}$.`,
   },
   {
@@ -469,6 +489,8 @@ const FORMS: Form[] = [
       { value: () => f.c(a).pow(2), trap: 'evaluated only cos²A' },
       { value: () => f.s(a).pow(2), trap: 'evaluated only sin²A' },
     ],
+    // The expression is cos 2A: a cosine, so it can never leave [-1, 1].
+    possible: (x) => Math.abs(x) <= 1 + 1e-9,
     note: (a, _b, A) => `Quick route: $\\cos^2 A - \\sin^2 A = \\cos 2A = \\cos ${A(2 * a)}$.`,
   },
   {
@@ -483,6 +505,8 @@ const FORMS: Form[] = [
       { value: () => f.t(b).pow(2), trap: 'used the second angle twice' },
       { value: () => f.t(b).div(f.t(a)), trap: 'divided the other way round' },
     ],
+    // A product of two first-quadrant tangents: strictly positive.
+    possible: (x) => x > 1e-9,
     note: (a, b, A) => (a + b === 90 ? `Quick route: $\\tan A \\tan\\left(${A(90)} - A\\right) = \\tan A \\cot A = 1$.` : null),
   },
   {
@@ -515,6 +539,8 @@ const FORMS: Form[] = [
       { value: () => f.s(a), trap: 'evaluated only the sine' },
       { value: () => f.c(b), trap: 'evaluated only the cosine' },
     ],
+    // A sum of two positive first-quadrant values, each at most 1: it lies in (0, 2].
+    possible: (x) => x > 1e-9 && x < 2 + 1e-9,
     note: (a, b, A) => (a + b === 90 ? `Quick route: $\\cos B = \\sin\\left(${A(90)} - B\\right) = \\sin A$, so this is $2 \\sin ${A(a)}$.` : null),
   },
   {
@@ -530,6 +556,8 @@ const FORMS: Form[] = [
       { value: () => f.s(b).pow(2), trap: 'used the second angle twice' },
       { value: () => f.c(a).mul(f.c(b)), trap: 'used cos for both angles' },
     ],
+    // A product of two first-quadrant sines: strictly between 0 and 1.
+    possible: (x) => x > 1e-9 && x <= 1 + 1e-9,
   },
 ];
 
@@ -653,7 +681,9 @@ function solveQ(rng: RNG): Generated | null {
   const eqTex = rearranged
     ? `${den === 1 ? '' : den}\\${fn}\\theta ${num.sign() < 0 ? '+' : '-'} ${num.abs().toLatex()} = 0`
     : `\\${fn}\\theta = ${target.toLatex()}`;
-  const range = radians ? '0 \\le \\theta \\le 2\\pi' : '0^{\\circ} \\le \\theta < 360^{\\circ}';
+  // Half-open in both units: a closed interval over a full turn would leave a candidate wondering
+  // whether the endpoint counts as a third solution.
+  const range = radians ? '0 \\le \\theta < 2\\pi' : '0^{\\circ} \\le \\theta < 360^{\\circ}';
   const t1 = sols[0];
   const { ref } = quadrant(t1);
   const other: Fn = fn === 'sin' ? 'cos' : 'sin';
@@ -753,7 +783,8 @@ export default defineTemplate({
       if (q.answer.kind !== 'set') return false;
       const fn = p.fn!;
       // Brute force: every multiple of 15° in the stated range whose floating-point value hits the target.
-      const upper = p.radians ? 360 : 345;
+      // The range is half a degree short of a full turn in both units, so the last angle checked is 345°.
+      const upper = 345;
       const expected: number[] = [];
       for (let d = 0; d <= upper; d += 15) {
         const v = FLOAT_TRIG[fn === 'sin' ? 's' : fn === 'cos' ? 'c' : 't'](d);

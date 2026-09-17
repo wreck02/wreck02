@@ -46,13 +46,23 @@ function cleanOnly(ds: { value: Exact | null; trap: string }[], range?: [number,
 /**
  * Choose the distractors that go to buildOptions: every distinct `must` candidate (the spec-named traps)
  * is used before any `extra` one, so the headline mistakes are never shuffled out by weaker ones.
+ *
+ * `oneSignPerMagnitude` keeps at most one wrong option of each size. A quadrant question otherwise
+ * offers ±576/625 and ±24/25 — two magnitudes each dressed twice, so the five options collapse to a
+ * 2 × 2 pick of size and sign and the "forgot the square root" mistake is shown twice over. The
+ * answer's own magnitude is exempt: the option that differs from it only in sign is the sign trap the
+ * question is built on.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, oneSignPerMagnitude = false): Distractor[] {
   const seen: Exact[] = [answer];
+  const mags: Exact[] = [];
   const out: Distractor[] = [];
   const take = (d: Distractor) => {
     if (out.length >= count || !Number.isFinite(d.value.toNumber()) || seen.some((s) => s.equals(d.value))) return;
+    const mag = d.value.abs();
+    if (oneSignPerMagnitude && mags.some((m) => m.equals(mag))) return;
     seen.push(d.value);
+    mags.push(mag);
     out.push(d);
   };
   must.forEach(take);
@@ -101,15 +111,27 @@ function triangleQ(rng: RNG, quadId: 1 | 2 | 3 | 4): Generated | null {
    * A sine or a cosine can never lie outside (−1, 1), so an option such as 25/7 is
    * eliminated without any work. When the target is sin θ or cos θ every candidate is
    * kept inside that range and the reciprocal-based slips are replaced by in-range ones.
+   *
+   * For an acute angle the same argument rules out every negative value — including the
+   * "wrong sign for the quadrant" slip, which is not a mistake anybody can make when both
+   * ratios are positive. So level 1 offers no negative option at all: it would be struck
+   * off on sight and would spend a slot keeping the answer out of the bottom of the list.
    */
-  const range: [number, number] | undefined = want === 'tan' ? undefined : [-1, 1];
+  const range: [number, number] | undefined = quadId === 1
+    ? (want === 'tan' ? [0, Infinity] : [0, 1])
+    : (want === 'tan' ? undefined : [-1, 1]);
   /** A magnitude slip that kept the quadrant sign right, and the same slip with it wrong. */
   const kept = (x: Exact | null): Exact | null => (x === null ? null : answer.sign() < 0 ? x.neg() : x);
   const flipped = (x: Exact | null): Exact | null => (x === null ? null : answer.sign() < 0 ? x : x.neg());
-  const must: { value: Exact | null; trap: string }[] = [
-    { value: answer.neg(), trap: `wrong sign for the quadrant: ${quadId === 1 ? 'both are positive here' : 'check which of sin and cos is negative'}` },
-  ];
+  const must: { value: Exact | null; trap: string }[] = quadId === 1
+    ? []
+    : [{ value: answer.neg(), trap: 'wrong sign for the quadrant: check which of sin and cos is negative' }];
   const extra: { value: Exact | null; trap: string }[] = [];
+  /** The target side over the *other side* instead of over the hypotenuse — above the answer, always. */
+  const legRatio = want === 'tan' ? null : kept(frac(want === 'sin' ? opp : adj, want === 'sin' ? adj : opp));
+  const legTrap = `divided by the ${want === 'sin' ? 'adjacent' : 'opposite'} side instead of by the hypotenuse`;
+  /** A slip in the Pythagoras step, so the hypotenuse comes out one too small. */
+  const hypSlip = want === 'tan' ? null : kept(frac(want === 'sin' ? opp : adj, h - 1));
   if (want === 'tan') {
     must.push(
       { value: attempt(() => gv.inv()), trap: 'inverted the given fraction' },
@@ -134,6 +156,8 @@ function triangleQ(rng: RNG, quadId: 1 | 2 | 3 | 4): Generated | null {
     );
     extra.push(
       { value: kept(attempt(() => oth.mul(oth))), trap: `found $\\${othFn}^{2}\\theta$ and forgot both the square root and which ratio was asked for` },
+      { value: legRatio, trap: `${legTrap}: this is $${want === 'sin' ? '\\tan\\theta' : '1/\\tan\\theta'}$` },
+      { value: hypSlip, trap: 'arithmetic slip finding the hypotenuse' },
       { value: flipped(sq), trap: 'forgot the square root and took the wrong quadrant sign' },
       { value: oth.neg(), trap: 'read the wrong side off the triangle and mis-signed it' },
       { value: frac(opp * q.sinSign, opp + adj), trap: 'took the hypotenuse to be the sum of the other two sides' },
@@ -159,15 +183,14 @@ function triangleQ(rng: RNG, quadId: 1 | 2 | 3 | 4): Generated | null {
       ...(rng.bool() ? pair : [pair[1], pair[0]]),
     );
     extra.push(
+      { value: legRatio, trap: `${legTrap}: this is $${want === 'sin' ? '\\tan\\theta' : '1/\\tan\\theta'}$` },
+      { value: hypSlip, trap: 'arithmetic slip finding the hypotenuse' },
       { value: flipped(oneMinusSq), trap: 'forgot the square root and took the wrong quadrant sign' },
       { value: flipped(oneMinus), trap: `used $1 - ${NAME[given]}$ and took the wrong quadrant sign` },
       { value: vals[third].neg(), trap: 'found the third ratio and mis-signed it' },
     );
   }
-  // For an acute angle a negative sine or cosine is impossible too, so only the headline
-  // sign trap (answer.neg()) is offered there — the padding stays positive.
-  const extraRange: [number, number] | undefined = want !== 'tan' && quadId === 1 ? [0, 1] : range;
-  const distractors = ranked(rng, answer, cleanOnly(must, range), cleanOnly(extra, extraRange));
+  const distractors = ranked(rng, answer, cleanOnly(must, range), cleanOnly(extra, range), 4, true);
   if (distractors.length < 4) return null;
   return {
     stem: `Given that $${NAME[given]} = ${tx(gv)}$ and ${q.words}, find the exact value of $${NAME[want]}$.`,

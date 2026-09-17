@@ -5,9 +5,9 @@ import type { RNG } from '../../core/rng';
 
 /**
  * Domain and range, stated as inequalities (every answer is a 'choice').
- * Level 1: domain of √(x − a)
+ * Level 1: domain of √(x − a), of √(a − x), of c + √(x − a)
  * Level 2: range of x² + k, of k − x²
- * Level 3: domain of 1/(x + c), of √(a − 2x)
+ * Level 3: domain of 1/(x + c), of √(a − mx)
  * Level 4: range of a quadratic on x ≥ t or x ≤ t, with the vertex inside or outside the domain
  * Level 5: range of 1/(x² + k) and of a + √(x − b); the largest domain x ≥ k on which x² + bx is one-to-one
  *
@@ -23,7 +23,8 @@ function fn(kind: string, o: Partial<Fn> = {}): Fn {
 
 function evalF(f: Fn, x: number): number {
   switch (f.kind) {
-    case 'sqrt-linear': return Math.sqrt(f.m * x + f.c);
+    // k is the constant added outside the root (0 unless the level-1 "c + √(x − a)" shape is drawn)
+    case 'sqrt-linear': return f.k + Math.sqrt(f.m * x + f.c);
     case 'recip-linear': return 1 / (x + f.c);
     case 'quad-plus': return f.a * x * x + f.k;
     case 'quad-restricted': return x * x + f.b * x + f.c;
@@ -122,9 +123,16 @@ function build(rng: RNG, o: {
 
 // ----------------------------------------------------------------- level 1
 
-/** Domain of √(x − a). */
+/**
+ * Domain of √(x − a).
+ *
+ * Three one-step shapes, not one: √(x − a), √(a − x) and a root with a constant added outside it.
+ * A single shape with a ∈ ±1…9 is memorised in one session — the option list is then always the
+ * same five inequalities about the same number — while all three shapes are still "read off the
+ * root in ten seconds" questions.
+ */
 function sqrtDomain(rng: RNG): Generated | null {
-  const a = rng.nonZeroInt(-9, 9);
+  const a = rng.nonZeroInt(-12, 12);
   const body = linTex(1, -a);
   return build(rng, {
     stem: `The function $f$ is defined by $f(x) = \\sqrt{${body}}$. State the largest possible domain of $f$.`,
@@ -144,12 +152,61 @@ function sqrtDomain(rng: RNG): Generated | null {
   });
 }
 
+/** Domain of √(a − x). */
+function sqrtDomainFlipped(rng: RNG): Generated | null {
+  const a = rng.int(1, 12);
+  const body = linTex(-1, a);
+  return build(rng, {
+    stem: `The function $f$ is defined by $f(x) = \\sqrt{${body}}$. State the largest possible domain of $f$.`,
+    rel: 'dom-le',
+    A: a,
+    wrongs: [
+      { rel: 'dom-ge', A: a, trap: 'forgot that −x ≥ −a reverses to x ≤ a', must: true },
+      { rel: 'dom-lt', A: a, trap: 'made the inequality strict, but √0 = 0 is defined', must: true },
+      { rel: 'dom-le', A: -a, trap: 'sign error solving a − x ≥ 0' },
+      { rel: 'dom-ne', A: a, trap: 'excluded one value as if the function were a reciprocal' },
+      { rel: 'dom-le', A: 0, trap: 'assumed only x ≤ 0 is needed' },
+    ],
+    solution: `The expression under the root must be non-negative: $${body} \\ge 0$, so $${a} \\ge x$, i.e. $x \\le ${a}$.`,
+    trap: 'Moving the x across reverses the inequality: √(a − x) needs x ≤ a, not x ≥ a.',
+    tags: ['domain', 'surds', 'inequalities'],
+    f: fn('sqrt-linear', { m: -1, c: a }),
+  });
+}
+
+/** Domain of c + √(x − a): the constant outside the root changes nothing. */
+function sqrtDomainShifted(rng: RNG): Generated | null {
+  const a = rng.nonZeroInt(-12, 12);
+  const c = rng.nonZeroInt(-9, 9);
+  if (c === a) return null; // "x ≥ c" would then be the correct answer under another name
+  const body = linTex(1, -a);
+  const expr = c > 0 ? `${c} + \\sqrt{${body}}` : `\\sqrt{${body}} - ${-c}`;
+  return build(rng, {
+    stem: `The function $f$ is defined by $f(x) = ${expr}$. State the largest possible domain of $f$.`,
+    rel: 'dom-ge',
+    A: a,
+    wrongs: [
+      { rel: 'dom-ge', A: a - c, trap: 'brought the constant outside the root into the bound', must: true },
+      { rel: 'dom-le', A: a, trap: 'inequality the wrong way round', must: true },
+      { rel: 'dom-gt', A: a, trap: 'made the inequality strict, but √0 = 0 is defined' },
+      { rel: 'dom-ge', A: c, trap: 'used the constant outside the root as the bound' },
+      { rel: 'dom-ge', A: -a, trap: 'sign error solving x − a ≥ 0' },
+    ],
+    solution: `Only the root restricts $x$: $${body} \\ge 0$, so $x \\ge ${a}$ — the $${c > 0 ? c : `-${-c}`}$ outside the root changes nothing.`,
+    trap: 'A constant added outside the root does not change the domain; only the expression under the root must be ≥ 0.',
+    tags: ['domain', 'surds', 'functions'],
+    f: fn('sqrt-linear', { m: 1, c: -a, k: c }),
+  });
+}
+
 // ----------------------------------------------------------------- level 2
 
 /** Range of x² + k or k − x². */
 function quadRange(rng: RNG): Generated | null {
   const up = rng.bool();
-  const k = rng.nonZeroInt(-9, 9);
+  // ±1…18 rather than ±1…9: the option set is five inequalities about one number, so a narrow pool
+  // of constants is memorised in a session, and 17 is no harder to add than 7.
+  const k = rng.nonZeroInt(-18, 18);
   const expr = up ? `x^{2} ${k > 0 ? `+ ${k}` : `- ${-k}`}` : `${k} - x^{2}`;
   return build(rng, {
     stem: `The function $f$ is defined by $f(x) = ${expr}$ for all real values of $x$. Find the range of $f$.`,
@@ -160,7 +217,10 @@ function quadRange(rng: RNG): Generated | null {
       { rel: up ? 'ran-ge' : 'ran-le', A: 0, trap: 'forgot the constant term', must: true },
       { rel: up ? 'ran-gt' : 'ran-lt', A: k, trap: 'the least (or greatest) value is reached at x = 0, so the inequality is not strict' },
       { rel: up ? 'ran-ge' : 'ran-le', A: -k, trap: 'sign error on the constant' },
-      { rel: up ? 'dom-ge' : 'dom-le', A: k, trap: 'gave a condition on x instead of on f(x)' },
+      // An option written as a condition on x among four written in f(x) announces itself: the
+      // domain/range confusion is real, but the candidate strikes this one off by reading the
+      // first symbol, so the slot is spent on a second inequality slip instead.
+      { rel: up ? 'ran-le' : 'ran-ge', A: 0, trap: 'inequality the wrong way round, and the constant dropped' },
     ],
     solution: `$x^{2} \\ge 0$ for every $x$, so ${up ? `$f(x) \\ge ${k}$, with the minimum at $x = 0$` : `$f(x) \\le ${k}$, with the maximum at $x = 0$`}.`,
     trap: 'x² is never negative, so the vertex value is the smallest (or largest) value of f.',
@@ -173,7 +233,7 @@ function quadRange(rng: RNG): Generated | null {
 
 /** Domain of 1/(x + c). */
 function reciprocalDomain(rng: RNG): Generated | null {
-  const c = rng.nonZeroInt(-9, 9);
+  const c = rng.nonZeroInt(-18, 18);
   const body = linTex(1, c);
   return build(rng, {
     stem: `The function $f$ is defined by $f(x) = \\dfrac{1}{${body}}$. State the largest possible domain of $f$.`,
@@ -195,8 +255,8 @@ function reciprocalDomain(rng: RNG): Generated | null {
 
 /** Domain of √(a − mx). */
 function sqrtNegDomain(rng: RNG): Generated | null {
-  const m = rng.int(2, 3);
-  const a = rng.int(1, 9);
+  const m = rng.int(2, 4);
+  const a = rng.int(1, 15);
   const bound = a / m;
   if (!Number.isInteger(2 * bound)) return null; // integers and halves only
   const body = linTex(-m, a);
@@ -234,8 +294,15 @@ function restrictedQuadRange(rng: RNG): Generated | null {
   const at = (x: number) => x * x + b * x + c;
   const vertexInside = dir === 'ge' ? t <= u : t >= u;
   const lo = vertexInside ? w : at(t);
-  const other = vertexInside ? at(t + (dir === 'ge' ? 1 : -1)) : w;
-  if (Math.abs(lo) > 80 || lo === other) return null;
+  /*
+   * The headline distractor is the value the *other* end of the reasoning gives: the endpoint value
+   * f(t) when the vertex is inside the domain, and the vertex value w when it is outside. It must be
+   * the value the trap text names — f(t ± 1) is not "the endpoint", it is just the answer plus one —
+   * and when the vertex sits exactly on the endpoint (t = u) the named mistake would give the correct
+   * answer, so that draw is rejected rather than relabelled.
+   */
+  const other = vertexInside ? at(t) : w;
+  if (Math.abs(lo) > 80 || Math.abs(other) > 80 || lo === other) return null;
   const domain = `x \\${dir === 'ge' ? 'ge' : 'le'} ${t}`;
   return build(rng, {
     stem: `The function $f$ is defined by $f(x) = x^{2} ${b > 0 ? `+ ${b}` : `- ${-b}`}x${c === 0 ? '' : c > 0 ? ` + ${c}` : ` - ${-c}`}$ for $${domain}$. Find the range of $f$.`,
@@ -294,7 +361,10 @@ function shiftedSqrtRange(rng: RNG): Generated | null {
       { rel: 'ran-ge', A: 0, trap: 'forgot the constant added to the root', must: true },
       { rel: 'ran-le', A: a, trap: 'inequality the wrong way round' },
       { rel: 'ran-gt', A: a, trap: 'the root can equal 0, so the value a is attained' },
-      { rel: 'dom-ge', A: b, trap: 'gave the domain instead of the range' },
+      // not "x ≥ b": an option written as a condition on x among four written in f(x) is struck off
+      // by reading its first symbol. The domain-endpoint confusion is already offered above, in the
+      // same f(x) form as the rest.
+      { rel: 'ran-ge', A: -a, trap: 'sign error on the constant added to the root' },
     ],
     solution: `$\\sqrt{${linTex(1, -b)}} \\ge 0$, and it is 0 at $x = ${b}$, so the least value of $f$ is $${a}$ and $f(x) \\ge ${a}$.`,
     trap: 'The root contributes a value ≥ 0, so the range starts at the constant, not at the domain endpoint.',
@@ -326,7 +396,7 @@ function oneToOne(rng: RNG): Generated | null {
 }
 
 const VARIANTS: Record<Level, ((rng: RNG) => Generated | null)[]> = {
-  1: [sqrtDomain],
+  1: [sqrtDomain, sqrtDomainFlipped, sqrtDomainShifted],
   2: [quadRange],
   3: [reciprocalDomain, sqrtNegDomain],
   4: [restrictedQuadRange],
@@ -339,9 +409,9 @@ export default defineTemplate({
   topic: 'functions',
   title: 'Domain and range',
   levels: {
-    1: 'domain of √(x − a)',
+    1: 'domain of √(x − a), of √(a − x), of c + √(x − a)',
     2: 'range of x² + k, of k − x²',
-    3: 'domain of 1/(x + c), of √(a − 2x)',
+    3: 'domain of 1/(x + c), of √(a − mx)',
     4: 'range of a quadratic on x ≥ t (vertex inside or outside the domain)',
     5: 'range of 1/(x² + k) and of a + √(x − b); largest one-to-one domain of x² + bx',
   },

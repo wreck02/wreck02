@@ -40,6 +40,34 @@ function cleanOnly(ds: { value: Exact | null; trap: string }[], allowZero = fals
 }
 
 /**
+ * The first-quadrant angle whose value for this function is |v|. Used to name the mistake a
+ * "wrong standard value" distractor really is ("used sin 45° instead of sin 30°") rather than
+ * repeating one label across three options.
+ */
+const STD_VALUES: Record<Fn, [Exact, number][]> = {
+  sin: [[frac(1, 2), 30], [surdFrac(1, 2, 2), 45], [surdFrac(1, 2, 3), 60]],
+  cos: [[frac(1, 2), 60], [surdFrac(1, 2, 2), 45], [surdFrac(1, 2, 3), 30]],
+  tan: [[surdFrac(1, 3, 3), 30], [E(1), 45], [surd(3), 60]],
+};
+
+function stdMistake(fn: Fn, v: Exact, ref: number, sgn: -1 | 1): { value: Exact; trap: string } {
+  const d = STD_VALUES[fn].find(([x]) => x.equals(v))?.[1];
+  return {
+    value: v.mulRat(sgn),
+    trap: d === undefined ? `not the value of ${fn} at ${ref}°` : `used ${fn} ${d}° instead of ${fn} ${ref}°`,
+  };
+}
+
+/**
+ * A sine or a cosine can never leave [−1, 1]: an option of 2 or √3 for a cosine is the exact
+ * analogue of a probability above 1 and is struck out without any trigonometry, so the whole
+ * distractor pool is filtered to the possible range.
+ */
+function inRange(fn: Fn, v: Exact): boolean {
+  return fn === 'tan' || Math.abs(v.toNumber()) <= 1 + 1e-12;
+}
+
+/**
  * Choose the distractors that go to buildOptions: every distinct `must` candidate (the spec-named traps)
  * is used before any `extra` one, so the headline mistakes are never shuffled out by weaker ones.
  */
@@ -128,19 +156,31 @@ function valueQ(rng: RNG, level: Level): Generated | null {
   if (!a) return null; // tan 90°, tan 270°
   const { q, ref } = quadrant(deg);
   const axis = ref === 0 || ref === 90;
-  const sgn = a.sign() < 0 ? -1 : 1;
+  const sgn: -1 | 1 = a.sign() < 0 ? -1 : 1;
+  const ok = (ds: { value: Exact | null; trap: string }[], allowZero = false) =>
+    cleanOnly(ds, allowZero).filter((d) => inRange(fn, d.value));
   let must: Distractor[] = [];
   let extra: Distractor[];
   if (axis) {
-    extra = cleanOnly([
-      { value: E(0), trap: 'confused the values on the axes' },
-      { value: E(1), trap: 'confused the values on the axes' },
-      // a negative axis value is only a live confusion once the angle has left the first quadrant
-      { value: q === 1 ? null : E(-1), trap: 'sign error on the axis' },
-      { value: frac(1, 2), trap: 'not an axis value at all' },
-      { value: surdFrac(1, 2, 3), trap: 'not an axis value at all' },
-      { value: surdFrac(1, 2, 2), trap: 'not an axis value at all' },
-      { value: q === 1 ? E(2) : null, trap: 'not an axis value at all' },
+    // Only three values live on the axes (0, 1, −1), so the surd options have to be there; each
+    // one is labelled with the angle it really belongs to instead of a shared non-mistake string.
+    const partner: Fn = fn === 'cos' ? 'sin' : 'cos';
+    const quarterOn = (deg + 90) % 360;
+    const quarterBack = (deg + 270) % 360;
+    must = ok([
+      {
+        value: a.isZero() ? E(1) : E(0),
+        trap: a.isZero()
+          ? 'the two axis values swapped: this one is 0, not ±1'
+          : 'the two axis values swapped: this one is ±1, not 0',
+      },
+      { value: exactOf(partner, deg), trap: `gave ${partner} ${deg}° instead of ${fn} ${deg}°` },
+    ], true);
+    extra = ok([
+      { value: a.isZero() ? E(-1) : a.neg(), trap: 'sign error: check which end of the axis the angle points to' },
+      { value: exactOf(fn, quarterOn), trap: `read ${fn} at ${quarterOn}°, a quarter turn on` },
+      { value: exactOf(fn, quarterBack), trap: `read ${fn} at ${quarterBack}°, a quarter turn back` },
+      ...STD_VALUES[fn].map(([v, d]) => ({ value: v.mulRat(sgn), trap: `this is ${fn} ${d}°: an axis value is never a surd` })),
     ], true);
   } else {
     const co = fn === 'sin' ? exactOf('cos', deg) : fn === 'cos' ? exactOf('sin', deg) : attempt(() => a.inv());
@@ -151,29 +191,33 @@ function valueQ(rng: RNG, level: Level): Generated | null {
       : [{ value: exactOf('sin', deg), trap: 'gave sin instead of tan' }, { value: exactOf('cos', deg), trap: 'gave cos instead of tan' }];
     if (q === 1) {
       // Every ratio is positive here, so the live confusions are between the standard values themselves.
-      must = cleanOnly([
+      must = ok([
         { value: co, trap: coTrap },
-        ...standard.map((v) => ({ value: v, trap: 'wrong standard value (30°, 45° and 60° confused)' })),
+        ...standard.map((v) => stdMistake(fn, v, ref, 1)),
       ]);
-      extra = cleanOnly([
+      extra = ok([
         ...otherFns,
         ...(fn !== 'tan'
           ? [
+            // "ratio upside down" (1/(½) = 2, 2√3/3) left the range and was struck out on sight;
+            // the in-range confusions take its place.
             { value: a.mulRat(2), trap: 'forgot the denominator 2' },
-            { value: attempt(() => a.inv()), trap: 'ratio upside down (hypotenuse over the side)' },
+            { value: E(1), trap: `gave the axis value ${fn} ${fn === 'sin' ? 90 : 0}° = 1` },
+            { value: surdFrac(1, 3, 3), trap: 'used 1/√3, which is tan 30° and not a sine or cosine' },
           ]
           : [{ value: ref === 45 ? surd(2) : E(2), trap: 'used the hypotenuse instead of a leg' }]),
       ]);
     } else {
-      must = cleanOnly([
+      must = ok([
         { value: a.neg(), trap: 'wrong sign for this quadrant' },
         { value: co, trap: coTrap },
       ]);
-      extra = cleanOnly([
+      extra = ok([
         { value: co ? co.neg() : null, trap: `${coTrap} and the sign wrong` },
         ...otherFns,
-        ...standard.map((v) => ({ value: v.mulRat(sgn), trap: 'wrong standard value (30°, 45° and 60° confused)' })),
+        ...standard.map((v) => stdMistake(fn, v, ref, sgn)),
         ...(fn !== 'tan' ? [{ value: a.mulRat(2), trap: 'forgot the denominator 2' }] : []),
+        ...(fn !== 'tan' ? [{ value: E(sgn), trap: `gave an axis value: $\\${fn}$ only reaches ${sgn} at a quarter turn` }] : []),
       ]);
     }
   }
@@ -194,9 +238,11 @@ function valueQ(rng: RNG, level: Level): Generated | null {
     answer: { kind: 'exact', value: a },
     options: buildOptions(rng, a, ranked(rng, a, must, extra)),
     solution,
-    trap: level <= 2
-      ? 'sin 30° = ½ and sin 60° = √3/2 are the pair most often swapped; sketch the 1, √3, 2 triangle if unsure.'
-      : 'Find the reference angle, then fix the sign with CAST: only sin is positive in quadrant 2, only tan in quadrant 3, only cos in quadrant 4.',
+    trap: axis
+      ? 'On the axes the values are only 0 and ±1 — sin is 0 at 0 and π, cos is 0 at π/2 and 3π/2; a surd here means the wrong angle was read.'
+      : level <= 2
+        ? 'sin 30° = ½ and sin 60° = √3/2 are the pair most often swapped; sketch the 1, √3, 2 triangle if unsure.'
+        : 'Find the reference angle, then fix the sign with CAST: only sin is positive in quadrant 2, only tan in quadrant 3, only cos in quadrant 4.',
     tags: ['trig', 'exact-values', radians ? 'radians' : 'degrees'],
     params: { variant: 'value', fn, deg, radians },
     typedAllowed: true,
@@ -463,12 +509,18 @@ function expressionQ(rng: RNG): Generated | null {
   ]);
   const note = form.note?.(a, b, (d) => ang(d, radians)) ?? null;
   const stem = rng.bool(0.5) ? `Find the exact value of $${expr}$.` : `Evaluate $${expr}$, giving your answer exactly.`;
+  // The trap line names the mistake this form's options were actually built from — the old
+  // boilerplate talked about sin²A + cos²B for expressions with no squares anywhere in them.
+  const chosen = ranked(rng, answer, must, extra);
+  const named = chosen[0]?.trap;
   return {
     stem,
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, ranked(rng, answer, must, extra)),
+    options: buildOptions(rng, answer, chosen),
     solution: `${note ? `${note} ` : ''}Substituting ${uniqueUsed.join(', ')}: $${substituted} = ${answer.toLatex()}$.`,
-    trap: 'Substitute the exact values carefully (or spot the identity); do not assume sin²A + cos²B = 1 when the angles differ.',
+    trap: named
+      ? `Substitute the exact values carefully, or spot the identity — the usual slip here: ${named}.`
+      : 'Substitute the exact values carefully (or spot the identity); do not assume sin²A + cos²B = 1 when the angles differ.',
     tags: ['trig', 'exact-values', 'identities'],
     params: { variant: 'expression', form: form.id, a, b, radians },
     typedAllowed: true,
@@ -510,10 +562,16 @@ function solveQ(rng: RNG): Generated | null {
   const other: Fn = fn === 'sin' ? 'cos' : 'sin';
   const swappedSols = fn === 'tan' ? solutionsOf('tan', target.inv()) : solutionsOf(other, target);
   const negSols = solutionsOf(fn, target.neg());
+  /**
+   * At most ONE option may be eliminable by its shape alone — a single value where the answer
+   * always lists two, or degrees where the range is in radians. Offering both wasted 1.5 of the
+   * four distractors and turned a 1-in-5 question into roughly 1-in-3.
+   */
+  const singleOpt: SetDistractor = { values: toVals([t1]), trap: 'missed the second solution' };
+  const degOpt: SetDistractor | null = radians ? { values: sols.map((d) => E(d)), trap: DEGREES_TRAP } : null;
   const must: SetDistractor[] = [
-    { values: toVals([t1]), trap: 'missed the second solution' },
+    degOpt && rng.bool(0.5) ? degOpt : singleOpt,
     { values: toVals(negSols), trap: 'wrong quadrants: ignored the sign of the value' },
-    ...(radians ? [{ values: sols.map((d) => E(d)), trap: DEGREES_TRAP }] : []),
   ];
   const extra: SetDistractor[] = [
     { values: toVals(uniqSorted([t1, t1 + 180])), trap: 'added 180° to get the second solution' },

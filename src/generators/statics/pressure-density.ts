@@ -51,17 +51,24 @@ function stepOf(a: number): number {
 /**
  * Positive, exam-plausible distractors that pass the clean-number rule.
  *
- * `step` is a tenth of the answer's own printing step: an option must round to (at worst) one more
- * decimal place than the answer, so a "mistake" such as 23.996 N — which no exam would print, and which
- * sits 0.02% from another option — is dropped instead of being offered.
+ * An option must round to (at worst) one more decimal place than the answer itself, so a "mistake"
+ * such as 23.996 N — which no exam would print, and which sits 0.02% from another option — is dropped
+ * instead of being offered. A rung of the answer's own power-of-ten ladder is exempt: 0.016 kg beside
+ * 1.6 kg is the same number with the point moved, and those rungs are exactly the named conversion
+ * mistakes these questions are built from.
  */
-function cleanOnly(ds: Cand[], step: number): Distractor[] {
+function cleanOnly(ds: Cand[], a: number): Distractor[] {
+  const step = stepOf(a) / 10;
+  const ladder = (v: number): boolean => {
+    const e = Math.log10(v / a);
+    return Math.abs(e - Math.round(e)) < 1e-9;
+  };
   const out: Distractor[] = [];
   for (const d of ds) {
     if (d.value === null || !Number.isFinite(d.value) || d.value <= 0) continue;
     const v = round(d.value);
     if (v > 1e9 || v < 1e-9) continue;
-    if (!isMult(v, step)) continue;
+    if (!isMult(v, step) && !ladder(v)) continue;
     let ex: Exact;
     try { ex = E(v); } catch { continue; }
     if (!isCleanExact(ex).ok) continue;
@@ -71,68 +78,87 @@ function cleanOnly(ds: Cand[], step: number): Distractor[] {
 }
 
 /**
- * How many of the options should sit below the answer. The part of the sorted list the answer lands in
- * — near the bottom, in the middle, near the top — is drawn uniformly from the parts the candidate
- * mistakes can actually reach, so a candidate who recognises the variant learns nothing from where the
- * correct option sits. When every mistake falls on one side there is nothing to choose and the answer
- * sits where the mathematics puts it.
+ * How many of the options should sit below the answer, chosen from the splits `feasible` says the
+ * candidate mistakes can actually supply. The part of the sorted list the answer lands in — near the
+ * bottom, in the middle, near the top — is drawn uniformly first, so a candidate who recognises the
+ * variant learns nothing from where the correct option sits. When every mistake falls on one side
+ * there is nothing to choose and the answer sits where the mathematics puts it.
  */
-function belowCount(rng: RNG, belowAvail: number, aboveAvail: number, count: number): number {
-  const lo = Math.max(0, count - aboveAvail);
-  const hi = Math.min(count, belowAvail);
-  if (lo >= hi) return Math.min(lo, hi);
-  const feasible: number[] = [];
-  for (let k = lo; k <= hi; k++) feasible.push(k);
+function belowCount(rng: RNG, feasible: number[], count: number): number {
   const third = (k: number) => (2 * k < count ? 0 : 2 * k > count ? 2 : 1);
   const part = rng.pick([...new Set(feasible.map(third))]);
   return rng.pick(feasible.filter((k) => third(k) === part));
 }
 
 /**
- * `must` traps get their slot first inside each side of the answer, nearest the answer first; the
- * extras follow in random order. Three rules decide what may join the list:
- *  · the whole list — the answer and everything already chosen — may span at most `spread`, because an
- *    option orders of magnitude from the answer is struck out on sight, which turns a five-option
- *    question into a three-option one;
+ * `must` traps get their slot first, nearest the answer first; the extras follow in random order.
+ * Three rules decide what may join the list:
+ *  · the whole list — the answer and everything chosen — may span at most `spread`, because an option
+ *    orders of magnitude from the answer is struck out on sight, which turns a five-option question
+ *    into a three-option one. The width is **reserved**, not handed out first come first served:
+ *    before an option is taken, the room the other side of the answer still needs to fill its share
+ *    is set aside. Letting the first picks eat the whole window is what made the level-1 density
+ *    answer the largest of the five every time — ρ/1000 and ρ/100 used all of it, so ρ×10 could
+ *    never be added and nothing above the answer was ever offered;
  *  · no option may sit within 2% of another (or of the answer): a pair a candidate cannot tell apart
  *    is a wasted slot, and it makes the question turn on arithmetic no one would do in 90 seconds;
- *  · the number of options *below* the answer is drawn uniformly and clamped to what the candidate
- *    list can supply. Whole families of mistakes here sit on one side by construction — every
- *    "forgot a piece" slip is smaller than p₀ + ρgh, everything but "left g out" is bigger than ρVg —
- *    so without this the answer sits in the same slot in every instance of a variant and can be
- *    picked out without doing any physics.
+ *  · the number of options *below* the answer is drawn uniformly from the splits the candidates can
+ *    actually supply inside that window, and is then enforced. Whole families of mistakes here sit on
+ *    one side by construction — every "forgot a piece" slip is smaller than p₀ + ρgh, everything but
+ *    "left g out" is bigger than ρVg — so without this the answer sits in the same slot in every
+ *    instance of a variant and can be picked out without doing any physics.
+ * A draw the candidates cannot fill comes back short and pack() redraws the parameters.
  */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spread: number, count = 4): Distractor[] {
   const a = answer.toNumber();
-  const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  let lo = a, hi = a;
-  const take = (d: Distractor) => {
-    if (out.length >= count) return;
-    const v = d.value.toNumber();
-    if (!(v > 0)) return;
-    if (Math.max(hi, v) / Math.min(lo, v) > spread * (1 + 1e-9)) return;
-    if ([a, ...out.map((o) => o.value.toNumber())].some((x) => Math.abs(v - x) < 0.02 * Math.max(v, x))) return;
-    if (seen.some((s) => s.equals(d.value))) return;
-    seen.push(d.value);
-    out.push(d);
-    lo = Math.min(lo, v);
-    hi = Math.max(hi, v);
-  };
+  const cap = spread * (1 + 1e-9);
+  const ratio = (v: number) => (v > a ? v / a : a / v);
   const closest = (x: Distractor) => Math.abs(Math.log(x.value.toNumber() / a));
   const ordered = [...must.slice().sort((x, y) => closest(x) - closest(y)), ...rng.shuffle(extra)];
-  /** Could stand next to the answer on its own — the interactions are settled by take(). */
-  const plausible = (d: Distractor) => {
+  // One candidate per distinct value, and only values that could stand next to the answer at all.
+  const pool: Distractor[] = [];
+  for (const d of ordered) {
     const v = d.value.toNumber();
-    return v > 0 && Math.max(a, v) / Math.min(a, v) <= spread * (1 + 1e-9) && Math.abs(v - a) >= 0.02 * Math.max(v, a);
+    if (!(v > 0) || ratio(v) > cap) continue;
+    if ([a, ...pool.map((o) => o.value.toNumber())].some((x) => Math.abs(v - x) < 0.02 * Math.max(v, x))) continue;
+    pool.push(d);
+  }
+  const side = (d: Distractor) => (d.value.toNumber() < a ? 0 : 1);
+  const byRatio = (ds: Distractor[]) => ds.slice().sort((x, y) => ratio(x.value.toNumber()) - ratio(y.value.toNumber()));
+  const left = [byRatio(pool.filter((d) => side(d) === 0)), byRatio(pool.filter((d) => side(d) === 1))];
+  /** The narrowest list possible with k options below the answer: the k and count−k nearest. */
+  const width = (k: number): number => {
+    if (k > left[0].length || count - k > left[1].length) return Infinity;
+    const edge = (s: number, j: number) => (j > 0 ? ratio(left[s][j - 1].value.toNumber()) : 1);
+    return edge(0, k) * edge(1, count - k);
   };
-  const below = ordered.filter((d) => plausible(d) && d.value.toNumber() < a);
-  const above = ordered.filter((d) => plausible(d) && d.value.toNumber() > a);
-  const nBelow = belowCount(rng, below.length, above.length, count);
-  for (const d of below) { if (out.length >= nBelow) break; take(d); }
-  for (const d of above) take(d);
-  for (const d of below) take(d);
-  return out;
+  const feasible: number[] = [];
+  for (let k = 0; k <= count; k++) if (width(k) <= cap) feasible.push(k);
+  if (!feasible.length) return [];
+  const nBelow = belowCount(rng, feasible, count);
+  const quota = [nBelow, count - nBelow];
+  const taken: Distractor[][] = [[], []];
+  const reach = [1, 1];
+  /** How far the other side must still be allowed to reach to fill what is left of its share. */
+  const stillNeeded = (s: number): number => {
+    const k = quota[s] - taken[s].length;
+    if (k <= 0) return 1;
+    return left[s].length >= k ? ratio(left[s][k - 1].value.toNumber()) : Infinity;
+  };
+  const tryTake = (d: Distractor): void => {
+    const s = side(d);
+    const at = left[s].indexOf(d);
+    if (at < 0 || taken[s].length >= quota[s]) return; // already used, or this side is full
+    const r = Math.max(reach[s], ratio(d.value.toNumber()));
+    if (r * Math.max(reach[1 - s], stillNeeded(1 - s)) > cap) return;
+    left[s].splice(at, 1);
+    taken[s].push(d);
+    reach[s] = r;
+  };
+  // Two passes: a candidate the reservation turned away may fit once the other side is settled.
+  for (const d of pool) tryTake(d);
+  for (const d of pool) tryTake(d);
+  return [...taken[0], ...taken[1]];
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -166,8 +192,7 @@ function pack(rng: RNG, p: Pack): Generated | null {
   try { value = E(a); } catch { return null; }
   if (!isCleanExact(value).ok) return null;
   const format = p.format ?? 'decimal';
-  const step = stepOf(a) / 10;
-  const ds = ranked(rng, value, cleanOnly(p.must, step), cleanOnly(p.extra, step), p.spread ?? 30);
+  const ds = ranked(rng, value, cleanOnly(p.must, a), cleanOnly(p.extra, a), p.spread ?? 30);
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
     stem: p.stem,
@@ -200,9 +225,14 @@ function densityQ(rng: RNG): Generated | null {
       { value: rho / 1000, trap: 'divided by $10^{3}$ instead of $10^{6}$ (cm³ treated as litres)' },
       { value: rho / 100, trap: 'used the area factor $10^{4}$ instead of the volume factor $10^{6}$' },
     ],
+    // Every conversion slip in the obvious direction undershoots, and with only undershoots on offer
+    // the answer was the largest of the five in every question. The overshoots are the same ladder
+    // read the other way, which is just as easy a slip to make.
     extra: [
       { value: rho / 10, trap: 'a power of ten lost in the conversion' },
       { value: rho * 10, trap: 'a power of ten gained in the conversion' },
+      { value: rho * 100, trap: 'two powers of ten gained in the conversion' },
+      { value: rho * 1000, trap: 'gave the density in $\\text{g m}^{-3}$: the mass was turned into grams as well' },
       { value: vCm3 / mKg, trap: 'volume divided by mass instead of mass by volume' },
       { value: mKg * vCm3, trap: 'multiplied the mass by the volume instead of dividing' },
     ],
@@ -210,7 +240,9 @@ function densityQ(rng: RNG): Generated | null {
     trap: '1 m³ is 10⁶ cm³, not 10³: dividing by the wrong power of ten is the whole question.',
     tags: ['density', 'units'],
     params: { variant: 'density', rho, vCm3, mKg },
-    spread: 1000,
+    // A conversion question's options are a power-of-ten ladder, and the mistakes it is built from are
+    // 10³ and 10⁴ out, so the ladder has to be at least that long on both sides of the answer.
+    spread: 1e4,
   });
 }
 
@@ -237,16 +269,22 @@ function pressureQ(rng: RNG): Generated | null {
           { value: F * aM2, trap: 'multiplied by the area instead of dividing' },
           { value: aM2 / F, trap: 'divided the area by the force' },
         ],
+    // As in densityQ: the conversion slips all undershoot, so the same ladder is offered above the
+    // answer too, otherwise the correct option is simply the biggest number on the page.
     extra: cm2
       ? [
           { value: p / 1000, trap: 'gave the pressure in kPa, not Pa' },
           { value: F * aCm2, trap: 'multiplied by the area in cm² instead of dividing' },
           { value: p / 10, trap: 'a power of ten lost in the conversion' },
           { value: p * 10, trap: 'a power of ten gained in the conversion' },
+          { value: p * 100, trap: 'two powers of ten gained in the conversion' },
+          { value: p * 1e4, trap: 'applied the $10^{4}$ conversion twice' },
         ]
       : [
           { value: p / 10, trap: 'a decimal point slipped in the area' },
           { value: p * 10, trap: 'a decimal point slipped in the area the other way' },
+          { value: p / 100, trap: 'the decimal point in the area two places out' },
+          { value: p * 100, trap: 'the decimal point in the area two places out the other way' },
           { value: p / 1000, trap: 'gave the pressure in kPa, not Pa' },
           { value: F / (aM2 * 1e4), trap: 'treated the area as cm² and divided by $10^{4}$ as well' },
         ],
@@ -257,7 +295,7 @@ function pressureQ(rng: RNG): Generated | null {
     tags: ['pressure', 'units'],
     // verify() converts the area from the units the stem prints, so the conversion is really tested
     params: { variant: 'pressure', F, aShown: cm2 ? aCm2 : aM2, areaUnit: cm2 ? 'cm^2' : 'm^2' },
-    spread: cm2 ? 1e4 : 30,
+    spread: cm2 ? 1e4 : 1000,
   });
 }
 
@@ -275,10 +313,14 @@ function massFromDensityQ(rng: RNG): Generated | null {
       { value: mKg * 1000, trap: 'converted cm³ with $10^{3}$ instead of $10^{6}$' },
       { value: mKg * 100, trap: 'used the area factor $10^{4}$ instead of the volume factor $10^{6}$' },
     ],
+    // Mirror of densityQ: both headline traps overshoot, so the ladder is offered below the answer
+    // as well and the correct option is not simply the smallest number on the page.
     extra: [
       { value: rho / vCm3, trap: 'divided the density by the volume' },
       { value: mKg / 10, trap: 'a power of ten lost in the conversion' },
       { value: mKg * 10, trap: 'a power of ten gained in the conversion' },
+      { value: mKg / 100, trap: 'two powers of ten lost in the conversion' },
+      { value: mKg / 1000, trap: 'converted the volume with $10^{9}$ instead of $10^{6}$' },
     ],
     solution: `$m = \\rho V = ${n(rho)} \\times ${n(vCm3)} \\times 10^{-6} = ${n(mKg)}\\ \\text{kg}$.`,
     trap: 'The volume must be in m³ (÷10⁶) before it is multiplied by a density in kg m⁻³.',
@@ -327,6 +369,8 @@ function depthPressureQ(rng: RNG): Generated | null {
       { value: (G * h) / 1000, trap: 'left the density out' },
       { value: pk - P_ATM, trap: 'subtracted atmospheric pressure, although only the liquid was asked for' },
       { value: pk / 5, trap: 'used $g = 2$ instead of $10$' },
+      { value: pk * 100, trap: 'divided by $10$ instead of $1000$ turning Pa into kPa' },
+      { value: rho === 1000 ? null : (1000 * G * h) / 1000, trap: 'used the density of water instead of the density given' },
     ],
     solution: `$p = \\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(pPa)}\\ \\text{Pa} = ${n(pk)}\\ \\text{kPa}$.`,
     trap: 'ρgh needs all three factors and the depth in metres; the question asks for the liquid’s pressure only, so atmospheric pressure is not added.',
@@ -359,6 +403,9 @@ function depthFromPressureQ(rng: RNG): Generated | null {
       { value: round((pk * 1000 * G) / rho), trap: 'multiplied by $g$ instead of dividing by it' },
       { value: round(pk / (rho * G)), trap: 'used the pressure in kPa instead of Pa' },
       { value: round(h / 2), trap: 'used $\\tfrac12 \\rho g h$' },
+      // the depth comes out of a division, so every "forgot a factor" slip overshoots; this one lands
+      // on either side depending on the liquid, which keeps the answer off the bottom of the list
+      { value: rho === 1000 ? null : round((pk * 1000) / (1000 * G)), trap: 'used the density of water instead of the density given' },
     ],
     solution: `$h = \\dfrac{p}{\\rho g} = \\dfrac{${n(pk * 1000)}}{${n(rho)} \\times 10} = ${n(h)}\\ \\text{m}$ (the pressure must be in Pa first).`,
     trap: 'Divide by ρg, not by ρ alone, and turn kPa into Pa before dividing.',
@@ -429,6 +476,8 @@ function forceOnSurfaceQ(rng: RNG): Generated | null {
       { value: round(rho * G * (h / 2) * A), trap: 'used half the depth, although the average depth was given' },
       { value: round(p * A * 2), trap: 'counted both faces of the panel' },
       { value: round(F / 10), trap: 'a power of ten lost in the pressure' },
+      { value: round(F * 10), trap: 'a power of ten gained in the pressure' },
+      { value: rho === 1000 ? null : round(1000 * G * h * A), trap: 'used the density of water instead of the density given' },
     ],
     solution: `$p = \\rho g h = ${n(rho)} \\times 10 \\times ${n(h)} = ${n(p)}\\ \\text{Pa}$, so $F = pA = ${n(p)} \\times ${n(A)} = ${n(F)}\\ \\text{N}$.`,
     trap: 'Pressure is a force per unit area: multiply by the area (and only the liquid’s pressure is asked for here).',
@@ -525,10 +574,14 @@ function densityFromFloatQ(rng: RNG): Generated | null {
       { value: round((1 - f) * rhoF), trap: 'used the fraction above the surface' },
       { value: rhoF, trap: 'assumed a floating body has the density of the liquid' },
     ],
+    // The block floats, so it is lighter than the liquid and every "used the liquid" slip overshoots:
+    // the last two are the undershoots that keep the answer off the bottom of the sorted list.
     extra: [
       { value: round(rhoF * f * f), trap: 'squared the fraction' },
       { value: round(rhoF - rhoB), trap: 'subtracted instead of multiplying' },
       { value: round((rhoF * (1 + f)) / 2), trap: 'averaged the liquid’s density with the answer' },
+      { value: round((rhoF * f) / 2), trap: 'halved the fraction submerged' },
+      { value: round(rhoF * f * (1 - f)), trap: 'multiplied by the fraction above the surface as well' },
     ],
     solution: `Weight $=$ upthrust, so $\\rho_{\\text{block}} = ${fr} \\times ${n(rhoF)} = ${n(rhoB)}\\ \\text{kg m}^{-3}$.`,
     trap: 'A floating body’s density is the fraction submerged times the liquid’s density; dividing gives a body denser than the liquid, which would sink.',
@@ -563,6 +616,10 @@ function apparentWeightQ(rng: RNG): Generated | null {
       { value: round(app / G), trap: 'gave the apparent mass in kg, not the reading in N' },
       { value: round(W - 2 * U), trap: 'subtracted the upthrust twice' },
       { value: round(W / 2), trap: 'assumed water halves the reading' },
+      // the block is always denser than water, so W, U and W − 2U all undershoot or sit just under the
+      // reading; these two are the overshoots that stop the answer being one of the bottom options
+      { value: round(app * G), trap: 'multiplied the reading by $g$ a second time' },
+      { value: round(W + 2 * U), trap: 'added the upthrust twice instead of subtracting it' },
     ],
     solution: `Weight $= ${n(mKg)} \\times 10 = ${n(W)}\\ \\text{N}$; upthrust $= 1000 \\times ${n(vCm3)} \\times 10^{-6} \\times 10 = ${n(U)}\\ \\text{N}$. Reading $= ${n(W)} - ${n(U)} = ${n(app)}\\ \\text{N}$.`,
     trap: 'Apparent weight = true weight − upthrust, and the upthrust uses the water’s density, not the block’s.',
@@ -629,10 +686,13 @@ function hydraulicQ(rng: RNG, ask: 'load' | 'rise' | 'work'): Generated | null {
         { value: round((F2 * d1) / 100), trap: 'used the force on the large piston with the small piston’s distance' },
         { value: round((F1 * d2) / 100), trap: 'used the force on the small piston with the large piston’s distance' },
       ],
+      // "multiplied the work by the area ratio" is the same number as the second must, and
+      // "divided by 1000" is the same as the first extra: both used to be offered twice, which left
+      // only two distinct overshoots and pinned the answer to the middle of the list.
       extra: [
         { value: round(work / 10), trap: 'a power of ten lost turning centimetres into metres' },
-        { value: round((F1 * d1) / 1000), trap: 'divided by $1000$ instead of $100$' },
-        { value: round(work * k), trap: 'multiplied the work by the ratio of the areas' },
+        { value: round(work * 10), trap: 'divided by $10$ instead of $100$' },
+        { value: round(F1 * d2), trap: 'used the large piston’s distance, but in centimetres' },
         { value: round(work / 2), trap: 'used $\\tfrac12 Fd$, as for a spring' },
       ],
       solution: `The press multiplies force but not energy: the work done on the load is the work done on the small piston, $W = Fd = ${n(F1)} \\times ${n(d1 / 100)} = ${n(work)}\\ \\text{J}$. (Check: $F_2 = ${n(F2)}\\ \\text{N}$ and $d_2 = ${n(d2)}\\ \\text{cm}$, and $${n(F2)} \\times ${n(d2 / 100)} = ${n(work)}\\ \\text{J}$.)`,
@@ -657,11 +717,15 @@ function hydraulicQ(rng: RNG, ask: 'load' | 'rise' | 'work'): Generated | null {
       { value: d1, trap: 'assumed both pistons move the same distance' },
       { value: round(d1 / (k - 1)), trap: 'off by one in the ratio of the forces' },
     ],
+    // Dividing by the ratio is what makes the answer small, so nearly every slip overshoots: the last
+    // two are the undershoots that stop the answer being the smallest option every time.
     extra: [
       { value: round(d1 / (k + 1)), trap: 'off by one in the ratio of the forces the other way' },
       { value: round(d2 * 10), trap: 'gave the answer in mm, not cm' },
       { value: round(d2 / 10), trap: 'a power of ten lost' },
       { value: round(d1 / 2), trap: 'halved the distance instead of dividing by the ratio of the forces' },
+      { value: round(d2 / 100), trap: 'gave the answer in metres, not centimetres' },
+      { value: round(d1 / (k * k)), trap: 'divided by the ratio of the forces twice over' },
     ],
     solution: `The press cannot create energy, so $F_1 d_1 = W d_2$: the ratio of the forces is $${n(W2)} / ${n(F1)} = ${n(k)}$, so $d_2 = \\dfrac{${n(d1)}}{${n(k)}} = ${n(d2)}\\ \\text{cm}$.`,
     trap: 'Work in = work out: the load rises as many times less as its weight is times bigger than the applied force.',

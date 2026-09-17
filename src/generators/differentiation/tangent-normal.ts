@@ -338,19 +338,38 @@ function tangentEquationQ(rng: RNG): Generated | null {
     { m: E(mBack), c: E(yBack - mBack * -a), trap: `took the tangent at x = ${-a} instead of x = ${a}` },
   ];
   const seen = new Set([correct]);
-  const wrong: { display: string; trap: string }[] = [];
+  const byGradient = new Map<string, { display: string; trap: string }[]>();
   for (const w of cands) {
     if (!isCleanExact(w.c).ok || !isCleanExact(w.m).ok) continue;
     const display = lineTex(w.m, w.c);
     if (seen.has(display)) continue;
     seen.add(display);
-    wrong.push({ display, trap: w.trap });
+    const key = w.m.toLatex(FR);
+    byGradient.set(key, [...(byGradient.get(key) ?? []), { display, trap: w.trap }]);
   }
+  /**
+   * A candidate who only counts gradients must not be able to read the answer off the modal one:
+   * the correct gradient used to be the unique most-repeated gradient in 78% of these questions,
+   * which cuts the field from five to under three without differentiating anything. Take 0–2 of
+   * the lines that share the correct gradient, and let one WRONG gradient appear twice, so a
+   * repeated gradient points at the answer no more often than chance.
+   */
+  const mineKey = E(m).toLatex(FR);
+  const mine = rng.shuffle(byGradient.get(mineKey) ?? []);
+  const others = rng.shuffle([...byGradient.entries()].filter(([k]) => k !== mineKey).map(([, v]) => rng.shuffle(v)));
+  const wrong = mine.slice(0, Math.min(mine.length, rng.weighted([0, 1, 2], [4, 3, 2])));
+  const dupAt = rng.bool(0.65) ? others.findIndex((g) => g.length > 1) : -1;
+  if (dupAt >= 0) wrong.push(...others[dupAt].slice(0, 4 - wrong.length).slice(0, 2));
+  for (let i = 0; i < others.length && wrong.length < 4; i++) {
+    if (i !== dupAt) wrong.push(others[i][0]);
+  }
+  // last resort: any remaining distinct line, so a thin pool still produces five options
+  for (const g of [...others, mine]) for (const w of g) if (wrong.length < 4 && !wrong.includes(w)) wrong.push(w);
   if (wrong.length < 4) return null;
   return {
     stem: `Find the equation of the tangent to the curve $y = ${curveTex(c)}$ at the point where $x = ${a}$.`,
     answer: { kind: 'choice', value: correct },
-    options: buildChoiceOptions(rng, correct, wrong),
+    options: buildChoiceOptions(rng, correct, wrong.slice(0, 4)),
     solution: `At $x = ${a}$, $y = ${y0}$ and $\\frac{dy}{dx} = ${poly(dCoefs(coefs))} = ${m}$. So $${shift('y', y0)} = ${mTimes(`${m}`, a)}$, i.e. ${correct}.`,
     trap: 'Gradient from dy/dx at the point, then y − y₁ = m(x − x₁) with the point on the curve; the normal would use −1/m.',
     tags: ['differentiation', 'tangent', 'equation-of-line'],
@@ -575,9 +594,15 @@ function normalAxisQ(rng: RNG): Generated | null {
   if (Math.abs(xInt.toNumber()) > 150) return null;
   const answer = axis === 'x' ? xInt : yInt;
   if (!isCleanExact(answer).ok || (axis === 'y' && yInt.toRat().d > 6n)) return null;
+  /**
+   * Every label here is read straight off the formula: the x-intercept of a line of gradient g
+   * through (a, y₀) is a − y₀/g, so g = −1/m gives a + m·y₀ (correct), g = 1/m gives a − m·y₀,
+   * g = m gives a − y₀/m and g = −m gives a + y₀/m. Three of these used to carry the wrong
+   * mistake's name, and one option was only the negation of another rather than anyone's answer.
+   */
   const must: Cand[] = axis === 'x'
     ? [
-      { value: E(a - m * y0), trap: 'sign slip when setting y = 0' },
+      { value: E(a - m * y0), trap: 'took the normal gradient as 1/m (sign not changed)' },
       { value: frac(m * a - y0, m), trap: 'used the tangent instead of the normal' },
     ]
     : [
@@ -586,12 +611,13 @@ function normalAxisQ(rng: RNG): Generated | null {
     ];
   const extra: Cand[] = axis === 'x'
     ? [
-      { value: E(a).add(frac(y0, m)), trap: 'took the normal gradient as 1/m (sign not changed)' },
+      { value: E(a).add(frac(y0, m)), trap: 'took the normal gradient as −m' },
       { value: E(m * y0), trap: 'forgot to add a' },
-      { value: E(a).add(frac(y0, m).neg()).neg(), trap: 'took the normal gradient as −m' },
+      { value: yInt, trap: 'found where the normal meets the y-axis instead' },
       { value: E(a + y0), trap: 'took the normal gradient as −1 instead of −1/m' },
       { value: E(a - y0), trap: 'took the normal gradient as 1 instead of −1/m' },
       { value: E(a + 2 * m * y0), trap: 'added m·y₁ twice' },
+      { value: E(y0), trap: 'gave the y-coordinate of the point of contact' },
       { value: E(a), trap: 'gave the x-coordinate of the point of contact' },
     ]
     : [

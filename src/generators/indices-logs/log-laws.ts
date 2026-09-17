@@ -18,8 +18,12 @@ import type { RNG } from '../../core/rng';
  * a power of the base (otherwise the candidate just reads the indices off and adds them), and the
  * parameters are drawn to favour draws where one of the spec's named slips —
  * log a ± log b = log(a ± b), n log a = log(na) — lands on a power of the base and can therefore
- * be offered as a value. Those slips, and the "divided the wrong way round" reversal of a
- * difference, are the must-keep distractors.
+ * be offered as a value. Those slips are the must-keep distractors.
+ *
+ * The value of one of these expressions is positive by construction, so −k (the "divided the wrong
+ * way round" reversal) is never offered: a list holding k and −k would let a candidate pick the
+ * positive one without using a log law. `ranked` then draws the rest from both sides of the answer,
+ * because a pool that brackets k symmetrically makes "take the middle option" the whole question.
  *
  * params carry the raw numbers so verify() can redo everything with Math.log / substitution:
  *   collapse, single-log: { b, coefs: number[], args: number[] }
@@ -165,9 +169,9 @@ function slipsLand(b: number, k: number, coefs: number[], args: number[]): boole
 /**
  * Distractors for the "find the value" levels, split into the headline mistakes the question is
  * built around and the rest. Every one is the value a named mistake produces: the law slips that
- * land on a power of the base, the reversal of a difference, a term dropped or mis-signed, the
- * argument quoted instead of the logarithm, and a miscount of the powers of b (the two miscounts
- * are opposite slips, so they carry different wording rather than the same trap twice).
+ * land on a power of the base, a whole logarithm dropped or mis-signed, the argument quoted
+ * instead of the logarithm, and a miscount of the powers of b (the miscounts are different slips,
+ * so they carry different wording rather than the same trap string twice).
  */
 function collapseDistractors(b: number, k: number, coefs: number[], args: number[]): { must: Distractor[]; extra: Distractor[] } {
   const T = b ** k;
@@ -293,7 +297,7 @@ function coefCollapse(rng: RNG): Generated | null {
   } else {
     b = rng.pick(BASES);
     n = rng.pick([2, 2, 3]);
-    x = rng.int(2, 24);
+    x = rng.int(2, 30);
     if (powerExp(b, x) !== null) return null; // n log_b b^m is no question at all
   }
   const P = x ** n;
@@ -458,7 +462,9 @@ function chain(rng: RNG): Generated | null {
   ];
   const extra: Distractor[] = [
     { value: E(p ** (e - a)), trap: 'divided the numbers instead of taking logarithms' },
-    { value: E(e - a), trap: `subtracted the indices: $\\log_{${B}} ${N}$ divides them, it does not subtract them` },
+    // only when it stays positive: log_B N of two numbers bigger than 1 cannot be negative, so a
+    // negative option would be eliminated without doing the change of base
+    ...(e > a ? [{ value: E(e - a), trap: `subtracted the indices: $\\log_{${B}} ${N}$ divides them, it does not subtract them` }] : []),
     { value: E(e * a), trap: 'multiplied the indices instead of dividing them' },
     { value: frac(e + 1, a), trap: `miscounted the powers of ${p}: ${N} = ${p}^{${e}}` },
     { value: frac(e, a + 1), trap: `miscounted the powers of ${p}: ${B} = ${p}^{${a}}` },

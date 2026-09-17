@@ -8,3 +8,4 @@ scripts/tmp-review/
 scripts/_*
 scripts/.*
 .tmp-agent/
+scratchpad/

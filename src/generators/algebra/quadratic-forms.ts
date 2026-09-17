@@ -27,6 +27,34 @@ function clean(ds: Distractor[]): Distractor[] {
   return ds.filter((d) => Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
 }
 
+/**
+ * Choose the four distractors so the answer's place in the sorted option list is not a tell:
+ * one `must` trap is guaranteed, then a target rank is drawn uniformly from whatever the pool
+ * allows and the free slots are filled from below and above the answer. Without this, "find the
+ * maximum value of …" was answered by picking the largest number in 85% of level-5 questions,
+ * because every candidate in the pool undershoots when a < 0.
+ */
+function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const seen: Exact[] = [answer];
+  const keep: Distractor[] = [];
+  for (const d of [...rng.shuffle(must).map((x) => ({ ...x, must: true })), ...extra]) {
+    if (!Number.isFinite(d.value.toNumber()) || seen.some((s) => s.equals(d.value))) continue;
+    seen.push(d.value);
+    keep.push(d);
+  }
+  const forced = keep.filter((d) => d.must).slice(0, 1);
+  const rest = rng.shuffle(keep.filter((d) => !forced.includes(d)));
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  const need = count - forced.length;
+  const fBelow = forced.filter((d) => d.value.cmp(answer) < 0).length;
+  const lo = fBelow + Math.max(0, need - above.length);
+  const hi = fBelow + Math.min(need, below.length);
+  if (lo > hi) return [...forced, ...rest].slice(0, count);
+  const r = rng.int(lo, hi);
+  return [...forced, ...below.slice(0, r - fBelow), ...above.slice(0, need - (r - fBelow))];
+}
+
 /** Set distractors: every value clean and no repeated value inside one option. */
 function cleanSets<T extends { values: Exact[] }>(ds: T[]): T[] {
   return ds.filter((d) => d.values.every((v, i) => isCleanExact(v).ok && d.values.findIndex((w) => w.equals(v)) === i));
@@ -80,13 +108,17 @@ function level1(rng: RNG): Generated {
   const base = `$${expr} = ${bracketSq(p)} - ${p * p}${signed(c)} = ${completed}$`;
   if (ask === 'xmin') {
     const answer = E(-p);
-    const distractors = clean([
+    const distractors = balanced(rng, answer, clean([
       { value: E(p), trap: 'sign: (x + p)² is smallest at x = −p' },
+    ]), clean([
       { value: E(q), trap: 'gave the minimum value instead of where it occurs' },
       { value: E(-b), trap: 'used b instead of b/2' },
       { value: E(b), trap: 'used b instead of −b/2' },
       { value: E(c), trap: 'gave the constant term' },
-    ]);
+      { value: frac(-b, 4), trap: 'divided b by 4 instead of by 2' },
+      { value: E(-c - p), trap: 'subtracted b/2 from −c' },
+      { value: E(p * p), trap: 'gave (b/2)² instead of −b/2' },
+    ]));
     return {
       stem: `Find the value of $x$ for which $${expr}$ takes its minimum value.`,
       answer: { kind: 'exact', value: answer },
@@ -99,14 +131,20 @@ function level1(rng: RNG): Generated {
     };
   }
   const answer = E(q);
-  const distractors = clean([
+  // The old pool was nearly all above the answer (c, c + p², c − p), which pinned it at the
+  // second-smallest option in half the questions; c − 2p², −p² and −c − p² sit below it.
+  const distractors = balanced(rng, answer, clean([
     { value: E(c + p * p), trap: 'added (b/2)² instead of subtracting it' },
-    { value: E(c), trap: 'forgot to subtract (b/2)²' },
     { value: E(c - b * b), trap: 'used b² instead of (b/2)²' },
+  ]), clean([
+    { value: E(c), trap: 'forgot to subtract (b/2)²' },
     { value: E(-p), trap: 'gave the x-coordinate of the vertex instead' },
     { value: E(c - p), trap: 'subtracted b/2 instead of (b/2)²' },
+    { value: E(c - 2 * p * p), trap: 'used b²/2 instead of (b/2)²' },
+    { value: E(-p * p), trap: 'forgot the constant term c' },
+    { value: E(-c - p * p), trap: 'lost the sign of the constant term' },
     { value: E(-q), trap: 'sign error' },
-  ]);
+  ]));
   const stem = ask === 'q'
     ? `Given that $${expr} \\equiv (x + p)^2 + q$ for all $x$, find the value of $q$.`
     : `Find the minimum value of $${expr}$.`;
@@ -129,48 +167,73 @@ function level1(rng: RNG): Generated {
 function level2(rng: RNG): Generated | null {
   const variant = rng.weighted(['k-linear', 'k-const', 'disc'] as const, [7, 6, 7]);
   if (variant === 'k-linear') {
-    const n = rng.int(3, 9); // c = 4 (n = 2) makes half the candidates coincide
-    const c = n * n;
-    const answer = E(2 * n);
-    const distractors = clean([
-      { value: E(n), trap: 'k² = 4c solved as k = √c' },
-      { value: E(4 * n), trap: 'k = 4√c' },
-      { value: E(c), trap: 'k = c' },
-      { value: E(2 * c), trap: 'k² = 4c read as k = 2c' },
-      ...(c % 2 === 0 ? [{ value: E(c / 2), trap: 'halved c instead of doubling √c' }] : []),
-      { value: E(-2 * n), trap: 'the negative square root, which k > 0 excludes' },
-    ]);
+    // ax² + kx + au² = a(x + u)², so k = ±2au. Letting a ≠ 1 and asking for the negative root
+    // half the time takes this form from 7 possible stems to about 34.
+    const a = rng.weighted([1, 2, 3, 4], [4, 3, 2, 2]);
+    const uMax = a === 1 ? 9 : a === 2 ? 6 : a === 3 ? 4 : 3;
+    const u = rng.int(a === 1 ? 3 : 2, uMax); // u = 1, 2 make several candidates coincide
+    const c = a * u * u;
+    const positive = rng.bool(0.5);
+    const k = (positive ? 1 : -1) * 2 * a * u;
+    const answer = E(k);
+    const sgn = positive ? 1 : -1;
+    const lead = a === 1 ? '' : `${a}`;
+    // The opposite square root is excluded by the stem itself, so it is not offered: a candidate
+    // who reads "k > 0" struck it out without doing any algebra.
+    const distractors = balanced(rng, answer, clean([
+      { value: E(sgn * a * u), trap: 'k² = 4ac solved as k = √(ac)' },
+      { value: E(sgn * 4 * a * u), trap: 'k = 4√(ac)' },
+    ]), clean([
+      { value: E(sgn * c), trap: 'k = c' },
+      { value: E(sgn * 2 * c), trap: 'k² = 4ac read as k = 2c' },
+      { value: E(sgn * 4 * a * c), trap: 'gave k², not k' },
+      { value: E(sgn * a * c), trap: 'gave ac instead of 2√(ac)' },
+      { value: E(sgn * 2 * u), trap: 'forgot the a: solved k² = 4c' },
+      ...(c % 2 === 0 ? [{ value: E(sgn * c / 2), trap: 'halved c instead of doubling √(ac)' }] : []),
+      { value: E(sgn * (a + u)), trap: 'added a and u instead of doubling their product' },
+    ]));
     return {
-      stem: `Find the value of $k > 0$ for which $x^2 + kx + ${c} = 0$ has a repeated root.`,
+      stem: `Find the value of $k ${positive ? '>' : '<'} 0$ for which $${lead}x^2 + kx + ${c} = 0$ has a repeated root.`,
       answer: { kind: 'exact', value: answer },
       options: buildOptions(rng, answer, distractors),
-      solution: `Repeated root means $b^2 - 4ac = 0$: $k^2 = 4 \\times ${c} = ${4 * c}$, so $k = ${2 * n}$ (equivalently $x^2 + kx + ${c} = (x + ${n})^2$).`,
-      trap: 'k² = 4c gives k = 2√c, not √c: spot (x + √c)² needs a middle coefficient of 2√c.',
+      solution: `Repeated root means $b^2 - 4ac = 0$: $k^2 = 4 \\times ${a} \\times ${c} = ${4 * a * c}$, so $k = ${k}$ (equivalently $${lead}x^2 + kx + ${c} = ${lead}(x ${positive ? '+' : '-'} ${u})^2$).`,
+      trap: 'k² = 4ac gives k = ±2√(ac), not √(ac): a(x + u)² needs a middle coefficient of 2au.',
       tags: [...TAGS, 'discriminant', 'repeated-root'],
-      params: { kind: 'repeated-root-k', which: 'b', a: 1, c },
+      params: { kind: 'repeated-root-k', which: 'b', a, c, positive },
       typedAllowed: true,
     };
   }
   if (variant === 'k-const') {
-    const b = rng.pick([-12, -10, -8, -6, -4, 4, 6, 8, 10, 12]);
-    const k = (b * b) / 4;
+    // ax² + 2at x + at² = a(x + t)², so k = at² and b = 2at.
+    const a = rng.weighted([1, 2, 3, 4], [4, 3, 2, 2]);
+    const t = rng.int(1, a === 1 ? 6 : a === 2 ? 5 : a === 3 ? 4 : 3) * rng.sign();
+    const b = 2 * a * t;
+    const k = a * t * t;
     const answer = E(k);
-    const distractors = clean([
-      { value: E(b * b), trap: 'forgot to divide b² by 4' },
-      { value: E((b * b) / 2), trap: 'divided b² by 2 instead of 4' },
-      { value: E(-k), trap: 'sign error: 4k = b² gives k > 0' },
+    const lead = a === 1 ? '' : `${a}`;
+    const distractors = balanced(rng, answer, clean([
+      { value: E(b * b), trap: 'forgot to divide b² by 4a' },
+      { value: E((b * b) / 2), trap: 'divided b² by 2 instead of 4a' },
+    ]), clean([
+      { value: E(-k), trap: 'sign error: 4ak = b² gives k > 0' },
       { value: E(Math.abs(b) / 2), trap: 'halved b but did not square it' },
-      { value: E(2 * Math.abs(b)), trap: 'doubled b instead of squaring and quartering' },
+      { value: E(2 * Math.abs(b)), trap: 'doubled b instead of squaring and dividing by 4a' },
       { value: E(-b), trap: 'gave the value that makes the linear term vanish' },
-    ]);
+      { value: E((b * b) / (4 * a) / 2), trap: 'halved once too often' },
+      ...(a !== 1 ? [
+        { value: E((b * b) / 4), trap: 'forgot the a: used k = b²/4' },
+        { value: E((b * b) / (2 * a)), trap: 'divided by 2a instead of 4a' },
+      ] : []),
+      { value: E(t * t), trap: 'forgot to multiply (b/2a)² by a' },
+    ]));
     return {
-      stem: `Find the value of $k$ for which $${poly([1, b, 0])} + k = 0$ has equal roots.`,
+      stem: `Find the value of $k$ for which $${poly([a, b, 0])} + k = 0$ has equal roots.`,
       answer: { kind: 'exact', value: answer },
       options: buildOptions(rng, answer, distractors),
-      solution: `Equal roots means $b^2 - 4ac = 0$: $${b * b} - 4k = 0$, so $k = ${k}$ (equivalently $(x ${b < 0 ? '-' : '+'} ${Math.abs(b) / 2})^2$).`,
-      trap: 'b² = 4k, so k = b²/4 — the 4 is easily dropped.',
+      solution: `Equal roots means $b^2 - 4ac = 0$: $${b * b} - ${4 * a}k = 0$, so $k = ${k}$ (equivalently $${lead}(x ${t < 0 ? '-' : '+'} ${Math.abs(t)})^2$).`,
+      trap: 'b² = 4ak, so k = b²/(4a) — both the 4 and the a are easily dropped.',
       tags: [...TAGS, 'discriminant', 'repeated-root'],
-      params: { kind: 'repeated-root-k', which: 'c', a: 1, b },
+      params: { kind: 'repeated-root-k', which: 'c', a, b },
       typedAllowed: true,
     };
   }
@@ -180,14 +243,17 @@ function level2(rng: RNG): Generated | null {
   const D = b * b - 4 * a * c;
   if (Math.abs(D) > 100 || D === 0) return null;
   const answer = E(D);
-  const distractors = clean([
+  const distractors = balanced(rng, answer, clean([
     { value: E(b * b + 4 * a * c), trap: 'used b² + 4ac' },
     { value: E(b * b - a * c), trap: 'forgot the factor 4' },
+  ]), clean([
     { value: E(4 * a * c - b * b), trap: 'subtracted the wrong way round' },
     { value: E(b * b - 2 * a * c), trap: 'used 2ac instead of 4ac' },
     { value: E(b - 4 * a * c), trap: 'forgot to square b' },
     { value: E(-b * b - 4 * a * c), trap: '(−b)² treated as −b²' },
-  ]);
+    { value: E(b * b - 4 * c), trap: 'left the a out of 4ac' },
+    { value: E(b * b - 8 * a * c), trap: 'used 8ac instead of 4ac' },
+  ]));
   return {
     stem: `Find the discriminant of $${poly([a, b, c])}$.`,
     answer: { kind: 'exact', value: answer },
@@ -214,22 +280,28 @@ function level3(rng: RNG): Generated | null {
   const ask = rng.bool() ? 'sum' : 'product';
   const answer = ask === 'sum' ? S : P;
   const distractors = ask === 'sum'
-    ? clean([
+    ? balanced(rng, answer, clean([
       { value: frac(b, a), trap: 'sign: α + β = −b/a, not +b/a' },
-      { value: E(-b), trap: 'forgot to divide by a' },
       { value: P, trap: 'gave αβ instead of α + β' },
+    ]), clean([
+      { value: E(-b), trap: 'forgot to divide by a' },
       { value: frac(-a, b), trap: 'inverted the fraction' },
       { value: E(b), trap: 'sign error and forgot to divide by a' },
       { value: P.neg(), trap: 'gave −c/a' },
-    ])
-    : clean([
+      { value: frac(-b, a * a), trap: 'divided by a²' },
+      { value: frac(-b - c, a), trap: 'added the constant term to −b before dividing' },
+    ]))
+    : balanced(rng, answer, clean([
       { value: P.neg(), trap: 'sign: αβ = +c/a' },
-      { value: E(c), trap: 'forgot to divide by a' },
       { value: S, trap: 'gave α + β instead of αβ' },
+    ]), clean([
+      { value: E(c), trap: 'forgot to divide by a' },
       { value: frac(a, c), trap: 'inverted the fraction' },
       { value: frac(b, a), trap: 'used b/a' },
       { value: E(-c), trap: 'sign error and forgot to divide by a' },
-    ]);
+      { value: frac(c, a * a), trap: 'divided by a²' },
+      { value: frac(c * a, 1), trap: 'multiplied by a instead of dividing' },
+    ]));
   return {
     stem: `${ROOTS_INTRO(a, b, c)} Find the value of $${ask === 'sum' ? '\\alpha + \\beta' : '\\alpha\\beta'}$.`,
     answer: { kind: 'exact', value: answer },
@@ -264,26 +336,33 @@ function symmetric(rng: RNG, ask: 'sumsq' | 'recip'): Generated | null {
     if (r.d > 4n || Math.abs(Number(r.n)) > 60) return null;
   }
   const distractors = ask === 'sumsq'
-    ? clean([
+    ? balanced(rng, answer, clean([
       { value: S2.add(P.mulRat(2)), trap: 'used (α + β)² + 2αβ' },
       { value: S2, trap: 'forgot the −2αβ' },
+    ]), clean([
       { value: S2.sub(P), trap: 'subtracted αβ, not 2αβ' },
       ...(a !== 1 ? [{ value: E(b * b - 2 * c), trap: 'ignored a when forming α + β and αβ' }] : []),
       { value: S.sub(P.mulRat(2)), trap: 'forgot to square α + β' },
       { value: P.mulRat(2).sub(S2), trap: 'sign reversed' },
-    ])
-    : clean([
+      { value: S2.sub(P.mulRat(4)), trap: 'used (α + β)² − 4αβ, which is (α − β)²' },
+      { value: S2.mulRat(2).sub(P.mulRat(2)), trap: 'doubled (α + β)² instead of αβ' },
+      { value: S2.sub(P.mulRat(2)).neg(), trap: 'sign of the whole expression lost' },
+    ]))
+    : balanced(rng, answer, clean([
       { value: P.div(S), trap: 'inverted: gave αβ/(α + β)' },
       { value: S.div(P).neg(), trap: 'sign error in α + β' },
+    ]), clean([
       { value: S, trap: 'gave α + β' },
       { value: P, trap: 'gave αβ' },
       { value: E(1).div(S), trap: 'took 1/(α + β)' },
+      { value: E(1).div(P), trap: 'took 1/(αβ)' },
       { value: frac(-c, b), trap: 'used c/b instead of −b/c' },
+      { value: frac(b, c), trap: 'sign: 1/α + 1/β = −b/c' },
       ...(a !== 1 ? [
         { value: frac(-b, a * c), trap: 'forgot the a in αβ = c/a' },
         { value: frac(-b * a, c), trap: 'forgot the a in α + β = −b/a' },
       ] : []),
-    ]);
+    ]));
   const solution = ask === 'sumsq'
     ? `$\\alpha + \\beta = ${S.toLatex()}$, $\\alpha\\beta = ${P.toLatex()}$, so $\\alpha^2 + \\beta^2 = (\\alpha + \\beta)^2 - 2\\alpha\\beta = ${S2.toLatex()} - 2\\left(${P.toLatex()}\\right) = ${answer.toLatex()}$.`
     : `$\\frac{1}{\\alpha} + \\frac{1}{\\beta} = \\frac{\\alpha + \\beta}{\\alpha\\beta} = \\frac{-b/a}{c/a} = -\\frac{b}{c} = ${answer.toLatex()}$.`;
@@ -317,16 +396,29 @@ function extremum(rng: RNG): Generated | null {
   if (!isCleanExact(value).ok) return null;
   const isMin = a > 0;
   const word = isMin ? 'minimum' : 'maximum';
-  const distractors = clean([
-    { value: E(h), trap: `gave the x-coordinate of the vertex instead of the ${word} value` },
+  /**
+   * Every mistake in the original pool subtracted something, so for a < 0 the correct answer
+   * c + |a|h² was the largest option in 85% of "find the maximum value" questions — answerable
+   * from the word "maximum" alone. The pool now carries overshoots as well (c + (b/2)²,
+   * c − 2ah², |c| − ah²) and `balanced` draws the answer's rank.
+   */
+  const must = clean([
     { value: E(c).add(ah2), trap: 'sign of the completed-square constant' },
     { value: E(c - (b * b) / 4), trap: 'left out the factor a: used c − (b/2)²' },
+    { value: E(c).add(E((b * b) / 4)), trap: 'added (b/2)² instead of subtracting b²/(4a)' },
+  ]);
+  const extra = clean([
+    { value: E(h), trap: `gave the x-coordinate of the vertex instead of the ${word} value` },
     { value: E(c).sub(E(h).mul(E(h))), trap: 'forgot to multiply (b/2a)² by a' },
     { value: E(c).add(ah2.mulRat(3)), trap: 'substituted x = +b/2a instead of −b/2a' },
+    { value: E(c).sub(ah2.mulRat(2)), trap: 'substituted into bx + c and dropped the ax² term' },
+    { value: ah2.neg(), trap: 'forgot to add the constant term c' },
+    { value: E(Math.abs(c)).sub(ah2), trap: 'lost the sign of the constant term' },
     { value: value.neg(), trap: 'sign error' },
     { value: E(c), trap: `read the constant term as the ${word} value` },
     { value: E(-h), trap: 'gave the vertex x-coordinate with the wrong sign' },
   ]);
+  const distractors = balanced(rng, value, must, extra);
   const inner = `(x ${h < 0 ? '+' : '-'} ${E(Math.abs(h)).toLatex()})^2`;
   return {
     stem: `Find the ${word} value of $${poly([a, b, c])}$.`,
@@ -367,11 +459,17 @@ function scaledSet(rng: RNG): SetSpec | null {
   const outer = n === 1 ? 'k' : `${n}k`;
   const quad = mirror ? `${outer}x^2${signed(b, 'x')} + k` : `kx^2${signed(b, 'x')} + ${outer}`;
   const values = [E(k0), E(-k0)];
-  const distractors = cleanSets([
-    { values: [E(k0)], trap: 'only the positive square root' },
-    { values: [E(-k0)], trap: 'only the negative square root' },
-    { values: [E(2 * k0), E(-2 * k0)], trap: `forgot the factor 4: solved b² − ${n === 1 ? '' : n}k² = 0` },
+  // At most one single-value option: two of them let a candidate who only knows "k² = … has two
+  // roots" discard both without touching the discriminant.
+  const single = rng.weighted([
+    { values: [E(k0)], trap: 'took only the positive square root' },
+    { values: [E(-k0)], trap: 'took only the negative square root' },
     { values: [E(k0 * k0)], trap: `treated the product of the outer coefficients as k: solved ${b * b} − ${4 * n}k = 0` },
+  ], [3, 3, 2]);
+  const distractors = cleanSets([
+    single,
+    { values: [E(2 * k0), E(-2 * k0)], trap: `forgot the factor 4: solved b² − ${n === 1 ? '' : n}k² = 0` },
+    { values: [E(k0 * k0), E(-k0 * k0)], trap: `squared instead of square-rooting: solved k² = ${k0 ** 4}` },
     ...(n !== 1 ? [{ values: [E(root * k0), E(-root * k0)], trap: `ignored the ${n} in the constant term` }] : []),
     { values: [frac(b, 4), frac(-b, 4)], trap: 'divided by 4 instead of taking the square root' },
   ]);
@@ -404,17 +502,24 @@ function shiftedSet(rng: RNG): SetSpec | null {
   const quad = mirror ? `kx^2${signed(b, 'x')} + ${kShift(c)}` : `${kShift(c)}x^2${signed(b, 'x')} + k`;
   const values = [E(k1), E(k2)];
   const q = (b * b) / 4;
+  // One single-value option only, named for the sign of the quadratic formula it came from; the
+  // freed slot goes to a second two-value mistake.
+  const only = rng.bool() ? k1 : k2;
   const distractors: { values: Exact[]; trap: string }[] = [
     { values: [E(-k1), E(-k2)], trap: 'sign error when factorising the discriminant' },
-    { values: [E(k1)], trap: 'only one of the two solutions' },
-    { values: [E(k2)], trap: 'only one of the two solutions' },
-    { values: [E(k1), E(-k2)], trap: 'one sign wrong' },
+    { values: [E(only)], trap: `took only the root from the ${only > (k1 + k2) / 2 ? '+' : '−'} sign of the quadratic formula` },
+    { values: [E(k1), E(-k2)], trap: `sign slip: factorised as $${kFactors(k1, -k2)}$` },
+    { values: [E(-k1), E(k2)], trap: `sign slip: factorised as $${kFactors(-k1, k2)}$` },
     { values: [E(bAbs / 2), E(-bAbs / 2)], trap: `ignored the shift: solved b² − 4k² = 0 as if the bracket were just k` },
   ];
   // "forgot the 4": k² + ck − b² = 0
   const dd = c * c + 4 * b * b;
   const r = Math.sqrt(dd);
   if (Number.isInteger(r)) distractors.push({ values: [frac(-c + r, 2), frac(-c - r, 2)], trap: 'forgot the factor 4 in b² − 4ac' });
+  // "used b² + 4ac = 0": k² + ck + b²/4 = 0
+  const dp = c * c - b * b;
+  const rp = Math.sqrt(dp);
+  if (dp > 0 && Number.isInteger(rp)) distractors.push({ values: [frac(-c + rp, 2), frac(-c - rp, 2)], trap: 'used b² + 4ac = 0 instead of b² − 4ac = 0' });
   return {
     form: 'shifted',
     quad,
@@ -437,11 +542,12 @@ function linearSet(rng: RNG): SetSpec | null {
   const q = -(k1 * k2) / 4;
   if (q === 0 || Math.abs(q) > 30) return null;
   const values = [E(k1), E(k2)];
+  const only = rng.bool() ? k1 : k2;
   const distractors: { values: Exact[]; trap: string }[] = [
     { values: [E(-k1), E(-k2)], trap: 'sign error when factorising the discriminant' },
-    { values: [E(k1)], trap: 'only one of the two solutions' },
-    { values: [E(k2)], trap: 'only one of the two solutions' },
-    { values: [E(k1), E(-k2)], trap: 'one sign wrong' },
+    { values: [E(only)], trap: `took only the root from the ${only > (k1 + k2) / 2 ? '+' : '−'} sign of the quadratic formula` },
+    { values: [E(k1), E(-k2)], trap: `sign slip: factorised as $${kFactors(k1, -k2)}$` },
+    { values: [E(-k1), E(k2)], trap: `sign slip: factorised as $${kFactors(-k1, k2)}$` },
   ];
   // "forgot the 4": k² − pk − q = 0
   const dd = p * p + 4 * q;
@@ -449,6 +555,14 @@ function linearSet(rng: RNG): SetSpec | null {
     const r = Math.sqrt(dd);
     if (Number.isInteger(r)) distractors.push({ values: [frac(p + r, 2), frac(p - r, 2)], trap: 'forgot the factor 4 in b² − 4ac' });
   }
+  // "used b² + 4ac = 0": k² + 4pk + 4q = 0
+  const dp = 4 * p * p - 4 * q;
+  const rp = Math.sqrt(dp);
+  if (dp > 0 && Number.isInteger(rp)) distractors.push({ values: [E(-2 * p + rp), E(-2 * p - rp)], trap: 'used b² + 4ac = 0 instead of b² − 4ac = 0' });
+  // sign slip on the constant: k² − 4pk + 4q = 0
+  const ds = 4 * p * p - 4 * q;
+  const rs = Math.sqrt(ds);
+  if (ds > 0 && Number.isInteger(rs)) distractors.push({ values: [E(2 * p + rs), E(2 * p - rs)], trap: 'sign slip on the constant: solved k² − 4pk + 4q = 0' });
   const constTerm = `${signed(p, 'k')}${signed(q)}`;
   return {
     form: 'linear',
@@ -537,7 +651,8 @@ export default defineTemplate({
       const a = p.a as number;
       const b = which === 'b' ? ans : (p.b as number);
       const c = which === 'c' ? ans : (p.c as number);
-      if (which === 'b' && ans <= 0) return false;
+      // the stem pins the sign of k, so the sign is part of what verify() checks
+      if (which === 'b' && (p.positive ? ans <= 0 : ans >= 0)) return false;
       const xv = -b / (2 * a);
       return near(a * xv * xv + b * xv + c, 0);
     }

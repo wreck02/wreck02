@@ -34,20 +34,33 @@ function cleanOnly(ds: { value: Exact | null; trap: string }[], maxAbs = 1e6): D
 }
 
 /**
- * Choose the distractors that go to buildOptions: every distinct `must` candidate (the spec-named traps)
- * is used before any `extra` one, so the headline mistakes are never shuffled out by weaker ones.
+ * Choose the distractors that go to buildOptions.
+ *
+ * Exactly ONE `must` candidate is guaranteed a place (drawn at random from the spec-named traps),
+ * because forcing both halves of an off-by-one pair — u₁ + nd and u₁ + (n−2)d, iterate(n) and
+ * iterate(n−2) — put the answer between them every time and made "pick the middle number" worth
+ * 70–80%. The remaining slots are filled towards a target rank drawn uniformly from whatever the
+ * pool allows, so the answer lands at every position in the sorted option list.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
   const seen: Exact[] = [answer];
-  const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || !Number.isFinite(d.value.toNumber()) || seen.some((s) => s.equals(d.value))) return;
+  const keep: Distractor[] = [];
+  for (const d of [...rng.shuffle(must).map((x) => ({ ...x, must: true })), ...extra]) {
+    if (!Number.isFinite(d.value.toNumber()) || seen.some((s) => s.equals(d.value))) continue;
     seen.push(d.value);
-    out.push(d);
-  };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
-  return out;
+    keep.push(d);
+  }
+  const forced = keep.filter((d) => d.must).slice(0, 1);
+  const rest = rng.shuffle(keep.filter((d) => !forced.includes(d)));
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  const need = count - forced.length;
+  const fBelow = forced.filter((d) => d.value.cmp(answer) < 0).length;
+  const lo = fBelow + Math.max(0, need - above.length);
+  const hi = fBelow + Math.min(need, below.length);
+  if (lo > hi) return [...forced, ...rest].slice(0, count);
+  const r = rng.int(lo, hi);
+  return [...forced, ...below.slice(0, r - fBelow), ...above.slice(0, need - (r - fBelow))];
 }
 
 /** Pick a sub-variant first, then retry its parameters, so rejection rates do not skew the mix of variants. */
@@ -70,15 +83,23 @@ function arithmeticQ(rng: RNG): Generated | null {
   const n = rng.int(5, 7);
   const answer = E(u1 + (n - 1) * d);
   if (!isCleanExact(answer).ok) return null;
-  const distractors = ranked(rng, answer, cleanOnly([
-    { value: E(u1 + n * d), trap: 'off by one: added d one time too many' },
-    { value: E(u1 + (n - 2) * d), trap: 'off by one: added d one time too few' },
+  // Only one half of the off-by-one bracket is a headline trap; the rest of the pool carries
+  // mistakes that land above and below the answer, so it is not the middle option every time.
+  const late = rng.bool(0.5);
+  const tooMany = { value: E(u1 + n * d), trap: 'off by one: added d one time too many' };
+  const tooFew = { value: E(u1 + (n - 2) * d), trap: 'off by one: added d one time too few' };
+  const sum = (n * (2 * u1 + (n - 1) * d)) / 2;
+  const distractors = balanced(rng, answer, cleanOnly([late ? tooMany : tooFew]), cleanOnly([
+    late ? tooFew : tooMany,
     { value: E(u1 - (n - 1) * d), trap: 'subtracted d instead of adding it' },
-    { value: E(n * d), trap: 'forgot the first term' },
-  ]), cleanOnly([
+    { value: E(n * d), trap: 'forgot the first term and counted n steps' },
+    { value: E((n - 1) * d), trap: 'forgot to add the first term' },
+    { value: E(2 * u1 + (n - 1) * d), trap: 'counted the first term twice' },
     { value: E(u1 * d), trap: 'multiplied the first term by d' },
     { value: E(u1 + d), trap: 'took only one step' },
     { value: E(u1 + (n + 1) * d), trap: 'counted the terms from zero' },
+    { value: E(d + (n - 1) * u1), trap: 'swapped $u_1$ and $d$ in $u_1 + (n-1)d$' },
+    { value: E(sum), trap: 'summed the first n terms instead of giving the nth' },
   ]));
   return {
     stem: `A sequence is defined by $u_{n+1} = u_n ${plus(d)}$, with $u_1 = ${u1}$. Find $u_{${n}}$.`,
@@ -107,12 +128,18 @@ function affineQ(rng: RNG): Generated | null {
   const value = iterate(n - 1, u1, 'normal');
   if (Math.abs(value) > 400 || value === u1) return null;
   const answer = E(value);
-  const distractors = ranked(rng, answer, cleanOnly([
-    { value: E(iterate(n, u1, 'normal')), trap: 'went one step too far (found $u_{n+1}$)' },
-    { value: E(iterate(n - 2, u1, 'normal')), trap: 'stopped one step early' },
+  // As at level 1: only one of iterate(n) / iterate(n−2) is guaranteed, so the answer is not
+  // bracketed by the off-by-one pair in every question.
+  const far = rng.bool(0.5);
+  const tooFar = { value: E(iterate(n, u1, 'normal')), trap: 'went one step too far (found $u_{n+1}$)' };
+  const tooShort = { value: E(iterate(n - 2, u1, 'normal')), trap: 'stopped one step early' };
+  const distractors = balanced(rng, answer, cleanOnly([far ? tooFar : tooShort]), cleanOnly([
+    far ? tooShort : tooFar,
     { value: E(iterate(n - 1, u1, 'swapped')), trap: 'used $k(u_n + c)$ instead of $ku_n + c$' },
     { value: E(u1 * k ** (n - 1)), trap: 'ignored the constant c' },
-  ]), cleanOnly([
+    { value: E(u1 * k ** (n - 1) + c), trap: 'added the constant only once, at the end' },
+    { value: E(k * u1 + (n - 1) * c), trap: 'multiplied only once and then added c at every step' },
+    { value: E(k * value), trap: 'took one more step but dropped the constant on it' },
     { value: E(u1 + (n - 1) * c), trap: 'treated the sequence as arithmetic' },
     { value: E(value + c), trap: 'added c once more at the end' },
     { value: E(value - c), trap: 'left off the last constant' },
@@ -155,7 +182,7 @@ function period3Q(rng: RNG): Generated | null {
   const N = rng.pick([20, 30, 50, 61, 75, 99, 100]);
   const idx = (N - 1) % 3;
   const answer = cycle[idx];
-  const distractors = ranked(rng, answer, cleanOnly([
+  const distractors = balanced(rng, answer, cleanOnly([
     { value: cycle[(idx + 1) % 3], trap: 'off by one in the cycle position' },
     { value: cycle[(idx + 2) % 3], trap: 'off by one in the cycle position the other way' },
     { value: answer.neg(), trap: 'sign slip in $1 - u_n$' },
@@ -164,7 +191,9 @@ function period3Q(rng: RNG): Generated | null {
     { value: attempt(() => E(1).sub(answer)), trap: 'gave $1 - u_n$ instead of its reciprocal' },
     { value: E(N), trap: 'answered with the index' },
     { value: answer.add(E(1)), trap: 'slip of one' },
-  ]));
+    { value: answer.sub(E(1)), trap: 'slip of one the other way' },
+    // the index-sized candidates are capped: an option a hundred times the answer is not a mistake
+  ], Math.max(6, 8 * Math.abs(answer.toNumber()))));
   return {
     stem: `A sequence is defined by $u_{n+1} = \\frac{1}{1 - u_n}$, with $u_1 = ${tx(u1)}$. Find $u_{${N}}$.`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
@@ -184,7 +213,7 @@ function period2Q(rng: RNG): Generated | null {
   const N = rng.pick([20, 41, 50, 75, 100, 101]);
   const answer = N % 2 === 1 ? E(u1) : E(c - u1);
   if (!isCleanExact(answer).ok || answer.isZero()) return null;
-  const distractors = ranked(rng, answer, cleanOnly([
+  const distractors = balanced(rng, answer, cleanOnly([
     { value: N % 2 === 1 ? E(c - u1) : E(u1), trap: 'off by one: took the wrong term of the two-term cycle' },
     { value: E(c + u1), trap: 'used $c + u_n$ instead of $c - u_n$' },
     { value: E(u1 - c), trap: 'sign slip: computed $u_n - c$' },
@@ -192,8 +221,10 @@ function period2Q(rng: RNG): Generated | null {
   ]), cleanOnly([
     { value: E(u1 + (N - 1) * c), trap: 'treated the sequence as arithmetic' },
     { value: E(N - u1), trap: 'used the index instead of the constant' },
+    { value: E(2 * c - u1), trap: 'applied $c - u_n$ twice and kept the second value' },
     { value: answer.add(E(1)), trap: 'slip of one' },
-  ]));
+    { value: answer.sub(E(1)), trap: 'slip of one the other way' },
+  ], Math.max(20, 8 * Math.abs(answer.toNumber()))));
   return {
     stem: `A sequence is defined by $u_{n+1} = ${c} - u_n$, with $u_1 = ${u1}$. Find $u_{${N}}$.`,
     answer: { kind: 'exact', value: answer },
@@ -217,16 +248,20 @@ function findKQ(rng: RNG): Generated | null {
   const answer = k;
   if (!isCleanExact(answer).ok || answer.equals(E(1))) return null;
   const q = u2.toNumber();
-  const distractors = ranked(rng, answer, cleanOnly([
+  const distractors = balanced(rng, answer, cleanOnly([
     { value: attempt(() => frac(q + c, u1)), trap: 'added c instead of subtracting it' },
     { value: attempt(() => frac(q, u1)), trap: 'ignored the constant c' },
     { value: attempt(() => frac(u1, q - c)), trap: 'divided the wrong way round' },
-    { value: E((q - c) * u1), trap: 'multiplied by $u_1$ instead of dividing' },
+    // (q − c)·u₁ used to sit here: two orders of magnitude from every other option, so it was
+    // struck out without any algebra. Wrong rearrangements of the same size replace it.
+    { value: attempt(() => frac(q - c, q)), trap: 'divided by $u_2$ instead of $u_1$' },
   ]), cleanOnly([
+    { value: attempt(() => frac(u1 - c, u1)), trap: 'subtracted the constant from $u_1$ instead of from $u_2$' },
+    { value: attempt(() => frac(q + c, q)), trap: 'added c and divided by $u_2$' },
     { value: E(q - c), trap: 'forgot to divide by $u_1$' },
     { value: answer.neg(), trap: 'sign error' },
     { value: attempt(() => frac(q - c, u1 + c)), trap: 'divided by $u_1 + c$' },
-  ]));
+  ], 60));
   return {
     stem: `A sequence satisfies $u_{n+1} = k u_n ${plus(c)}$. Given that $u_1 = ${u1}$ and $u_2 = ${q}$, find the value of $k$.`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
@@ -246,7 +281,7 @@ function limitQ(rng: RNG): Generated | null {
   const answer = attempt(() => E(c).div(E(1).sub(a)));
   if (!answer || !isCleanExact(answer).ok) return null;
   if (Number(answer.toRat().d) > 5 || Math.abs(answer.toNumber()) > 60) return null;
-  const distractors = ranked(rng, answer, cleanOnly([
+  const distractors = balanced(rng, answer, cleanOnly([
     { value: attempt(() => E(c).div(E(1).add(a))), trap: 'solved $L = c - aL$ (sign error on the $aL$ term)' },
     { value: E(c), trap: 'took the limit to be the constant' },
     { value: attempt(() => E(c).mul(E(1).sub(a))), trap: 'multiplied by $1 - a$ instead of dividing' },
@@ -281,14 +316,18 @@ function secondOrderQ(rng: RNG): Generated | null {
   const near = Math.max(60, 3 * Math.abs(answer.toNumber()));
   const ratio = u1 !== 0 && u2 % u1 === 0 ? u2 / u1 : null;
   const geometric = ratio !== null && Math.abs(ratio) > 1 ? u1 * ratio ** (N - 1) : null;
-  const distractors = ranked(rng, answer, cleanOnly([
-    { value: E(u1 + N * d), trap: 'off by one: used $u_1 + nd$' },
+  const late = rng.bool(0.5);
+  const tooMany = { value: E(u1 + N * d), trap: 'off by one: used $u_1 + nd$' };
+  const tooFew = { value: E(u1 + (N - 2) * d), trap: 'one step too few' };
+  const distractors = balanced(rng, answer, cleanOnly([late ? tooMany : tooFew], near), cleanOnly([
+    late ? tooFew : tooMany,
     { value: E(u2 + (N - 1) * d), trap: 'counted the steps from $u_2$' },
-    { value: E(u1 + (N - 2) * d), trap: 'one step too few' },
     { value: E(u1 - (N - 1) * d), trap: 'used $u_{n-1} - u_n$ for the common difference' },
-  ], near), cleanOnly([
     { value: E(u1 + 2 * (N - 2) * d), trap: 'applied the rule as $2u_{n-1} - u_1$, reusing the first term' },
-    { value: E(N * d), trap: 'forgot the first term' },
+    { value: E(N * d), trap: 'forgot the first term and counted n steps' },
+    { value: E((N - 1) * d), trap: 'forgot to add the first term' },
+    { value: E(2 * u1 + (N - 1) * d), trap: 'counted the first term twice' },
+    { value: E(u1 + (N + 1) * d), trap: 'counted the terms from zero' },
     { value: E(u1 + (N - 1) * u2), trap: 'used $u_2$ as the common difference' },
     { value: geometric === null ? null : E(geometric), trap: 'read $2u_n$ as a common ratio and doubled each time' },
   ], near));
@@ -325,7 +364,7 @@ function periodicSumQ(rng: RNG): Generated | null {
     // significant figures over a denominator of 6 or less (15, 30, 99/2, −5/3, −11/2).
     const ans = answer.toRat();
     if (ans.d > 6n || String(ans.n < 0n ? -ans.n : ans.n).replace(/0+$/, '').length > 2) return null;
-    const distractors = ranked(rng, answer, cleanOnly([
+    const distractors = balanced(rng, answer, cleanOnly([
       { value: cycleSum, trap: 'gave the sum of one cycle only' },
       { value: cycleSum.mul(E(N)), trap: 'multiplied by n instead of n/3' },
       { value: u1.mul(E(N)), trap: 'assumed every term equals $u_1$' },
@@ -352,7 +391,7 @@ function periodicSumQ(rng: RNG): Generated | null {
   const N = rng.pick([20, 50, 100]);
   const answer = E((N / 2) * c);
   if (!isCleanExact(answer).ok || answer.isZero()) return null;
-  const distractors = ranked(rng, answer, cleanOnly([
+  const distractors = balanced(rng, answer, cleanOnly([
     { value: E(N * c), trap: 'used every term as a pair' },
     { value: E(N * u1), trap: 'assumed every term equals $u_1$' },
     { value: E((N / 2) * c + u1), trap: 'added an extra first term' },

@@ -33,15 +33,21 @@ const q = (x: number, unit: string): string => `$${num(x)}\\ ${unit}$`;
 
 type Cand = { value: number | Exact | null; trap: string };
 
-/** Finite, positive, clean, and within a sane factor of the answer (numbers become short decimals; Exacts pass through). */
-function cleanOnly(ds: Cand[], answer: number): Distractor[] {
+/**
+ * Finite, positive, clean, and within a sane factor of the answer (numbers become short decimals;
+ * Exacts pass through). `accept` adds the physics a candidate can check without doing the question:
+ * a coefficient of friction is below 1, and a system released from rest cannot accelerate faster
+ * than g — options that break those are eliminated on sight and waste a slot.
+ */
+function cleanOnly(ds: Cand[], answer: number, accept: (v: number) => boolean = () => true, window = 40): Distractor[] {
   const out: Distractor[] = [];
   for (const d of ds) {
     if (d.value === null) continue;
     const v = typeof d.value === 'number' ? (Number.isFinite(d.value) ? X(d.value) : null) : d.value;
     if (!v) continue;
     const f = v.toNumber();
-    if (!Number.isFinite(f) || f <= 0 || f > 100 * answer || f < answer / 100) continue;
+    if (!Number.isFinite(f) || f <= 0 || f > window * answer || f < answer / window) continue;
+    if (!accept(f)) continue;
     if (!isCleanExact(v).ok) continue;
     out.push({ value: v, trap: d.trap });
   }
@@ -49,50 +55,57 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
 }
 
 /**
- * One headline trap first, then the rest chosen towards a randomly drawn number of options *below*
- * the answer. Without that, a variant whose named mistakes all overshoot (ma vs F, mg vs ma, …) puts
- * the correct option at the same rank in every instance and "pick the smallest" answers it with no
- * arithmetic. A candidate that would stretch the option list beyond `maxSpread` is skipped: 3.125 N
- * next to 2000 N is implausible on sight.
+ * Fill the four slots from both sides of the answer: a target number of options below it is drawn
+ * first and each slot then comes from whichever side is still short, with the headline (`must`)
+ * mistakes preferred *within the side that is needed*. Without that, a variant whose named mistakes
+ * all overshoot (ma vs F, mg vs ma, …) puts the correct option at the same rank in every instance
+ * and "pick the smallest" answers it with no arithmetic; taking a `must` first, as this used to,
+ * left the same hole one slot smaller. A candidate that would stretch the option list beyond
+ * `maxSpread` is skipped: 3.125 N next to 2000 N is implausible on sight.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 50): Distractor[] {
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 40): Distractor[] {
   const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const mags: number[] = Math.abs(a) > 0 ? [Math.abs(a)] : [];
   const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const fits = (d: Distractor) => {
     const x = Math.abs(d.value.toNumber());
-    if (x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread) return;
+    return !(x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread);
+  };
+  const isBelow = (d: Distractor) => d.value.toNumber() < a;
+  const pools = [rng.shuffle(must), rng.shuffle(extra)];
+  const wantBelow = rng.int(0, count);
+  const pull = (below: boolean): Distractor | null => {
+    for (const pool of pools) {
+      const i = pool.findIndex((d) => isBelow(d) === below && fits(d) && !seen.some((s) => s.equals(d.value)));
+      if (i >= 0) return pool.splice(i, 1)[0];
+    }
+    return null;
+  };
+  while (out.length < count) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    const d = pull(needBelow) ?? pull(!needBelow);
+    if (!d) break;
     seen.push(d.value);
+    const x = Math.abs(d.value.toNumber());
     if (x > 0) mags.push(x);
     out.push(d);
-  };
-  const heads = rng.shuffle(must);
-  if (heads.length > 0) take(heads[0]);
-  const rest = heads.slice(1);
-  const side = (lo: boolean) => [...rest, ...rng.shuffle(extra)].filter((d) => (lo ? d.value.toNumber() < a : d.value.toNumber() > a));
-  const below = side(true);
-  const above = side(false);
-  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
-  while (out.length < count && (below.length > 0 || above.length > 0)) {
-    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
-    take((useBelow ? below : above).shift()!);
-    if (useBelow) wantBelow--;
   }
   return out;
 }
 
-const fallback = (answer: Exact): Exact[] =>
-  [2, 0.5, 3, 4, 1.5, 0.25, 10, 0.1].map((k) => answer.mulRat(X(k).toRat())).filter((v) => isCleanExact(v).ok);
-
-function physOptions(rng: RNG, answer: Exact, unit: string | undefined, must: Cand[], extra: Cand[]) {
+/**
+ * Four named distractors or nothing: a draw that cannot offer them is redrawn rather than padded
+ * with unlabelled multiples of the answer.
+ */
+function physOptions(rng: RNG, answer: Exact, unit: string | undefined, must: Cand[], extra: Cand[], accept?: (v: number) => boolean, spread = 40) {
   const a = answer.toNumber();
-  return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must, a), cleanOnly(extra, a)), { ...DEC, unit, fallback: fallback(answer) });
+  const ds = ranked(rng, answer, cleanOnly(must, a, accept, spread), cleanOnly(extra, a, accept, spread), 4, spread);
+  return ds.length < 4 ? null : buildOptions(rng, answer, ds, { ...DEC, unit });
 }
 
-function finish(stem: string, answer: Exact, unit: string | undefined, options: ReturnType<typeof buildOptions>, solution: string, trap: string, tags: string[], params: Record<string, unknown>): Generated {
-  return { stem, answer: { kind: 'exact', value: answer, ...DEC, unit }, options, solution, trap, tags, params, typedAllowed: true };
+function finish(stem: string, answer: Exact, unit: string | undefined, options: ReturnType<typeof buildOptions> | null, solution: string, trap: string, tags: string[], params: Record<string, unknown>): Generated | null {
+  return options && { stem, answer: { kind: 'exact', value: answer, ...DEC, unit }, options, solution, trap, tags, params, typedAllowed: true };
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -123,6 +136,7 @@ function fma(rng: RNG): Generated | null {
       { value: (F * G) / m, trap: 'multiplied by g as well: a = F/m needs no g' },
       { value: F / (m * m), trap: 'divided by the mass twice' },
       { value: F, trap: 'quoted the force: the question asks for the acceleration' },
+      { value: (F / m) * 2, trap: 'doubled the acceleration' },
       { value: (F / m) / 2, trap: 'halved: a = F/m, with no ½ (that belongs to ½at²)' },
     ]),
     `$F = ma$, so $a = \\frac{F}{m} = \\frac{${F}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
@@ -138,6 +152,7 @@ function fma(rng: RNG): Generated | null {
       { value: a / m, trap: 'divided the wrong way round' },
       { value: m * a * a, trap: 'squared the acceleration' },
       { value: (m * a) / G, trap: 'divided by g as well: F = ma needs no g' },
+      { value: m * G, trap: 'gave the weight mg instead of the resultant force ma' },
       { value: m, trap: 'quoted the mass: the question asks for the force' },
       { value: m * a * 0.5, trap: 'halved: F = ma, with no ½ (that belongs to ½at²)' },
     ]),
@@ -178,7 +193,9 @@ function weight(rng: RNG): Generated | null {
       { value: W - G, trap: 'subtracted g instead of dividing by it' },
       { value: (W - G) / G, trap: 'subtracted g as well as dividing by it' },
       { value: (W + G) / G, trap: 'added g before dividing by it' },
-    ]),
+      { value: W / (2 * G), trap: 'halved as well as dividing by g' },
+      // the whole question is a factor of g, so this option list may span two powers of ten
+    ], undefined, 120),
     `$W = mg$, so $m = \\frac{W}{g} = \\frac{${W}}{10} = ${num(m)}$ kg.`,
     'Weight is a force (N) and mass is in kg: m = W/g, not W itself.',
     ['newton', 'weight'], { ask: 'mass-from-weight', W });
@@ -193,7 +210,8 @@ function weight(rng: RNG): Generated | null {
     { value: m + G, trap: 'added g instead of multiplying' },
     { value: (m + G) * G, trap: 'added g to the mass before multiplying by g' },
     { value: m * (G + 1), trap: 'added the mass to the weight' },
-  ]),
+    { value: (m * G) / 2, trap: 'halved: $W = mg$ has no ½' },
+  ], undefined, 120),
   `$W = mg = ${num(m)} \\times 10 = ${num(W)}$ N.`,
   'Weight = mg (newtons); the mass in kg is not the weight.',
   ['newton', 'weight'], { ask: 'weight', m });
@@ -219,6 +237,8 @@ function twoForces(rng: RNG): Generated | null {
     { value: (F1 - F2) / (m * G), trap: 'divided by the weight mg instead of the mass' },
     { value: F2 / m, trap: 'used the resistive force instead of the resultant' },
     { value: (F1 - F2) / (F1 + F2), trap: 'divided by the total force instead of by the mass' },
+    { value: (F1 - F2) / (2 * m), trap: 'halved: the whole resultant accelerates the whole mass' },
+    { value: (F1 + F2) / (2 * m), trap: 'used the average of the two forces as the resultant' },
   ]),
   `Resultant $= ${F1} - ${F2} = ${net}$ N, so $a = \\frac{${net}}{${m}} = ${num(a)}$ m s$^{-2}$.`,
   'Find the resultant first (forces in opposite directions subtract), then divide by the mass.',
@@ -256,6 +276,8 @@ function drivingForce(rng: RNG): Generated | null {
     { value: R, trap: 'took the driving force equal to the resistance (that is constant speed, not acceleration)' },
     { value: (m + R) * a, trap: 'added R to the mass before multiplying by a' },
     { value: m * G * a + R, trap: 'used the weight instead of the mass in ma' },
+    { value: m * a + 2 * R, trap: 'counted the resistance twice' },
+    { value: (m * a + R) * 2, trap: 'doubled the driving force' },
   ]),
   `$F - R = ma$, so $F = ma + R = ${m} \\times ${num(a)} + ${R} = ${m * a} + ${R} = ${F}$ N.`,
   'The resultant (ma) is driving force minus resistance, so the driving force is ma + R.',
@@ -275,17 +297,23 @@ function frictionDecel(rng: RNG): Generated | null {
   const obj = rng.pick(['A block', 'A puck', 'A book', 'A wooden block']);
   if (askMu) {
     const stem = `${obj} of mass ${q(m, U.kg)} slides across a rough horizontal floor and decelerates uniformly at ${q(a, U.a)}. ${G_NOTE} Find the coefficient of friction between ${obj.toLowerCase().replace(/^a /, 'the ')} and the floor.`;
-    return finish(stem, X(mu), undefined, physOptions(rng, X(mu), undefined, [
-      { value: a * G, trap: 'multiplied by g instead of dividing: μ = a/g' },
-      { value: G / a, trap: 'divided the wrong way round' },
-    ], [
+    // A coefficient of friction is a dimensionless number below 1, so an option bigger than 1 is
+    // eliminated without doing any physics. Exactly one is offered — one of the three routes that
+    // invert or drop the division by g — and every other distractor still looks like a coefficient.
+    const overOne = rng.pick<Cand>([
+      { value: G / a, trap: 'divided the wrong way round: μ = a/g' },
       { value: a, trap: 'quoted the deceleration as μ' },
-      { value: a / (m * G), trap: 'divided by the weight mg instead of by g: the mass cancels' },
       { value: (m * a) / G, trap: 'used the friction force ma in place of the acceleration: the mass cancels' },
-      { value: a / (G * G), trap: 'divided by g twice' },
-      { value: m * a, trap: 'quoted the friction force ma instead of μ' },
+    ]);
+    return finish(stem, X(mu), undefined, physOptions(rng, X(mu), undefined, [
+      overOne,
       { value: (G - a) / G, trap: 'used (g − a)/g instead of a/g' },
-    ]),
+    ], [
+      { value: a / (m * G), trap: 'divided by the weight mg instead of by g: the mass cancels' },
+      { value: a / (G * G), trap: 'divided by g twice' },
+      { value: mu / 2, trap: 'halved: there is no ½ in $F = \\mu R$' },
+      { value: 2 * mu < 1 ? 2 * mu : null, trap: 'doubled the deceleration before dividing by g' },
+    ], (v) => v < 1 || Math.abs(v - (overOne.value as number)) < 1e-12),
     `Friction $\\mu mg$ is the only horizontal force, so $\\mu mg = ma$ and $\\mu = \\frac{a}{g} = \\frac{${num(a)}}{10} = ${num(mu)}$.`,
     'On a horizontal surface the sliding deceleration is μg, so μ = a/g; the mass cancels.',
     ['friction', 'coefficient'], { ask: 'mu-from-decel', a, m });
@@ -325,6 +353,8 @@ function frictionForce(rng: RNG): Generated | null {
       { value: mu * m + m * a, trap: 'forgot g in the friction term' },
       { value: m * G + m * a, trap: 'used the whole weight mg as the friction force (forgot μ)' },
       { value: (mu + a) * m * G, trap: 'multiplied the ma term by g as well' },
+      { value: 2 * fr + m * a, trap: 'counted the friction twice' },
+      { value: fr + m * a + m * G, trap: 'added the weight of the crate as well' },
     ]),
     `Friction $= \\mu mg = ${num(mu)} \\times ${m * G} = ${num(fr)}$ N. $F - ${num(fr)} = ma = ${m * a}$, so $F = ${num(F)}$ N.`,
     'The pushing force supplies both the friction μmg and the extra ma needed to accelerate.',
@@ -339,6 +369,8 @@ function frictionForce(rng: RNG): Generated | null {
     { value: mu * m * 9.8, trap: 'used g = 9.8 instead of the stated 10' },
     { value: mu * m * G * 2, trap: 'doubled the friction' },
     { value: mu * G, trap: 'left out the mass' },
+    { value: (mu * m * G) / 2, trap: 'halved: there is no ½ in $F = \\mu R$' },
+    { value: mu * mu * m * G, trap: 'applied μ twice' },
   ]),
   `Constant speed means the push equals the friction: $F = \\mu R = \\mu mg = ${num(mu)} \\times ${m} \\times 10 = ${num(fr)}$ N.`,
   'At constant speed the resultant is zero, so the push equals the friction μmg.',
@@ -392,6 +424,8 @@ function slope(rng: RNG): Generated | null {
       { value: g.mul(sin).div(cos), trap: 'used tan θ' },
       { value: sin, trap: 'forgot g: the acceleration is g sin θ' },
       { value: g.mul(sin).div(E(G)).mul(sin), trap: 'resolved twice: used g sin²θ' },
+      { value: g.mul(sin).mulRat(X(0.5).toRat()), trap: 'slipped in the ½ from ½at²: the acceleration is g sin θ' },
+      { value: g.mul(sin).add(g.mul(cos)), trap: 'added both components instead of resolving along the slope' },
     ]),
     `Along the slope: $mg\\sin ${theta}^{\\circ} = ma$, so $a = g\\sin ${theta}^{\\circ} = 10 \\times ${sin.toLatex()} = ${a.toLatex()}$ m s$^{-2}$ (independent of the mass).`,
     'The component of weight along a slope is mg sin θ, so a = g sin θ; cos θ belongs to the normal reaction.',
@@ -407,6 +441,8 @@ function slope(rng: RNG): Generated | null {
       { value: mg.mul(sin).div(cos), trap: 'used tan θ' },
       { value: E(m).mul(sin), trap: 'forgot g' },
       { value: mg.mul(sin).mulRat(X(0.5).toRat()), trap: 'halved the component' },
+      { value: mg.mul(sin).mul(sin), trap: 'resolved twice: used mg sin²θ' },
+      { value: mg.mul(sin).add(mg.mul(cos)), trap: 'added both components instead of resolving along the slope' },
     ]),
     `Resolve along the slope: $F = mg\\sin ${theta}^{\\circ} = ${m * G} \\times ${sin.toLatex()} = ${F.toLatex()}$ N.`,
     'To hold a block on a smooth slope the force balances the component of weight along the slope, mg sin θ.',
@@ -422,6 +458,8 @@ function slope(rng: RNG): Generated | null {
       { value: E(m).mul(cos), trap: 'forgot g' },
       { value: mg.div(cos), trap: 'divided by cos θ instead of multiplying' },
       { value: mg.mul(cos).mulRat(X(0.5).toRat()), trap: 'halved the component' },
+      { value: mg.mul(cos).mul(cos), trap: 'resolved twice: used mg cos²θ' },
+      { value: mg.mul(cos).add(mg.mul(sin)), trap: 'added both components instead of resolving perpendicular to the slope' },
     ]),
     `Resolve perpendicular to the slope: $R = mg\\cos ${theta}^{\\circ} = ${m * G} \\times ${cos.toLatex()} = ${R.toLatex()}$ N.`,
     'The normal reaction on a slope is mg cos θ, less than the weight; mg sin θ is the component along the slope.',
@@ -476,17 +514,20 @@ function atwood(rng: RNG): Generated | null {
     'The tension lies strictly between the two weights: T = m₂(g + a) = m₁(g − a), never equal to either weight while the system accelerates.',
     ['connected particles', 'pulley', 'tension'], { ask: 'atwood-T', m1, m2 });
   }
+  // Nothing released from rest under gravity accelerates faster than g, so an option above g is a
+  // free elimination: the undivided net force (a value in newtons) is not offered here at all.
   return finish(`${intro} Find the acceleration of the system.`, X(a), U.a, physOptions(rng, X(a), U.a, [
     { value: ((m1 - m2) * G) / m1, trap: 'divided the net force by the heavier mass only: the whole system (m₁ + m₂) accelerates' },
     { value: ((m1 - m2) * G) / m2, trap: 'divided the net force by the lighter mass only' },
   ], [
-    { value: (m1 - m2) * G, trap: 'found the net force but did not divide by the total mass' },
     { value: G, trap: 'used g: the heavier particle does not fall freely' },
     { value: (m1 * G) / (m1 + m2), trap: 'forgot the weight of the lighter particle in the net force' },
+    { value: (m2 * G) / (m1 + m2), trap: 'used the lighter weight as the net force' },
     { value: (m1 - m2) / (m1 + m2), trap: 'forgot g (divided the net force by the total weight)' },
     { value: ((m1 - m2) * G) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
     { value: ((m1 - m2) * G) / (2 * (m1 + m2)), trap: 'gave each particle half the net force: the whole net force accelerates the whole mass' },
-  ]),
+    { value: ((m1 - m2) * G) / (m1 + 2 * m2), trap: 'counted the lighter particle twice in the total mass' },
+  ], (v) => v <= G + 1e-9),
   `Net force on the system $= (${m1} - ${m2}) \\times 10 = ${(m1 - m2) * G}$ N, total mass $${m1 + m2}$ kg, so $a = \\frac{${(m1 - m2) * G}}{${m1 + m2}} = ${num(a)}$ m s$^{-2}$.`,
   'Treat the system as a whole: a = (m₁ − m₂)g/(m₁ + m₂); the net force acts on both masses.',
   ['connected particles', 'pulley', 'acceleration'], { ask: 'atwood-a', m1, m2 });
@@ -527,12 +568,14 @@ function tablePulley(rng: RNG): Generated | null {
     { value: (m2 * G) / m1, trap: 'divided the hanging weight by the table mass only: both particles accelerate' },
     { value: G, trap: 'used g: the hanging particle does not fall freely because of the string' },
   ], [
-    { value: m2 * G, trap: 'found the driving force but did not divide by the total mass' },
     { value: m2 / (m1 + m2), trap: 'forgot g (divided the hanging mass by the total mass)' },
     { value: (m1 * G) / (m1 + m2), trap: 'used the wrong weight as the driving force' },
     { value: (m2 * G) / (m1 * m2), trap: 'multiplied the masses instead of adding them' },
     { value: (m2 * G) / (m1 + 2 * m2), trap: 'counted the hanging particle twice in the total mass' },
-  ]),
+    { value: (m2 * G) / (2 * (m1 + m2)), trap: 'gave each particle half the driving force: the whole of it accelerates the whole mass' },
+    { value: (2 * m2 * G) / (m1 + m2), trap: 'doubled the acceleration' },
+    { value: (m2 * G) / (m1 + m2 / 2), trap: 'counted only half of the hanging particle in the total mass' },
+  ], (v) => v <= G + 1e-9),
   `The only unbalanced force is the hanging weight $${m2 * G}$ N acting on a total mass of $${m1 + m2}$ kg: $a = \\frac{${m2 * G}}{${m1 + m2}} = ${num(a)}$ m s$^{-2}$.`,
   'Driving force is the hanging weight m₂g; it accelerates the total mass m₁ + m₂, so a = m₂g/(m₁ + m₂).',
   ['connected particles', 'pulley', 'acceleration'], { ask: 'table-a', m1, m2 });
@@ -614,6 +657,8 @@ function lift(rng: RNG): Generated | null {
       { value: (M + m) * a, trap: 'found only the resultant force (M + m)a' },
       { value: (M + m) * (9.8 + signedA), trap: 'used g = 9.8 instead of the stated 10' },
       { value: (M + m) * G + (M + m) * a * G, trap: 'multiplied the (M + m)a term by g as well' },
+      { value: ((M + m) * (G + signedA)) / G, trap: 'divided by g: the tension is a force in newtons' },
+      { value: m * (G + signedA), trap: 'used the passenger alone instead of the whole lift' },
     ]),
     `Upwards positive, acceleration $${num(signedA)}$ m s$^{-2}$: $T - ${W} = ${M + m} \\times (${num(signedA)})$, so $T = ${M + m} \\times ${num(G + signedA)} = ${T}$ N.`,
     'Direction of acceleration, not of motion, decides the sign: T = (total mass)(g + a) with a positive upwards.',
@@ -628,6 +673,8 @@ function lift(rng: RNG): Generated | null {
     { value: m, trap: 'quoted the mass as the reading' },
     { value: m * (9.8 + signedA), trap: 'used g = 9.8 instead of the stated 10' },
     { value: m * G + m * a * G, trap: 'multiplied the ma term by g as well' },
+    { value: (m * (G + signedA)) / G, trap: 'divided by g: the reading is a force in newtons' },
+    { value: m * (G + signedA) + m * G, trap: 'added the weight on top of R = m(g + a)' },
   ]),
   `Upwards positive, the acceleration is $${num(signedA)}$ m s$^{-2}$. $R - mg = ma$: $R = ${m}(10 ${signedA >= 0 ? '+' : '-'} ${num(a)}) = ${m} \\times ${num(G + signedA)} = ${R}$ N.`,
   'Apparent weight R = m(g + a) with a positive upwards; "moving up but slowing down" is a downward acceleration, so R < mg.',

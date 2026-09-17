@@ -30,7 +30,11 @@ const q = (x: number, unit: string): string => `$${num(x)}\\ ${unit}$`;
 
 type Cand = { value: number | Exact | null; trap: string };
 
-/** Finite, non-negative, clean and within a sane factor of the answer (zero allowed: "no energy is lost" is a real trap). */
+/**
+ * Finite, non-negative, clean and within a sane factor of the answer (zero allowed: "no energy is
+ * lost" is a real trap). The window is 40×: a change in kinetic energy sitting among momenta, or a
+ * 1.875 N force next to 225 N, is eliminated on sight and wastes a slot.
+ */
 function cleanOnly(ds: Cand[], answer: number): Distractor[] {
   const out: Distractor[] = [];
   for (const d of ds) {
@@ -39,7 +43,7 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
     if (!v) continue;
     const f = v.toNumber();
     if (!Number.isFinite(f) || f < 0) continue;
-    if (f !== 0 && (f > 200 * answer || f < answer / 200)) continue;
+    if (f !== 0 && (f > 40 * answer || f < answer / 40)) continue;
     if (!isCleanExact(v).ok) continue;
     out.push({ value: v, trap: d.trap });
   }
@@ -47,55 +51,58 @@ function cleanOnly(ds: Cand[], answer: number): Distractor[] {
 }
 
 /**
- * Headline traps first (in a shuffled order), then the rest chosen towards a randomly drawn number
- * of options *below* the answer. Without that, a variant whose named mistakes all overshoot (or all
- * undershoot) puts the correct option at the same rank in every instance, and "pick the smallest"
- * answers it without any arithmetic. A candidate that would stretch the option list beyond
- * `maxSpread` is skipped: 1.875 N next to 225 N is implausible on sight.
+ * Fill the four slots from both sides of the answer: a target number of options below it is drawn
+ * first and each slot then comes from whichever side is still short, with the headline (`must`)
+ * mistakes preferred *within the side that is needed*. Without that, a variant whose named mistakes
+ * all overshoot (or all undershoot) puts the correct option at the same rank in every instance and
+ * "pick the smallest" answers it without any arithmetic; taking a `must` first, as this used to,
+ * left the same hole one slot smaller (the "no energy is lost" zero is always the minimum, so the
+ * energy-lost question could never have the answer as its largest option). A candidate that would
+ * stretch the option list beyond `maxSpread` is skipped.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 60): Distractor[] {
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4, maxSpread = 40): Distractor[] {
   const a = answer.toNumber();
   const seen: Exact[] = [answer];
   const mags: number[] = Math.abs(a) > 0 ? [Math.abs(a)] : [];
   const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const fits = (d: Distractor) => {
     const x = Math.abs(d.value.toNumber());
-    if (x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread) return;
+    return !(x > 0 && mags.length > 0 && Math.max(...mags, x) / Math.min(...mags, x) > maxSpread);
+  };
+  const isBelow = (d: Distractor) => d.value.toNumber() < a;
+  const pools = [rng.shuffle(must), rng.shuffle(extra)];
+  const wantBelow = rng.int(0, count);
+  const pull = (below: boolean): Distractor | null => {
+    for (const pool of pools) {
+      const i = pool.findIndex((d) => isBelow(d) === below && fits(d) && !seen.some((s) => s.equals(d.value)));
+      if (i >= 0) return pool.splice(i, 1)[0];
+    }
+    return null;
+  };
+  while (out.length < count) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    const d = pull(needBelow) ?? pull(!needBelow);
+    if (!d) break;
     seen.push(d.value);
+    const x = Math.abs(d.value.toNumber());
     if (x > 0) mags.push(x);
     out.push(d);
-  };
-  // One headline trap always survives; the others are preferred within their own side of the answer,
-  // so which mistakes are offered still varies with the draw and the answer's rank moves with it.
-  const heads = rng.shuffle(must);
-  if (heads.length > 0) take(heads[0]);
-  const rest = heads.slice(1);
-  const side = (lo: boolean) => [...rest, ...rng.shuffle(extra)].filter((d) => (lo ? d.value.toNumber() < a : d.value.toNumber() > a));
-  const below = side(true);
-  const above = side(false);
-  let wantBelow = rng.int(0, count) - out.filter((d) => d.value.toNumber() < a).length;
-  while (out.length < count && (below.length > 0 || above.length > 0)) {
-    const useBelow = below.length > 0 && (wantBelow > 0 || above.length === 0);
-    take((useBelow ? below : above).shift()!);
-    if (useBelow) wantBelow--;
   }
   return out;
 }
 
-const fallback = (answer: Exact): Exact[] =>
-  [2, 0.5, 3, 4, 1.5, 0.25, 10, 0.1].map((k) => answer.mulRat(X(k).toRat())).filter((v) => isCleanExact(v).ok && !v.isZero());
-
-/** Padding for "what fraction …?": nice fractions strictly between 0 and 1, never a multiple of the answer. */
-const FRACTION_PAD: Exact[] = [[1, 3], [2, 3], [1, 4], [3, 4], [1, 5], [2, 5], [3, 5], [4, 5], [1, 6], [5, 6], [1, 8], [3, 8], [5, 8], [7, 8], [1, 2]].map(([n, d]) => frac(n, d));
-
-function physOptions(rng: RNG, answer: Exact, unit: string | undefined, must: Cand[], extra: Cand[], format: 'decimal' | 'fraction' = 'decimal', pad?: Exact[]) {
+/**
+ * Four named distractors or nothing: a draw that cannot offer them is redrawn rather than padded
+ * with unlabelled multiples of the answer (or, in the fraction variant, with unlabelled fractions).
+ */
+function physOptions(rng: RNG, answer: Exact, unit: string | undefined, must: Cand[], extra: Cand[], format: 'decimal' | 'fraction' = 'decimal') {
   const a = answer.toNumber();
-  return buildOptions(rng, answer, ranked(rng, answer, cleanOnly(must, a), cleanOnly(extra, a)), { format, unit, fallback: pad ?? fallback(answer) });
+  const ds = ranked(rng, answer, cleanOnly(must, a), cleanOnly(extra, a));
+  return ds.length < 4 ? null : buildOptions(rng, answer, ds, { format, unit });
 }
 
-function finish(stem: string, answer: Exact, unit: string | undefined, options: ReturnType<typeof buildOptions>, solution: string, trap: string, tags: string[], params: Record<string, unknown>, format: 'decimal' | 'fraction' = 'decimal'): Generated {
-  return { stem, answer: { kind: 'exact', value: answer, format, unit }, options, solution, trap, tags, params, typedAllowed: true };
+function finish(stem: string, answer: Exact, unit: string | undefined, options: ReturnType<typeof buildOptions> | null, solution: string, trap: string, tags: string[], params: Record<string, unknown>, format: 'decimal' | 'fraction' = 'decimal'): Generated | null {
+  return options && { stem, answer: { kind: 'exact', value: answer, format, unit }, options, solution, trap, tags, params, typedAllowed: true };
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -125,7 +132,7 @@ function momentumMV(rng: RNG): Generated | null {
   const v = rng.pick(b.speeds);
   const p = sig(m * v);
   const cap = b.name.charAt(0).toUpperCase() + b.name.slice(1);
-  const stem = `${cap} of mass ${q(m, U.kg)} moves at ${q(v, U.v)}. Find its momentum, in $\\text{kg m s}^{-1}$.`;
+  const stem = `${cap} of mass ${q(m, U.kg)} moves at ${q(v, U.v)}. Find ${b.name.includes('cyclist') ? 'their' : 'its'} momentum, in $\\text{kg m s}^{-1}$.`;
   return finish(stem, X(p), undefined, physOptions(rng, X(p), undefined, [
     { value: 0.5 * m * v * v, trap: 'found the kinetic energy ½mv² instead of the momentum mv' },
   ], [
@@ -261,6 +268,8 @@ function velocityFromForce(rng: RNG): Generated | null {
     { value: u + (F * t) / (m * 10), trap: 'divided by the weight instead of the mass' },
     { value: u + (F * t * m), trap: 'multiplied by the mass instead of dividing' },
     { value: (F * t) / m - u, trap: 'subtracted the initial velocity instead of adding it' },
+    { value: u + (2 * F * t) / m, trap: 'doubled the change in velocity' },
+    { value: u + (F * t) / (2 * m), trap: 'halved: Ft = mΔv has no ½ (that belongs to ½mv²)' },
   ]),
   `Impulse $Ft = ${F} \\times ${t} = ${F * t}$ N s $= m\\Delta v$, so $\\Delta v = \\frac{${F * t}}{${m}} = ${num(dv)}$ m s$^{-1}$ and $v = ${u} + ${num(dv)} = ${num(v)}$ m s$^{-1}$.`,
   'Ft = mΔv gives the change in velocity; add it to the initial velocity.',
@@ -446,11 +455,13 @@ function keLost(rng: RNG): Generated | null {
       // KE after computed as ½m₁v² instead of ½(m₁ + m₂)v²: the fraction lost becomes 1 − (v/u₁)²
       proper({ value: Exact.ONE.sub(frac(m1, m1 + m2).pow(2)), trap: 'used ½m₁v² for the energy after: the combined mass m₁ + m₂ moves off' }),
       proper({ value: frac(m1, m1 + m2).pow(2), trap: 'used (v/u₁)² for the fraction that remains: the mass changes too' }),
+      proper({ value: frac(m1 * m2, (m1 + m2) * (m1 + m2)), trap: 'used the reduced mass over the total mass' }),
+      { value: Exact.ONE, trap: 'assumed all the kinetic energy is lost: the two bodies still move off together, so some of it remains' },
       { value: Exact.ZERO, trap: 'assumed kinetic energy is conserved (only momentum is)' },
     ];
     if (cleanOnly([...must, ...extra], fr.toNumber()).length < 4) return null;
     const stem = `${intro} What fraction of the initial kinetic energy is lost in the collision?`;
-    return finish(stem, fr, undefined, physOptions(rng, fr, undefined, must, extra, 'fraction', FRACTION_PAD),
+    return finish(stem, fr, undefined, physOptions(rng, fr, undefined, must, extra, 'fraction'),
     `$v = \\frac{${m1 * u1}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$. KE before $= \\tfrac{1}{2} \\times ${m1} \\times ${u1}^2 = ${num(before)}$ J; after $= \\tfrac{1}{2} \\times ${m1 + m2} \\times ${num(v)}^2 = ${num(after)}$ J. Fraction lost $= \\frac{${num(lost)}}{${num(before)}} = ${fr.toLatex()}$ (in general $\\frac{m_2}{m_1 + m_2}$).`,
     'Momentum is conserved but kinetic energy is not; the fraction lost when a moving mass sticks to a stationary one is m₂/(m₁ + m₂).',
     ['momentum', 'kinetic energy', 'inelastic', 'fraction'], { ask: 'ke-fraction', m1, u1, m2 }, 'fraction');
@@ -458,13 +469,17 @@ function keLost(rng: RNG): Generated | null {
   const stem = `${intro} Find the kinetic energy lost in the collision.`;
   return finish(stem, X(lost), U.J, physOptions(rng, X(lost), U.J, [
     { value: after, trap: 'quoted the kinetic energy after the collision instead of the loss' },
-    { value: 0, trap: 'assumed kinetic energy is conserved (only momentum is)' },
+    // "no energy is lost" is always the smallest option, so it is offered in only some of the
+    // draws: otherwise the answer could never be the smallest of the five.
+    { value: rng.bool(0.5) ? 0 : null, trap: 'assumed kinetic energy is conserved (only momentum is)' },
   ], [
     { value: before, trap: 'quoted the kinetic energy before the collision' },
     { value: before - 0.5 * m1 * v * v, trap: 'forgot the second mass when finding the energy after' },
     { value: 0.5 * (m1 + m2) * (u1 - v) * (u1 - v), trap: 'used ½(m₁ + m₂)(u − v)²' },
     { value: 0.5 * m2 * v * v, trap: 'found only the energy carried off by the second body' },
     { value: before + after, trap: 'added the two kinetic energies instead of subtracting' },
+    { value: 0.5 * (m1 + m2) * u1 * u1, trap: 'used the combined mass with the original speed for the energy before' },
+    { value: 0.5 * m1 * (u1 - v) * (u1 - v), trap: 'used ½m₁(u − v)² for the loss' },
   ]),
   `Momentum: $v = \\frac{${m1} \\times ${u1}}{${m1 + m2}} = ${num(v)}$ m s$^{-1}$. KE before $= \\tfrac{1}{2} \\times ${m1} \\times ${u1}^2 = ${num(before)}$ J; after $= \\tfrac{1}{2} \\times ${m1 + m2} \\times ${num(v)}^2 = ${num(after)}$ J. Lost: $${num(before)} - ${num(after)} = ${num(lost)}$ J.`,
   'Find v from momentum first, then compute the two kinetic energies separately; in a perfectly inelastic collision some KE is always lost.',

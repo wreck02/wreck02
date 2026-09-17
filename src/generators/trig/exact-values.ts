@@ -113,7 +113,17 @@ function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor
   const lo = fBelow + Math.max(0, need - above.length);
   const hi = fBelow + Math.min(need, below.length);
   if (lo > hi) return [...forced, ...rest].slice(0, count);
-  const r = rng.int(lo, hi); // r = how many options end up below the answer, i.e. the answer's rank
+  // r is how many options end up below the answer, i.e. the answer's rank in the sorted list.
+  // Two of the five slots are ends, so a uniformly placed answer is the largest or the smallest
+  // option 2 times in 5. Plain uniform picking over [lo, hi] does not get there: the feasible
+  // window is usually the middle of the list, because an exact trig value such as 1 or √3/2 has
+  // very few plausible values above it. So an end is taken whenever the pool offers one, at the
+  // rate that brings the overall share of extreme answers to that 2-in-5 baseline (a quarter of
+  // the questions can reach no end at all, and those always land inside).
+  const ends = [lo, hi].filter((k) => k === 0 || k === count);
+  const inner: number[] = [];
+  for (let k = lo; k <= hi; k++) if (k !== 0 && k !== count) inner.push(k);
+  const r = ends.length > 0 && (inner.length === 0 || rng.bool(0.55)) ? rng.pick(ends) : rng.pick(inner);
   return [...forced, ...below.slice(0, r - fBelow), ...above.slice(0, need - (r - fBelow))];
 }
 
@@ -359,6 +369,8 @@ const FORMS: Form[] = [
       { value: () => f.c(a).mul(f.c(b)).sub(f.s(a).mul(f.s(b))), trap: 'mixed up the expansions: used the one for cos(A + B)' },
       { value: () => f.c(a).mul(f.c(b)).add(f.s(a).mul(f.s(b))), trap: 'gave cos(A − B): that is the other + expansion' },
       { value: () => f.c(a).mul(f.s(b)), trap: 'evaluated only the second product' },
+      { value: () => f.s(a).mul(f.s(b)), trap: 'paired the two sines' },
+      { value: () => f.c(a).mul(f.c(b)), trap: 'paired the two cosines' },
     ],
     note: (a, b, A) => `Quick route: this is the expansion of $\\sin(A + B) = \\sin ${A(a + b)}$.`,
   },
@@ -374,6 +386,8 @@ const FORMS: Form[] = [
       { value: () => f.c(Math.abs(a - b)), trap: 'gave cos(A − B): the expression shown expands to sin(A − B)' },
       { value: () => f.c(a).mul(f.s(b)), trap: 'evaluated only the second product' },
       { value: () => f.c(a).mul(f.c(b)).add(f.s(a).mul(f.s(b))), trap: 'gave cos(A − B) by expanding with cosines first' },
+      { value: () => f.s(a).mul(f.s(b)), trap: 'paired the two sines' },
+      { value: () => f.c(a).mul(f.c(b)), trap: 'paired the two cosines' },
     ],
     note: (a, b, A) => `Quick route: this is the expansion of $\\sin(A - B) = \\sin\\left(${A(a - b)}\\right)$.`,
   },
@@ -390,6 +404,8 @@ const FORMS: Form[] = [
       { value: () => f.c(a).add(f.c(b)), trap: 'treated cos(A − B) as cos A + cos B' },
       { value: () => f.s(a).mul(f.s(b)), trap: 'evaluated only the second product' },
       { value: () => f.s(a).mul(f.c(b)).add(f.c(a).mul(f.s(b))), trap: 'gave sin(A + B): used the sine expansion' },
+      { value: () => f.s(a).mul(f.c(b)), trap: 'paired sin A with cos B' },
+      { value: () => f.c(a).mul(f.s(b)), trap: 'paired cos A with sin B' },
     ],
     note: (a, b, A) => `Quick route: this is the expansion of $\\cos(A - B) = \\cos ${A(Math.abs(a - b))}$.`,
   },
@@ -582,6 +598,10 @@ function expressionQ(rng: RNG): Generated | null {
     { value: answer.neg(), trap: 'sign error' },
     { value: answer.mulRat(2), trap: 'lost a factor of ½' },
     { value: answer.mulRat(HALF), trap: 'an extra factor of ½' },
+    // A value below 1 squares downwards and inverts upwards, so this pair always straddles the
+    // answer and keeps the pool from being all undershoots.
+    { value: attempt(() => answer.pow(2)), trap: 'squared the value at the end' },
+    { value: attempt(() => answer.inv()), trap: 'gave the reciprocal of the value' },
   ]);
   const note = form.note?.(a, b, (d) => ang(d, radians)) ?? null;
   const stem = rng.bool(0.5) ? `Find the exact value of $${expr}$.` : `Evaluate $${expr}$, giving your answer exactly.`;

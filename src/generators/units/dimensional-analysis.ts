@@ -54,6 +54,8 @@ const QTY: Record<string, Vec> = {
   charge: [0, 0, 1, 1],
   voltage: [1, 2, -3, -1],
   linearDensity: [1, -1, 0, 0],
+  resistance: [1, 2, -3, -2],
+  resistivity: [1, 3, -3, -2],
 };
 
 /** How a wrong unit vector is named when it happens to be a standard quantity. */
@@ -63,7 +65,7 @@ const QTY_NAME: Record<string, string> = {
   force: 'a force', energy: 'an energy', power: 'a power', pressure: 'a pressure',
   density: 'a density', momentum: 'a momentum', spring: 'a spring constant',
   freq: 'a frequency', charge: 'a charge', voltage: 'a potential difference',
-  linearDensity: 'a mass per unit length',
+  linearDensity: 'a mass per unit length', resistance: 'a resistance', resistivity: 'a resistivity',
 };
 
 /** Unit symbols that may appear in an option, as [kg, m, s, A] exponents. */

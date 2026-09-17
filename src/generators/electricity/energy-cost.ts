@@ -118,43 +118,73 @@ function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact, money: Money | nu
     if (mode === 'fraction') {
       if (den > 24n) continue;
     } else if (den > 24n && !Number.isInteger(r(x * 1000))) continue;
-    out.push({ value: v, trap: d.trap });
+    out.push({ value: v, trap: d.trap, fam: d.fam });
   }
   return out;
 }
 
 /**
- * Every `must` trap gets a slot before any `extra` one, so the headline mistakes are never shuffled
- * out. At most one `spare` near-miss is ever used, and only after every named mistake has been tried:
- * an option list of 0.1, 0.2 and 0.4 around an answer of 0.2 tests nothing.
+ * The family a candidate belongs to, read off its ratio to the answer: a doubled or halved value and
+ * a decimal place out are the two shapes every conversion throws off by the dozen, and `given` marks
+ * an option copied straight from the stem.
  */
-function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spare: Distractor[], count = 4, maxSpare = 1): Distractor[] {
+function family(x: number, a: number): '' | 'two' | 'ten' {
+  if (!(x > 0) || !(a > 0)) return '';
+  const l10 = Math.log10(x / a);
+  if (Math.abs(l10 - Math.round(l10)) < 1e-9) return 'ten';
+  const l2 = Math.log2(x / a);
+  if (Math.abs(l2 - Math.round(l2)) < 1e-9) return 'two';
+  return '';
+}
+
+/** At most this many of the four wrong options may come from one family. */
+const FAMILY_MAX: Record<string, number> = { two: 2, ten: 3, given: 1 };
+
+/**
+ * Choose the four distractors with a *randomly drawn number of them below the answer*.
+ *
+ * How many options end up below the answer is drawn first, before any candidate is seated; each side
+ * is then filled headline (`must`) traps first, other named mistakes next, and the near-misses last.
+ * Drawing the split is not enough on its own: the number of candidates a side *can* supply fixes the
+ * range the draw runs over, so each variant also has to offer mistakes on both sides (1 kWh = 3600 J
+ * overshoots, "gave the answer in MWh" undershoots). At most `maxSpare` spares are used, and never a
+ * doubled and a halved answer together.
+ */
+function ranked(rng: RNG, answer: Exact, must: Marked[], extra: Marked[], spare: Marked[], count = 4, maxSpare = 1): Distractor[] {
+  const a = answer.toNumber();
+  interface Seat { d: Marked; tier: number; fam: string }
+  const seats = (ds: Marked[], tier: number): Seat[] => rng.shuffle(ds).map((d) => ({ d, tier, fam: d.fam ?? family(d.value.toNumber(), a) }));
+  const pool = [...seats(must, 0), ...seats(extra, 1), ...seats(spare, 2)];
+  const order = (xs: Seat[]) => xs.slice().sort((p, q) => p.tier - q.tier || (p.fam ? 1 : 0) - (q.fam ? 1 : 0));
+  const below = order(pool.filter((p) => p.d.value.cmp(answer) < 0));
+  const above = order(pool.filter((p) => p.d.value.cmp(answer) > 0));
+
   const seen: Exact[] = [answer];
-  const fresh = (d: Distractor): boolean => {
-    if (seen.some((s) => s.equals(d.value))) return false;
-    seen.push(d.value);
+  const out: Distractor[] = [];
+  const fams = new Map<string, number>();
+  const spareRatios: number[] = [];
+  let spares = 0;
+  const take = (p: Seat): boolean => {
+    if (out.length >= count || seen.some((s) => s.equals(p.d.value))) return false;
+    if (p.fam && (fams.get(p.fam) ?? 0) >= (FAMILY_MAX[p.fam] ?? count)) return false;
+    const x = p.d.value.toNumber();
+    if (p.tier === 2) {
+      if (spares >= maxSpare) return false;
+      if (spareRatios.some((rt) => Math.abs(rt * (x / a) - 1) < 1e-9)) return false;
+      spares++;
+      spareRatios.push(x / a);
+    }
+    seen.push(p.d.value);
+    out.push({ value: p.d.value, trap: p.d.trap });
+    if (p.fam) fams.set(p.fam, (fams.get(p.fam) ?? 0) + 1);
     return true;
   };
-  // How many options end up below the answer is drawn first, inside the range the candidates allow;
-  // each side is then filled with its headline (`must`) traps before the rest. Taking every `must`
-  // first instead would pin the answer's rank: the two headline traps usually straddle it (the
-  // pence-for-pounds slip above, the "costed one appliance only" slip below), and the remaining
-  // mistakes nearly all undershoot, so the answer would be the second or third largest for ever.
-  const pool = [...must.map((d) => ({ ...d, must: true })), ...rng.shuffle(extra)].filter(fresh);
-  const headsFirst = (ds: Distractor[]) => [...ds.filter((d) => d.must), ...ds.filter((d) => !d.must)];
-  const below = headsFirst(pool.filter((d) => d.value.cmp(answer) < 0));
-  const above = headsFirst(pool.filter((d) => d.value.cmp(answer) > 0));
-  const lo = Math.max(0, count - above.length);
-  const hi = Math.min(count, below.length);
-  const nBelow = lo <= hi ? rng.int(lo, hi) : -1;
-  const out: Distractor[] = nBelow < 0
-    ? pool.slice(0, count) // too few candidates to balance: pack() redraws if this is short
-    : [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
-  let used = 0;
-  for (const d of rng.shuffle(spare)) {
-    if (out.length >= count || used >= maxSpare) break;
-    if (fresh(d)) { out.push(d); used++; }
-  }
+  const drain = (q: Seat[], want: number) => { while (want > 0 && q.length > 0) if (take(q.shift()!)) want--; };
+  drain(below, rng.int(Math.max(0, count - above.length), Math.min(count, below.length)));
+  drain(above, count - out.length);
+  // a side that ran short (a duplicate or a family cap) is topped up from the other
+  drain(below, count - out.length);
+  drain(above, count - out.length);
   return out;
 }
 
@@ -175,8 +205,10 @@ interface Pack {
   mode?: Mode;
   must: Candidate[];
   extra: Candidate[];
-  /** generic near-misses; at most one is ever used, and only if the named mistakes ran short */
+  /** generic near-misses; at most `maxSpare` are ever used, and only if the named mistakes ran short */
   spare?: Candidate[];
+  /** how many near-misses a list may hold; 2 only where the named mistakes nearly all pull one way */
+  maxSpare?: number;
   /** the answer is a sum of money: every option must be printable in that unit */
   money?: Money;
   solution: string;
@@ -200,6 +232,8 @@ function pack(rng: RNG, p: Pack): Generated | null {
     cleanOnly(p.must, mode, p.answer, money),
     cleanOnly(p.extra, mode, p.answer, money),
     cleanOnly(p.spare ?? [], mode, p.answer, money),
+    4,
+    p.maxSpare ?? 1,
   );
   if (ds.length < 4) return null; // never pad: redraw instead
   return {
@@ -249,15 +283,19 @@ function chargeQ(rng: RNG): Generated | null {
     extra: [
       { value: val(Q * 60), trap: inMin ? 'multiplied by 60 once too often' : 'multiplied by 60 as if the time had been given in minutes' },
       { value: inMin ? null : val(Q / 60), trap: 'converted the time to minutes when it was already in seconds' },
-      { value: val(t), trap: 'quoted the time in seconds as the charge' },
+      { value: val(Q * 1000), trap: 'gave the charge in millicoulombs', wide: true },
       { value: val(I / t), trap: 'divided the current by the time' },
-      { value: val(I), trap: 'quoted the current as the charge' },
-      { value: inMin ? val(tStated) : null, trap: 'quoted the time in minutes as the charge' },
+      { value: val(t), trap: 'quoted the time in seconds as the charge', fam: 'given' },
+      { value: val(I), trap: 'quoted the current as the charge', fam: 'given' },
+      { value: inMin ? val(tStated) : null, trap: 'quoted the time in minutes as the charge', fam: 'given' },
     ],
     spare: [
       { value: val(2 * Q), trap: 'doubled the charge' },
       { value: val(Q / 2), trap: 'halved the charge' },
+      { value: val(10 * Q), trap: 'slipped a decimal place' },
+      { value: val(Q / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$Q = It = ${n(I)} \\times ${t} = ${n(Q)}\\ \\text{C}$${inMin ? ` (${tText} $= ${t}$ s)` : ''}.`,
     trap: inMin
       ? 'Q = It works in coulombs, amps and seconds: convert the minutes to seconds first.'
@@ -285,15 +323,18 @@ function currentFromChargeQ(rng: RNG): Generated | null {
       { value: val(I * 60), trap: inMin ? 'multiplied by 60 once too often' : 'multiplied by 60 as if the time had been given in minutes' },
       { value: val(I / 60), trap: inMin ? 'divided by 60 once too often' : 'converted the time to minutes when it was already in seconds' },
       { value: val(Q / 60), trap: 'divided the charge by 60 instead of by the time' },
-      { value: val(Q), trap: 'quoted the charge as the current' },
-      { value: val(t), trap: 'quoted the time as the current' },
-      { value: inMin ? val(tStated) : null, trap: 'quoted the time in minutes as the current' },
-      { value: val(Q / (t * t)), trap: 'divided by the time twice' },
+      { value: val(I * 1000), trap: 'gave the current in milliamps', wide: true },
+      { value: val(Q), trap: 'quoted the charge as the current', fam: 'given' },
+      { value: val(t), trap: 'quoted the time as the current', fam: 'given' },
+      { value: inMin ? val(tStated) : null, trap: 'quoted the time in minutes as the current', fam: 'given' },
     ],
     spare: [
       { value: val(2 * I), trap: 'doubled the current' },
       { value: val(I / 2), trap: 'halved the current' },
+      { value: val(10 * I), trap: 'slipped a decimal place' },
+      { value: val(I / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$I = \\dfrac{Q}{t} = \\dfrac{${n(Q)}}{${t}} = ${n(I)}\\ \\text{A}$${inMin ? ` (${tText} $= ${t}$ s)` : ''}.`,
     trap: inMin
       ? 'Current is charge per second: convert the minutes to seconds before dividing.'
@@ -321,13 +362,17 @@ function chargeTimeQ(rng: RNG): Generated | null {
     extra: [
       { value: val(t / 60), trap: 'gave the time in minutes, not in seconds' },
       { value: val(t * 60), trap: 'multiplied by 60 instead of dividing' },
-      { value: val(Q), trap: 'quoted the charge as the time' },
+      { value: val(t / 3600), trap: 'gave the time in hours, not in seconds' },
       { value: val(Q / (I * I)), trap: 'divided by the current twice' },
+      { value: val(Q), trap: 'quoted the charge as the time', fam: 'given' },
     ],
     spare: [
       { value: val(2 * t), trap: 'doubled the time' },
       { value: val(t / 2), trap: 'halved the time' },
+      { value: val(10 * t), trap: 'slipped a decimal place' },
+      { value: val(t / 10), trap: 'slipped a decimal place the other way' },
     ],
+    maxSpare: 2,
     solution: `$Q = It$, so $t = \\dfrac{${n(Q)}}{${n(I)}} = ${t}\\ \\text{s}$.`,
     trap: 'Rearranging Q = It gives t = Q/I; multiplying instead is the usual slip.',
     tags: ['charge', 'current', 'time'],
@@ -370,8 +415,9 @@ function kwhQ(rng: RNG): Generated | null {
       { value: val(P / h), trap: 'divided instead of multiplying' },
       { value: val(kWh * 3.6), trap: 'gave the energy in MJ' },
       { value: val(h / P), trap: 'divided the hours by the power' },
-      { value: val(P), trap: 'quoted the power as the energy' },
-      { value: val(h), trap: 'quoted the number of hours as the energy' },
+      { value: val(kWh / 3.6), trap: 'divided by 3.6 as if the answer had been in MJ' },
+      { value: val(P), trap: 'quoted the power as the energy', fam: 'given' },
+      { value: val(h), trap: 'quoted the number of hours as the energy', fam: 'given' },
     ],
     spare: [
       { value: val(2 * kWh), trap: 'doubled the energy' },
@@ -406,10 +452,11 @@ function costQ(rng: RNG): Generated | null {
     extra: [
       { value: val(inPence ? kWh : kWh / 100), trap: 'gave the energy in kWh, not the cost' },
       { value: val(inPence ? h * rate : (h * rate) / 100), trap: 'forgot the power' },
-      { value: val(inPence ? rate : rate / 100), trap: 'quoted the price of one kilowatt-hour' },
       { value: val(inPence ? kWh * (rate - 10) : (kWh * (rate - 10)) / 100), trap: 'misread the price per kWh' },
       { value: val(money * 1000), trap: 'used the power in watts instead of kilowatts', wide: true },
       { value: val(money * 60), trap: 'converted the hours to minutes as well' },
+      { value: inPence ? val(money * 100) : null, trap: 'multiplied by 100 to reach pence when the cost was already in pence' },
+      { value: val(inPence ? rate : rate / 100), trap: 'quoted the price of one kilowatt-hour', fam: 'given' },
     ],
     spare: [
       { value: val(2 * money), trap: 'doubled the cost' },
@@ -446,6 +493,7 @@ function kwhToJQ(rng: RNG): Generated | null {
       { value: val(k * 1000), trap: 'converted kilowatt-hours to watt-hours only', wide: true },
       { value: val(KWH_J / k), trap: 'divided by the number of kilowatt-hours instead of multiplying' },
       { value: val(k * 3.6e4), trap: 'used 1 kWh = 3.6 × 10⁴ J' },
+      { value: val(k * 1e6), trap: 'read the figure as 1 kWh = 10⁶ J, dropping the 3.6' },
     ],
     spare: [
       { value: val(2 * J), trap: 'doubled the energy' },
@@ -478,6 +526,9 @@ function jToKwhQ(rng: RNG): Generated | null {
       { value: val(J / 3.6e8), trap: 'two powers of ten too few: divided by $3.6 \\times 10^{8}$' },
       { value: val(k * 3.6), trap: 'multiplied by 3.6 instead of dividing' },
       { value: val(k / 3.6), trap: 'divided by 3.6 a second time' },
+      { value: val(k / 1000), trap: 'gave the energy in MWh, not kWh', wide: true },
+      { value: val(k / 60), trap: 'divided by 60 as well, as if the hour still had to be converted' },
+      { value: val(J / 1e6), trap: 'divided by $10^{6}$, dropping the 3.6' },
     ],
     spare: [
       { value: val(2 * k), trap: 'doubled the energy' },
@@ -509,12 +560,13 @@ function energyQVQ(rng: RNG): Generated | null {
       { value: val(Q / V), trap: 'divided instead of multiplying: E = QV' },
     ],
     extra: [
-      { value: val(V), trap: 'quoted the p.d. as the energy' },
       { value: val(Ej * t), trap: 'multiplied by the time as well' },
       { value: val(Q * t), trap: 'multiplied the charge by the time instead of by the p.d.' },
       { value: val(V * t), trap: 'used the time in place of the charge' },
-      { value: val(Q), trap: 'quoted the charge as the energy' },
       { value: val(Ej * 60), trap: 'multiplied by 60, as if the time had been given in minutes' },
+      { value: val(Ej / 1000), trap: 'gave the energy in kJ, not J', wide: true },
+      { value: val(V), trap: 'quoted the p.d. as the energy', fam: 'given' },
+      { value: val(Q), trap: 'quoted the charge as the energy', fam: 'given' },
     ],
     spare: [
       { value: val(2 * Ej), trap: 'doubled the energy' },
@@ -559,6 +611,8 @@ function monthlyCostQ(rng: RNG): Generated | null {
       { value: val(((P1 * h1 + P2w * h2) * days * rate) / 100), trap: `treated the television as a ${P2w} kW appliance`, wide: true },
       { value: val(dailyKWh * days / 100), trap: 'divided the energy by 100 instead of costing it' },
       { value: val((dailyKWh * days * rate) / 100 / days), trap: 'forgot to multiply by the number of days' },
+      { value: val((dailyKWh * days * rate * 60) / 100), trap: 'converted the hours to minutes as well' },
+      { value: val(pence / 100 / 100), trap: 'divided by 100 twice on the way to pounds' },
     ],
     spare: [
       { value: val(2 * pounds), trap: 'doubled the cost' },
@@ -593,12 +647,13 @@ function batteryLifeQ(rng: RNG): Generated | null {
     extra: [
       { value: val(life * 60), trap: 'gave the time in minutes, not in hours' },
       { value: val(life / 60), trap: 'divided by 60 as well' },
-      { value: val(milli ? C / 1000 : C), trap: milli ? 'quoted the capacity in A h, not the time' : 'quoted the capacity as the time' },
-      { value: milli ? val(I / 1000) : null, trap: 'quoted the current in amps as the time' },
+      { value: val(milli ? C / 1000 : C), trap: milli ? 'quoted the capacity in A h, not the time' : 'quoted the capacity as the time', fam: 'given' },
+      { value: milli ? val(I / 1000) : null, trap: 'quoted the current in amps as the time', fam: 'given' },
       { value: val(C / (I * 2)), trap: 'doubled the current before dividing' },
       { value: val(C / (I * I)), trap: 'divided by the current twice' },
       { value: val(life / 24), trap: 'gave the time in days, not hours' },
-      { value: val(milli ? I / 1000 : I), trap: 'quoted the current in amps as the time' },
+      { value: val(life * 3600), trap: 'gave the time in seconds, not hours', wide: true },
+      { value: val(milli ? I / 1000 : I), trap: 'quoted the current in amps as the time', fam: 'given' },
       { value: milli ? val(C / 1000 / I) : null, trap: 'read the rating as A h when it is given in mA h', wide: true },
       { value: milli ? val(C / (I / 1000)) : null, trap: 'converted the current to amps but left the rating in mA h', wide: true },
     ],
@@ -639,6 +694,8 @@ function efficiencyCostQ(rng: RNG): Generated | null {
       { value: val(3.6 * k * rate), trap: 'read the 3.6 MJ figure as a number of kilowatt-hours' },
       { value: val(usefulMJ * rate), trap: 'read the useful energy in MJ as a number of kilowatt-hours' },
       { value: val((pence * 100) / e), trap: 'divided by the efficiency twice' },
+      { value: val(pence * 100), trap: 'multiplied by 100 to reach pence when the cost was already in pence' },
+      { value: val(pence * (100 / e) * (100 / e)), trap: 'divided by the efficiency as a percentage, not as a fraction' },
     ],
     spare: [
       { value: val(2 * pence), trap: 'doubled the cost' },
@@ -715,6 +772,8 @@ function costRatioQ(rng: RNG): Generated | null {
       { value: ratio(h2, h1), trap: 'compared the times, inverted' },
       { value: ratio(P2w, Math.round(P1 * 1000)), trap: 'compared the powers, inverted' },
       { value: E(1), trap: 'assumed the same price per kWh means the same cost' },
+      { value: ratio(Math.round(e1 * 10) * 100, P2w), trap: "divided the heater's daily energy by the lamp's power instead of by its daily energy" },
+      { value: ratio(Math.round(P1 * 10), Math.round(e2 * 10)), trap: "used the heater's power in place of its daily energy" },
     ],
     solution: `Daily energies: heater $${n(P1)} \\times ${n(h1)} = ${n(e1)}$ kWh, lamp $${n(P2w / 1000)} \\times ${n(h2)} = ${n(e2)}$ kWh. The costs are in the same ratio: $${n(e1)} : ${n(e2)} = ${answer.toLatex()}$.`,
     trap: 'Cost follows the energy (kW × hours), not the power alone: the small lamp can cost more if it runs longer.',

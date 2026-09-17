@@ -351,6 +351,7 @@ function symmetric(rng: RNG, ask: 'sumsq' | 'recip'): Generated | null {
       // (α + β)² − αβ and (α + β)² − 4αβ = (α − β)² are positive whenever b² > 4ac, and they sit on
       // opposite sides of the answer (αβ > 0 or αβ < 0 decides which), so the rank stays spread.
       { value: S2.sub(P), trap: 'subtracted αβ, not 2αβ' },
+      { value: S2.add(P), trap: 'added αβ instead of subtracting 2αβ' },
       { value: S2.sub(P.mulRat(4)), trap: 'used (α + β)² − 4αβ, which is (α − β)²' },
       { value: S2.mulRat(2).sub(P.mulRat(2)), trap: 'doubled (α + β)² instead of αβ' },
       { value: P.mulRat(2), trap: 'gave 2αβ, the term that should be subtracted from (α + β)²' },
@@ -373,6 +374,9 @@ function symmetric(rng: RNG, ask: 'sumsq' | 'recip'): Generated | null {
       { value: E(1).div(P), trap: 'took 1/(αβ)' },
       { value: frac(-c, b), trap: 'used c/b instead of −b/c' },
       { value: frac(b, c), trap: 'sign: 1/α + 1/β = −b/c' },
+      // with c = ±1 most of the pool above collapses onto ±b, so the builder had to pad
+      { value: S.add(P), trap: 'added α + β and αβ instead of dividing' },
+      { value: S.sub(P), trap: 'subtracted αβ from α + β instead of dividing' },
       ...(a !== 1 ? [
         { value: frac(-b, a * c), trap: 'forgot the a in αβ = c/a' },
         { value: frac(-b * a, c), trap: 'forgot the a in α + β = −b/a' },

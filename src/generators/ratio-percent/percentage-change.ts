@@ -192,8 +192,10 @@ function applyChange(rng: RNG): Generated | null {
     // Same ceiling as the ×10 slip: dividing 300 by 0.1 gives 3000, which no one reads as "300
     // increased by 90%".
     { value: 100 - sp >= 40 ? tryE(() => E(N).div(mult(-sp))) : null, trap: `divided by ${multStr(-sp)}, the multiplier for a change the other way` },
-  ]);
-  const weak = keep([{ value: E(100 + sp), trap: 'gave the multiplier as a percentage instead of the new value' }], { exclude: [N] });
+    // Nothing beyond three times the stem's own number: "decrease 300 by 90%" cannot be 3000,
+    // whatever the mistake, and such an option is struck out before any arithmetic.
+  ], { exclude: [N], max: 3 * N });
+  const weak = keep([{ value: E(100 + sp), trap: 'gave the multiplier as a percentage instead of the new value' }], { exclude: [N], max: 3 * N });
   let stem: string;
   if (context === 'plain') stem = `${up ? 'Increase' : 'Decrease'} $${N}$ by $${p}\\%$.`;
   else if (context === 'price') stem = up

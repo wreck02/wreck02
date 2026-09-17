@@ -325,6 +325,8 @@ function beamOnPivot(rng: RNG, ask: 'f' | 'x'): Generated | null {
     : [
         { value: round(p + dPivot), trap: 'put the load on the far side of the pivot' },
         { value: round(half - dPivot), trap: 'measured from the centre of the beam' },
+        { value: round(p - (wl * (half - p)) / wb), trap: 'the two weights used upside down in the moment equation' },
+        { value: round(half - p), trap: 'gave the beam’s own lever arm instead of the load’s position' },
         { value: (wb * half) / wl, trap: 'forgot that the beam’s weight acts only (L/2 − p) from the pivot' },
         { value: round(p / 2), trap: 'halved the distance to the pivot' },
         { value: p, trap: 'placed the load at the pivot' },
@@ -433,6 +435,8 @@ function twoLoads(rng: RNG): Generated | null {
     ],
     extra: [
       { value: Wb + W1 + W2, trap: 'gave the total load rather than one reaction' },
+      { value: (Wb * (L / 2) + W1 * a1) / L, trap: `left the $${n(W2)}\\ \\text{N}$ load out of the moment equation` },
+      { value: (Wb * (L / 2) + W2 * a2) / L, trap: `left the $${n(W1)}\\ \\text{N}$ load out of the moment equation` },
       { value: (Wb * (L / 2) + W1 * a2 + W2 * a1) / L, trap: 'paired each load with the other load’s distance' },
       { value: W1 * a1 + W2 * a2, trap: 'forgot to divide by the length' },
       { value: (Wb * (L / 2) + W1 * a1 + W2 * a2) / L + Wb / 2, trap: 'counted the beam’s weight twice' },
@@ -482,6 +486,8 @@ function tipping(rng: RNG): Generated | null {
     extra: [
       { value: onPlank(dSup + (Wb * dSup) / Wm), trap: 'used the whole distance to $D$ as the plank’s lever arm' },
       { value: onPlank(dSup + (Wm * (dSup - L / 2)) / Wb), trap: 'the two weights used the wrong way round' },
+      { value: onPlank(dSup + (Wb * (L / 2)) / Wm), trap: 'measured the plank’s weight from $A$ instead of from $D$' },
+      { value: onPlank(2 * dSup - L / 2), trap: 'cancelled the weights, as if the man and the plank weighed the same' },
       { value: L, trap: 'assumed he can walk to the end of the plank' },
       { value: L / 2, trap: 'gave the centre of the plank' },
       { value: onPlank(dSup - past), trap: 'took the man to the wrong side of $D$' },
@@ -537,6 +543,7 @@ function hingedBeam(rng: RNG): Generated | null {
     must,
     extra: [
       { value: Wb + WL, trap: 'gave the total weight supported, not one of the two forces' },
+      { value: Wb / 2, trap: 'took moments for the beam alone and left the load out' },
       { value: Wb / 2 + WL, trap: 'halved the beam’s weight but kept the whole load' },
       { value: (Wb * (L / 2) + WL * d) / d, trap: 'divided by the load’s distance instead of the beam’s length' },
       { value: Wb * (L / 2) + WL * d, trap: 'gave the total moment instead of the force' },

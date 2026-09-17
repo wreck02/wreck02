@@ -237,7 +237,10 @@ function renormProduct(rng: RNG): Generated | null {
     { value: sf(ab / 10, m + n - 1), trap: 'adjusted the exponent the wrong way when renormalising' },
     { value: sf(ab, m + n + 1), trap: 'added 1 to the exponent without dividing the mantissa by 10' },
     { value: sf(ab, m + n + 2), trap: 'renormalised twice: the exponent went up by 2' },
-    { value: sf(ab, m * n), trap: 'multiplied the exponents' },
+    // "multiplied the exponents" is only worth offering when it lands near the answer: for
+    // (6 × 10^-5)(2 × 10^-2) it gives 1.2 × 10^11, a positive exponent from two numbers below 1,
+    // which is 10^17 from every other option and is never a live choice.
+    { value: Math.abs(m * n - (m + n)) <= 2 ? sf(ab, m * n) : null, trap: 'multiplied the exponents' },
     { value: sf(a + b, m + n), trap: 'added the mantissas' },
     { value: sf(ab, m - n), trap: 'subtracted the exponents' },
     { value: sf(ab, m), trap: "kept only the first number's power of ten" },
@@ -296,23 +299,51 @@ function addSub(rng: RNG): Generated | null {
   const ans = plus ? A.add(B) : A.sub(B);
   if (ans.sign() <= 0) return null;
   const bShift = E(b).mul(p10(-delta)); // b × 10^-delta, the mantissa contribution of B
-  const bShift2 = E(b).mul(p10(-delta - 1)); // lined up one place too far
+  const bShift2 = E(b).mul(p10(-delta - 1)); // lined up one place too far right
+  const bShift0 = E(b).mul(p10(1 - delta)); // lined up one place too far left
   const comb = plus ? a + b : a - b;
+  const sum = plus ? E(a).add(bShift) : E(a).sub(bShift); // the correct mantissa, before renormalising
   const ds = keep([
     { value: sf(comb, m), trap: 'combined the mantissas without matching the powers of ten' },
     { value: sf(comb, n), trap: 'combined the mantissas without matching the powers of ten (smaller exponent)' },
-    { value: sf(comb, m + n), trap: 'combined the mantissas and added the exponents' },
-    { value: sf(comb, m - n), trap: 'combined the mantissas and subtracted the exponents' },
-    { value: sf(plus ? E(a).add(bShift) : E(a).sub(bShift), n), trap: 'right mantissa, but kept the smaller exponent' },
+    { value: sf(sum, n), trap: 'right mantissa, but kept the smaller exponent' },
     { value: sf(plus ? E(a).sub(bShift) : E(a).add(bShift), m), trap: plus ? 'subtracted instead of adding' : 'added instead of subtracting' },
-    { value: sf(plus ? E(a).add(E(b).mul(p10(delta))) : E(a).sub(E(b).mul(p10(delta))), m), trap: 'shifted the smaller term the wrong way' },
+    { value: sf(a, m), trap: 'rounded the smaller term away instead of lining it up' },
     { value: sf(plus ? E(a).add(bShift2) : E(a).sub(bShift2), m), trap: 'lined the smaller term up one place too far to the right' },
-    { value: sf(E(a).mul(E(b)), m + n), trap: plus ? 'multiplied instead of adding' : 'multiplied instead of subtracting' },
+    { value: sf(plus ? E(a).add(bShift0) : E(a).sub(bShift0), m), trap: 'lined the smaller term up one place too far to the left' },
+    // renormalisation slips exist only when the mantissas really do carry past 10
+    { value: sum.toNumber() >= 10 ? sf(sum.mulRat(10), m) : null, trap: 'added 1 to the exponent when renormalising without dividing the mantissa by 10' },
+    { value: sum.toNumber() >= 10 ? sf(sum.mulRat(Exact.rat(1, 10).toRat()), m) : null, trap: 'renormalised twice: divided the mantissa by 10 a second time' },
+    { value: sf(plus ? E(a).add(E(b).mul(p10(delta))) : E(a).sub(E(b).mul(p10(delta))), m), trap: 'shifted the smaller term the wrong way' },
   ]);
+  /*
+   * Cap every wrong option at one decade from the answer.
+   *
+   * On an add/subtract question the order of magnitude of the answer is written on the face of the
+   * larger term, so an option 10^3 or 10^7 away ("multiplied instead of adding", "combined the
+   * mantissas and added the exponents") is struck off before any work is done and the question
+   * collapses to a choice between the two survivors. The freed slots go to mantissa-level slips —
+   * lining the smaller term up one place out, rounding it away, subtracting instead of adding —
+   * which keep the right magnitude and have to be checked digit by digit.
+   */
+  const ansExp = sfExp(ans);
+  if (ansExp === null) return null;
+  const sig3 = (x: Exact) => Number(x.toNumber().toPrecision(3));
+  const seen3 = new Set([sig3(ans)]);
+  const near: Distractor[] = [];
+  for (const d of ds) {
+    const e = sfExp(d.value);
+    if (e === null || Math.abs(e - ansExp) > 1) continue;
+    // two options agreeing to three significant figures read as the same number on the page
+    const k = sig3(d.value);
+    if (seen3.has(k)) continue;
+    seen3.add(k);
+    near.push(d);
+  }
   const stem = `Find the value of $${sfTex(a, m)} ${plus ? '+' : '-'} ${sfTex(b, n)}$, ${IN_SF}.`;
   const bs = dec(bShift);
   const solution = `Write both with the same power of ten: $${sfTex(b, n)} = ${sfTex(bs, m)}$, so the ${plus ? 'sum' : 'difference'} is $(${a} ${plus ? '+' : '-'} ${bs}) \\times 10^{${m}} = ${ansTex(ans)}$.`;
-  return pack(rng, stem, ans, ds, solution,
+  return pack(rng, stem, ans, near, solution,
     'You can only add or subtract mantissas once both terms have the same power of ten; rewrite the smaller one first.',
     ['standard-form', plus ? 'add' : 'subtract'],
     { variant: 'addsub', a, m, b, n, plus },

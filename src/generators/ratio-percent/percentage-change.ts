@@ -28,7 +28,15 @@ const wholePct = (p: number, n: number) => (p * n) % 100 === 0;
 /** Thousands separator inside maths mode for populations (23\,000). */
 const thou = (n: number) => (Math.abs(n) >= 10000 ? String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\\,') : String(n));
 
-interface KeepOpts { halves?: boolean; negative?: boolean; zero?: boolean }
+interface KeepOpts {
+  halves?: boolean;
+  negative?: boolean;
+  zero?: boolean;
+  /** Hard upper bound (exclusive): a percentage decrease can never reach 100. */
+  max?: number;
+  /** Values the stem already prints: an option equal to one of them reads as a typo, not a mistake. */
+  exclude?: number[];
+}
 
 /** Keep clean, finite, whole-number (optionally half) distractors, de-duplicated; positive unless asked otherwise. */
 function keep(cands: { value: Exact | null; trap: string }[], opts: KeepOpts = {}): Distractor[] {
@@ -38,6 +46,8 @@ function keep(cands: { value: Exact | null; trap: string }[], opts: KeepOpts = {
     if (!v || !v.isRational() || !Number.isFinite(v.toNumber())) continue;
     if (v.isZero() && !opts.zero) continue;
     if (v.sign() < 0 && !opts.negative) continue;
+    if (opts.max !== undefined && v.toNumber() >= opts.max) continue;
+    if (opts.exclude?.some((x) => Math.abs(v.toNumber() - x) < 1e-9)) continue;
     if (!isCleanExact(v).ok) continue;
     const d = v.toRat().d;
     if (!(d === 1n || (opts.halves && d === 2n))) continue;
@@ -52,21 +62,40 @@ function tryE(f: () => Exact): Exact | null {
 }
 
 /**
- * The four wrong options: every `must` trap (the level's headline mistake) gets a slot, the rest are
- * drawn at random from `others`, and only if those run short from `weak`. All distinct from each other
- * and from the answer; null (→ redraw) if four cannot be found.
+ * The four wrong options, with a *randomly drawn number of them below the answer*.
+ *
+ * One headline (`must`) trap is guaranteed a slot; the rest are drawn from `others` first and only
+ * then from `weak`. The side split is decided before any of them is seated: filling greedily instead
+ * pinned the answer's rank, because the surviving mistakes at a level nearly all pull the same way
+ * (at level 3 almost every one overshoots the percentage), so "take the second smallest" scored
+ * without any arithmetic. All four are distinct from each other and from the answer; null (→ redraw)
+ * if four cannot be found.
  */
 function assemble(rng: RNG, ans: Exact, must: Distractor[], others: Distractor[], weak: Distractor[] = [], total = 4): Distractor[] | null {
-  const out: Distractor[] = [];
-  const isNew = (v: Exact) => !v.equals(ans) && !out.some((d) => d.value.equals(v));
-  for (const d of must) if (out.length < total && isNew(d.value)) out.push(d);
-  for (const tier of [others, weak]) {
-    for (const d of rng.shuffle(tier)) {
-      if (out.length >= total) break;
-      if (isNew(d.value)) out.push(d);
-    }
-  }
-  return out.length >= total ? out : null;
+  const seen: Exact[] = [ans];
+  const pool: (Distractor & { tier: number })[] = [];
+  const add = (d: Distractor, tier: number) => {
+    if (seen.some((s) => s.equals(d.value))) return;
+    seen.push(d.value);
+    pool.push({ ...d, tier });
+  };
+  for (const d of must) add(d, 0);
+  for (const d of rng.shuffle(others)) add(d, 1);
+  for (const d of rng.shuffle(weak)) add(d, 2);
+  if (pool.length < total) return null;
+  const forced = pool.filter((d) => d.tier === 0).slice(0, 1);
+  // stable sort: the tiers keep their priority, the shuffle inside each tier keeps its order
+  const rest = pool.filter((d) => !forced.includes(d)).sort((x, y) => x.tier - y.tier);
+  const below = rest.filter((d) => d.value.cmp(ans) < 0);
+  const above = rest.filter((d) => d.value.cmp(ans) > 0);
+  const need = total - forced.length;
+  const fBelow = forced.filter((d) => d.value.cmp(ans) < 0).length;
+  // r is how many options end up below the answer, i.e. the answer's rank in the sorted list.
+  const lo = fBelow + Math.max(0, need - above.length);
+  const hi = fBelow + Math.min(need, below.length);
+  if (lo > hi) return [...forced, ...rest].slice(0, total);
+  const r = rng.int(lo, hi);
+  return [...forced, ...below.slice(0, r - fBelow), ...above.slice(0, need - (r - fBelow))];
 }
 
 /** Multiplier for a signed percentage change, exactly: (100 + p)/100. */
@@ -105,7 +134,12 @@ function percentOf(rng: RNG): Generated | null {
     { value: N % p === 0 ? E(N / p) : null, trap: 'divided N by p' },
     { value: E(((p + 10) * N) / 100), trap: 'misread the percentage as (p + 10)%' },
     { value: p > 10 ? E(((p - 10) * N) / 100) : null, trap: 'misread the percentage as (p − 10)%' },
-  ]);
+    // Two mistakes that stop short of the answer, so the list is not all over-estimates.
+    { value: E(N / 10), trap: 'stopped at 10% instead of scaling it up to p%' },
+    { value: E(N / 100), trap: 'found 1% of N and stopped' },
+    // An option equal to N itself is a free elimination: it is the number the stem prints, and the
+    // p = 10 decimal-point slip lands exactly on it.
+  ], { exclude: [N] });
   // fastest route: 10% then scale, or a known fraction
   const tenth = N / 10;
   let route: string;
@@ -139,12 +173,14 @@ function applyChange(rng: RNG): Generated | null {
     { value: E(N - (up ? change : -change)), trap: up ? 'decreased instead of increased' : 'increased instead of decreased' },
     { value: E(change), trap: 'found the change, not the new value' },
     { value: E(N + sp), trap: `${up ? 'added' : 'subtracted'} ${p} rather than ${p}%` },
-    { value: E(N + (up ? change : -change) * 10), trap: 'decimal point slip in the percentage' },
+    // The ×10 slip only while it still reads as a possible new value: "increase 300 by 50%" cannot
+    // plausibly be 1800, which is a 500% increase and is struck out without any arithmetic.
+    { value: Math.abs(N + (up ? change : -change) * 10) <= 2.5 * N ? E(N + (up ? change : -change) * 10) : null, trap: 'decimal point slip in the percentage' },
     { value: E(N + (up ? change : -change) / 10), trap: 'decimal point slip in the percentage' },
     { value: E(N).div(mult(sp)), trap: 'divided by the multiplier instead of multiplying' },
     { value: E(N).mul(mult(sp)).mul(mult(sp)), trap: 'applied the change twice' },
   ]);
-  const weak = keep([{ value: E(100 + sp), trap: 'gave the multiplier as a percentage instead of the new value' }]);
+  const weak = keep([{ value: E(100 + sp), trap: 'gave the multiplier as a percentage instead of the new value' }], { exclude: [N] });
   let stem: string;
   if (context === 'plain') stem = `${up ? 'Increase' : 'Decrease'} $${N}$ by $${p}\\%$.`;
   else if (context === 'price') stem = up
@@ -166,26 +202,41 @@ const CHANGE_BASES = [20, 25, 40, 50, 60, 80, 100, 120, 150, 160, 200, 240, 250,
 
 function percentChange(rng: RNG): Generated | null {
   const up = rng.bool();
-  // Only percentages whose headline trap — dividing the change by the NEW value, i.e. 100p/(100 ± p) —
-  // is itself an exam number (an integer or a half), so that trap can always be offered.
-  const p = up ? rng.weighted([25, 60, 100, 150, 300], [4, 2, 3, 3, 1]) : rng.weighted([20, 50, 60, 75, 80], [4, 3, 3, 2, 1]);
+  // For an increase, the percentages are the ones whose headline trap — dividing the change by the
+  // NEW value, i.e. 100p/(100 + p) — is itself an exam number (an integer or a half).
+  //
+  // A decrease is a part of the original that has gone, so it can never reach 100%: every option is
+  // capped below 100 and anything above it would be struck out on sight. That rules out the same
+  // headline trap (100p/(100 − p) is over 100 for every p above 50), the raw change when it is large,
+  // and 100A/B. The headline trap for a decrease is therefore the other classic misreading: quoting
+  // the new value as a percentage of the original (100 − p) instead of the drop.
+  const p = up
+    ? rng.weighted([25, 60, 100, 150, 300], [4, 2, 3, 3, 1])
+    : rng.weighted([20, 25, 30, 40, 60, 75, 80], [4, 3, 3, 3, 2, 2, 1]);
   const A = rng.pick(CHANGE_BASES);
   if (!wholePct(p, A)) return null;
   const diff = (p * A) / 100;
   const B = up ? A + diff : A - diff;
   if (B < 10) return null;
   const ans = E(p);
-  const must = keep([{ value: frac(100 * diff, B), trap: 'divided the change by the new value instead of the original' }], { halves: true });
+  const bounds: KeepOpts = up ? { halves: true } : { halves: true, max: 100 };
+  const must = keep([up
+    ? { value: frac(100 * diff, B), trap: 'divided the change by the new value instead of the original' }
+    : { value: frac(100 * B, A), trap: 'gave the new value as a percentage of the original, not the size of the drop' },
+  ], bounds);
   if (must.length === 0) return null;
   const others = keep([
     { value: E(diff), trap: 'gave the actual change, not the percentage' },
     { value: frac(100 * B, A), trap: 'expressed the new value as a percentage of the original' },
     { value: frac(100 * A, B), trap: 'expressed the original as a percentage of the new value' },
-  ], { halves: true });
+    { value: frac(100 * diff, B), trap: 'divided the change by the new value instead of the original' },
+    // Below the answer whatever the direction, so the list is not all over-estimates.
+    { value: frac(10 * diff, A), trap: 'multiplied the fraction by 10 instead of by 100' },
+  ], bounds);
   const weak = keep([
     { value: E(2 * p), trap: 'doubled the percentage' },
     { value: E(p / 2), trap: 'halved the percentage' },
-  ]);
+  ], bounds);
   const ctx = rng.pick([
     (a: number, b: number) => `The price of a ticket ${up ? 'rises' : 'falls'} from £${a} to £${b}.`,
     (a: number, b: number) => `A company's workforce ${up ? 'grows' : 'shrinks'} from $${a}$ to $${b}$ employees.`,
@@ -222,9 +273,13 @@ function reverse(rng: RNG): Generated | null {
     { value: E(newV).div(mult(-sp)), trap: `divided by ${multStr(-sp)} instead of ${multStr(sp)}` },
     { value: E(newV).mul(mult(sp)), trap: 'applied the change again instead of undoing it' },
     { value: E(Math.abs(newV - O)), trap: 'gave the size of the change, not the original' },
-    { value: E(newV - sp), trap: `${up ? 'subtracted' : 'added'} ${p} rather than undoing ${p}%` },
+    // Only while p is a visible fraction of the new value: "35 950" against a stated 36 000 reads as
+    // a typo rather than as a mistake, and it is struck out on sight.
+    { value: newV <= 10 * p ? E(newV - sp) : null, trap: `${up ? 'subtracted' : 'added'} ${p} rather than undoing ${p}%` },
     { value: E(newV).mul(frac(p, 100)), trap: `found ${p}% of the new value` },
-    { value: E(newV).mul(frac(100, p)), trap: `treated the new value as ${p}% of the original` },
+    // Capped at five times the answer: for p = 5 this is twenty times the new value, and a town of
+    // 1.52 million after a 5% fall from 80 000 is eliminated without any arithmetic.
+    { value: 100 * newV <= 5 * p * O ? E(newV).mul(frac(100, p)) : null, trap: `treated the new value as ${p}% of the original` },
   ]);
   let stem: string;
   if (ctx === 'sale') stem = `In a sale all prices are reduced by $${p}\\%$. The sale price of a jacket is £${newV}. Find its original price in pounds.`;

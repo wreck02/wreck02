@@ -141,8 +141,13 @@ function triangleQ(rng: RNG, quadId: 1 | 2 | 3 | 4): Generated | null {
     extra.push(
       { value: attempt(() => answer.neg().inv()), trap: 'inverted and mis-signed' },
       { value: frac(opp, adj + 1), trap: 'arithmetic slip in the third side' },
+      { value: frac(opp + 1, adj), trap: 'arithmetic slip in the third side' },
       { value: frac(adj, h), trap: 'read the wrong side off the triangle' },
       { value: frac(opp, h), trap: 'read the wrong side off the triangle' },
+      // Reading the hypotenuse where the triangle wants a shorter side: above the answer, and the
+      // only in-quadrant slips available when the two short-side ratios are not clean fractions.
+      { value: frac(h * q.sinSign * q.cosSign, adj), trap: 'used the hypotenuse in place of the opposite side' },
+      { value: frac(h * q.sinSign * q.cosSign, opp), trap: 'used the hypotenuse in place of the adjacent side' },
     );
   } else if (given === 'tan') {
     // tan θ given, sin θ or cos θ wanted: the mistakes are reading the wrong side and
@@ -241,8 +246,11 @@ function tanSquareQ(rng: RNG): Generated | null {
       { value: frac(sq * sq, (n + d) * (n + d)), trap: 'used $(1 + \\tan\\theta)^{2}$ in the denominator' },
     ];
     extra = [
-      { value: frac(n, n + d), trap: 'treated the ratio as a probability-style share' },
-      { value: frac(d, n + d), trap: 'treated the ratio as a probability-style share' },
+      // tan²θ/(1 − tan²θ) and tan²θ on its own: the two ways the denominator of the identity goes
+      // wrong once the triangle has been drawn. (A "probability-style share" such as n/(n + d) is
+      // no route a candidate takes from tan θ to sin²θ, so it is not offered.)
+      { value: frac(sq * sq, d * d - n * n), trap: `used $1 - \\tan^{2}\\theta$ in the denominator instead of $1 + \\tan^{2}\\theta$` },
+      { value: want === 'sin2' ? frac(n * n, d * d) : frac(d * d, n * n), trap: want === 'sin2' ? 'gave $\\tan^{2}\\theta$: forgot to divide by $1 + \\tan^{2}\\theta$' : 'used $\\frac{1}{\\tan^{2}\\theta}$: forgot the $1$ in the denominator' },
       { value: frac(sq * sq, n * d), trap: 'divided by $\\tan\\theta$ instead of $1 + \\tan^{2}\\theta$' },
       { value: frac(n * d, den), trap: 'gave $\\sin\\theta\\cos\\theta$ instead' },
     ];
@@ -254,7 +262,7 @@ function tanSquareQ(rng: RNG): Generated | null {
       { value: frac(n * d, (n + d) * (n + d)), trap: 'used $(1 + \\tan\\theta)^{2}$ in the denominator' },
     ];
     extra = [
-      { value: frac(n, n + d), trap: 'treated the ratio as a probability-style share' },
+      { value: frac(n + d, den), trap: 'added the two sides instead of multiplying them' },
       { value: t, trap: 'gave $\\tan\\theta$ back' },
       { value: frac(n * d, 2 * den), trap: 'halved instead of doubling' },
     ];

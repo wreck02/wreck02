@@ -298,7 +298,7 @@ function pack(rng: RNG, p: Pack): Generated | null {
 
 // --------------------------------------------------------------------------- level 1
 
-const I_POOL = [0.5, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+const I_POOL = [0.2, 0.25, 0.4, 0.5, 0.75, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
 const R_POOL = [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 100, 120];
 
 function ohmVQ(rng: RNG): Generated | null {
@@ -801,7 +801,9 @@ function currentFromPRQ(rng: RNG): Generated | null {
 
 function voltageScaledQ(rng: RNG): Generated | null {
   const V1 = rng.pick([4, 5, 6, 8, 10, 12, 20, 24, 30, 40, 50, 60]);
-  const k = rng.pick([2, 3, 0.5, 1.5, 4]);
+  // p.d. ratios below 1 as well as above it: with only k > 1 every named slip undershoots the
+  // answer and it could never be the smallest option
+  const k = rng.pick([2, 3, 0.5, 1.5, 4, 0.25, 0.75, 2.5]);
   const V2 = r(V1 * k);
   const P1 = rng.pick([4, 8, 9, 12, 16, 18, 20, 24, 25, 32, 36, 40, 45, 48, 50, 60, 72, 80, 100]);
   const P2 = r(P1 * k * k);
@@ -883,10 +885,9 @@ function resistanceRatioQ(rng: RNG): Generated | null {
       { value: ratio(V2, V1), trap: 'inverted the ratio and forgot to square it' },
       { value: E(1), trap: 'assumed equal power ratings mean equal resistances' },
       { value: ratio(V1 * V1 * V1, V2 * V2 * V2), trap: 'cubed the p.d. ratio' },
-    ],
-    spare: [
       { value: ratio(V1 * V1, V2), trap: 'squared only the first p.d.' },
       { value: ratio(V1, V2 * V2), trap: 'squared only the second p.d.' },
+      { value: ratio(V1 * V1 * V1 * V1, V2 * V2 * V2 * V2), trap: 'squared the p.d. ratio twice over' },
     ],
     solution: `$R = \\dfrac{V^2}{P}$ with $P$ the same for both, so $\\dfrac{R_1}{R_2} = \\dfrac{V_1^2}{V_2^2} = \\dfrac{${V1 * V1}}{${V2 * V2}} = ${answer.toLatex()}$.`,
     trap: 'R = V²/P: the p.d. ratio must be squared, and a higher rated p.d. means a larger resistance for the same power.',
@@ -971,10 +972,12 @@ export default defineTemplate({
         return Math.abs(R - p.R) < 1e-9 && Math.abs(got * p.I - p.I * p.I * p.R) < 1e-9;
       }
       case 'ohm-i': {
-        // build the p.d. this current would produce by adding R/2 volts for each half-amp and compare
-        // with the p.d. printed in the stem, then cross-check with the power
+        // build the p.d. this current would produce by adding R/20 volts for each twentieth of an amp
+        // (the smallest step the current pool uses) and compare with the p.d. printed in the stem,
+        // then cross-check with the power
+        if (Math.abs(got * 20 - Math.round(got * 20)) > 1e-9) return false;
         let V = 0;
-        for (let i = 0; i < Math.round(got * 2); i++) V += p.R / 2;
+        for (let i = 0; i < Math.round(got * 20); i++) V += p.R / 20;
         return Math.abs(V - p.V) < 1e-9 && Math.abs(got * got * p.R - p.V * got) < 1e-9;
       }
       case 'ohm-r': {

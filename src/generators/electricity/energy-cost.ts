@@ -30,7 +30,18 @@ const U_KWH = '\\text{kWh}', U_H = '\\text{h}';
 const KWH_J = 3.6e6;
 
 type Mode = 'decimal' | 'fraction' | 'sf';
-type Candidate = { value: Exact | null; trap: string; wide?: boolean };
+type Candidate = {
+  value: Exact | null;
+  trap: string;
+  wide?: boolean;
+  /**
+   * The mistake family this candidate belongs to when its ratio to the answer does not say it:
+   * 'given' is an option that merely repeats a number printed in the stem. At most `FAMILY_MAX` of
+   * each family may appear in one list, so a five-option list is never three restatements.
+   */
+  fam?: 'given';
+};
+type Marked = Distractor & { fam?: string };
 
 /** Plain number for a stem: 240, 0.5, 2.88. */
 const n = (x: number): string => (Number.isInteger(x) ? `${x}` : `${Number(x.toPrecision(10))}`);
@@ -90,9 +101,9 @@ function ratio(a: number, b: number): Exact | null {
 }
 
 /** Positive, finite, clean option values within a factor of 100 of the answer (10⁴ for a `wide` unit slip). */
-function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact, money: Money | null): Distractor[] {
+function cleanOnly(ds: Candidate[], mode: Mode, answer: Exact, money: Money | null): Marked[] {
   const a = answer.toNumber();
-  const out: Distractor[] = [];
+  const out: Marked[] = [];
   for (const d of ds) {
     const v = d.value;
     if (!v || !Number.isFinite(v.toNumber()) || v.sign() <= 0 || !v.isRational() || !isCleanExact(v).ok) continue;

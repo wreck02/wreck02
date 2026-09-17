@@ -160,30 +160,33 @@ function denPlausible(ds: Candidate[], answer: Exact): Candidate[] {
 }
 
 /**
- * Take the headline traps, then fill from both sides of the answer: a target number of options
- * below the answer is drawn first, so the answer's rank in the sorted option list moves around
- * instead of sitting at (say) the second largest every time. Returns null when there are not
- * enough distinct named candidates, so the caller redraws instead of letting `buildOptions` pad.
+ * Fill the four slots from both sides of the answer: a target number of options below the answer
+ * is drawn first, so the answer's rank in the sorted option list moves around instead of sitting
+ * at (say) the second largest every time. The headline traps are preferred *within the side that
+ * is needed* rather than taken first — consuming them up front pinned the answer whenever every
+ * one of them fell on the same side (at level 1 both wrong power rules overshoot, so the answer
+ * could never be the largest option). Returns null when there are not enough distinct named
+ * candidates, so the caller redraws instead of letting `buildOptions` pad.
  */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] | null {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  const pools = [rng.shuffle(must), rng.shuffle(extra)];
+  const wantBelow = rng.int(0, count);
+  const pull = (below: boolean): Distractor | null => {
+    for (const pool of pools) {
+      const i = pool.findIndex((d) => isBelow(d) === below && !seen.some((s) => s.equals(d.value)));
+      if (i >= 0) return pool.splice(i, 1)[0];
+    }
+    return null;
+  };
+  while (out.length < count) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    const d = pull(needBelow) ?? pull(!needBelow);
+    if (!d) return null;
     seen.push(d.value);
     out.push(d);
-  };
-  must.forEach(take);
-  const wantBelow = rng.int(0, count);
-  const pool = rng.shuffle(extra).filter((d) => !seen.some((s) => s.equals(d.value)));
-  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
-  while (out.length < count) {
-    if (pool.length === 0) return null;
-    const needBelow = out.filter(isBelow).length < wantBelow;
-    let i = pool.findIndex((d) => isBelow(d) === needBelow);
-    if (i < 0) i = 0;
-    take(pool[i]);
-    pool.splice(i, 1);
   }
   return out;
 }
@@ -277,9 +280,11 @@ const brNeg = (x: Exact): string => (x.sign() < 0 ? `\\left(${x.toLatex({ format
 
 function monomialQ(rng: RNG): Generated | null {
   const n = rng.pick([1, 1, 2, 2, 2, 3]);
-  const a = rng.int(1, n === 3 ? 8 : 9);
-  const lo = rng.bool(0.25) ? rng.pick([1, 1, 2]) : 0;
-  const hi = lo + (n === 3 ? rng.pick([1, 2]) : rng.pick([1, 2, 2, 3, 3, 4]));
+  // a wider coefficient (and one more upper limit for the linear integrand) so that level 1 is not
+  // the same handful of integrals over and over; the "> 150" guard below still keeps them mental
+  const a = rng.int(1, n === 3 ? 8 : n === 2 ? 9 : 12);
+  const lo = rng.bool(0.3) ? rng.pick([1, 1, 2, 3]) : 0;
+  const hi = lo + (n === 3 ? rng.pick([1, 2]) : n === 2 ? rng.pick([1, 2, 2, 3, 3, 4]) : rng.pick([1, 2, 2, 3, 3, 4, 5]));
   const f = [T(a, n)];
   const answer = defInt(f, lo, hi)!;
   if (!answer.isInteger() && rng.bool(0.7)) return null;
@@ -317,9 +322,12 @@ function twoTermQ(rng: RNG): Generated | null {
   const F = integrate(f);
   const w = standardWrong(f, a, b);
   const g = areaGuesses(f, a, b);
-  const must = [a !== 0 ? w[3] : w[1], w[0]];
+  // "F(a) − F(b)" is exactly −answer, so a list holding both hands the answer to anyone who knows
+  // the integral of a positive function is positive. It stays available (this integrand can change
+  // sign, so the pair is not a giveaway) but it is no longer forced into every question.
+  const must = [a !== 0 ? w[3] : w[1], w[2]];
   const extra: Candidate[] = [
-    w[1], w[2], w[4], w[6], w[7], g[0], g[1], g[2], g[3],
+    w[0], w[1], w[2], w[4], w[6], w[7], g[0], g[1], g[2], g[3],
     { value: defInt([f[0]], a, b), trap: `dropped the constant term ${q}` },
     { value: defInt([f[1]], a, b), trap: 'integrated the constant term only' },
   ];
@@ -560,10 +568,10 @@ function twoTermFractionalQ(rng: RNG): Generated | null {
   const hasNeg = f.some((t) => t[2] < 0);
   const must: Candidate[] = [
     hasNeg ? { value: bracket(negFlip(f), a, b), trap: 'sign of the negative-power term: dividing by the new negative power makes it negative' } : w[1],
-    w[0],
+    w[2],
   ];
   const extra: Candidate[] = [
-    w[1], w[2], w[6], g[0], g[1], g[2],
+    w[0], w[1], w[2], w[6], g[0], g[1], g[2],
     { value: defInt([f[0]], a, b), trap: 'dropped the second term' },
     { value: defInt([f[1]], a, b), trap: 'dropped the first term' },
     { value: bracket(downPower(f), a, b), trap: 'took a negative power down by one instead of up' },

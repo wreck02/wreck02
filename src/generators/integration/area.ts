@@ -108,31 +108,36 @@ function cleanOnly(ds: Candidate[]): Distractor[] {
 }
 
 /**
- * Choose the distractors. A target number of options *below* the answer is drawn first and the
- * pool is then read from whichever side is still short, so the answer's position in the sorted
+ * Choose the distractors. A target number of options *below* the answer is drawn first and each
+ * slot is then filled from whichever side is still short, so the answer's position in the sorted
  * option list is close to uniform instead of always (say) the second smallest.
+ *
+ * The `must` list is preferred *within the side that is needed* rather than consumed first: when
+ * every headline mistake falls on the same side (the triangle and rectangle estimates are always
+ * smaller than the true area) taking them all up front made the answer the smallest option
+ * impossible. A must is therefore lost only in the draws that deliberately want the other side.
  * Returns null when there are not four distinct candidates: the caller redraws rather than let
  * `buildOptions` pad with unlabelled generic perturbations.
  */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] | null {
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
-  const take = (d: Distractor) => {
-    if (out.length >= count || seen.some((s) => s.equals(d.value))) return;
-    seen.push(d.value);
-    out.push(d);
-  };
-  must.forEach(take);
-  const wantBelow = rng.int(0, count);
-  const pool = rng.shuffle(extra).filter((d) => !seen.some((s) => s.equals(d.value)));
   const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  const pools = [rng.shuffle(must), rng.shuffle(extra)];
+  const wantBelow = rng.int(0, count);
+  const pull = (below: boolean): Distractor | null => {
+    for (const pool of pools) {
+      const i = pool.findIndex((d) => isBelow(d) === below && !seen.some((s) => s.equals(d.value)));
+      if (i >= 0) return pool.splice(i, 1)[0];
+    }
+    return null;
+  };
   while (out.length < count) {
     const needBelow = out.filter(isBelow).length < wantBelow;
-    let i = pool.findIndex((d) => isBelow(d) === needBelow);
-    if (i < 0) i = 0;
-    if (pool.length === 0) return null;
-    take(pool[i]);
-    pool.splice(i, 1);
+    const d = pull(needBelow) ?? pull(!needBelow);
+    if (!d) return null;
+    seen.push(d.value);
+    out.push(d);
   }
   return out;
 }
@@ -466,7 +471,7 @@ function cubicCrossQ(rng: RNG): Generated | null {
 function parabolaCrossQ(rng: RNG): Generated | null {
   const kind = rng.pick(['x2-m2', 'x2-mx']);
   const m = kind === 'x2-m2' ? rng.pick([1, 2, 2, 3, 4]) : rng.pick([2, 3, 4, 5]);
-  const T = m + rng.pick([1, 2, 3]);
+  const T = m + rng.pick([1, 2, 3, 4]);
   const f: Poly = kind === 'x2-m2' ? [1, 0, -m * m] : [1, -m, 0];
   const A1 = defInt(f, 0, m).abs();
   const A2 = defInt(f, m, T);
@@ -481,8 +486,10 @@ function parabolaCrossQ(rng: RNG): Generated | null {
     { value: A1.mulRat(2), trap: 'doubled the first region as if the two were equal' },
     { value: A2.mulRat(2), trap: 'doubled the second region as if the two were equal' },
     { value: noDivInt(f, 0, m).abs().add(noDivInt(f, m, T).abs()), trap: 'did not divide by the new powers' },
+    { value: oldPowInt(f, 0, m).abs().add(oldPowInt(f, m, T).abs()), trap: 'divided by the old powers instead of the new ones' },
     { value: samePowInt(f, 0, m).abs().add(samePowInt(f, m, T).abs()), trap: 'divided by the new powers but forgot to raise them' },
     { value: defInt(f, 0, T).abs().add(A1.mulRat(2)), trap: 'added twice the lower region to the whole signed integral' },
+    { value: area.mulRat(2), trap: 'doubled the total' },
   ];
   return finish(rng, {
     stem: `Find the total area of the regions bounded by the curve ${Y(f)}, the $x$-axis and the lines $x = 0$ and $x = ${T}$.`,

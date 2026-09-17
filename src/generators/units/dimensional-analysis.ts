@@ -153,6 +153,70 @@ function wrongVecs(rng: RNG, target: Vec, near: string[] = []): WrongVec[] {
   return [...nearMisses.filter(ok), ...rest.slice().sort((a, b) => dist(a.v) - dist(b.v))];
 }
 
+/** A factor of a derivation: the symbol as the formula prints it, its quantity and its power. */
+interface Factor { sym: string; qty: string; p: number }
+
+const factorsVec = (fs: Factor[]): Vec => fs.reduce((v, f) => add(v, QTY[f.qty], f.p), [0, 0, 0, 0] as Vec);
+
+/** The same product as a Spec, for params (and so for verify's independent recomputation). */
+const factorsSpec = (fs: Factor[]): Spec => ({
+  num: fs.filter((f) => f.p > 0).map((f) => [f.qty, f.p] as [string, number]),
+  den: fs.filter((f) => f.p < 0).map((f) => [f.qty, -f.p] as [string, number]),
+});
+
+const powTex = (sym: string, p: number): string => (p === 1 ? `$${sym}$` : `$${sym}^{${p}}$`);
+const ordinal = (n: number): string => (n === 2 ? 'squared' : n === 3 ? 'cubed' : `a ${n}th power`);
+
+/**
+ * The unit vectors a slip *in this derivation* produces.
+ *
+ * "Which are the units of G?" is index arithmetic, so its wrong options have to be what that
+ * arithmetic gives when it goes wrong — a factor left out, a square missed, a factor multiplied
+ * where the formula divides — rather than a catalogue of other quantities' units. A catalogue also
+ * gives the answer away whenever the quantity asked for is an exotic one: the answer is then the
+ * only option that is not some everyday quantity, and a candidate who knows that G is not a spring
+ * constant scores without touching an index.
+ */
+function slipVecs(rng: RNG, fs: Factor[]): WrongVec[] {
+  const target = factorsVec(fs);
+  const electrical = target[3] !== 0;
+  const out: WrongVec[] = [];
+  const swap = (i: number, p: number): Factor[] => fs.map((f, j) => (j === i ? { ...f, p } : f));
+  const push = (g: Factor[], trap: string) => out.push({ v: factorsVec(g), trap });
+  const rooted = fs.some((f) => !Number.isInteger(f.p));
+  fs.forEach((f, i) => {
+    if (!Number.isInteger(f.p)) return;
+    const n = Math.abs(f.p), up = f.p > 0;
+    if (n >= 2) {
+      push(swap(i, up ? n - 1 : 1 - n), up
+        ? `forgot that ${powTex(f.sym, 1)} is ${ordinal(n)}`
+        : `divided by ${powTex(f.sym, 1)} once instead of ${n === 2 ? 'twice' : `${n} times`}`);
+    }
+    push(swap(i, up ? n + 1 : -n - 1), up
+      ? `one power of ${powTex(f.sym, 1)} too many`
+      : `divided by one power of ${powTex(f.sym, 1)} too many`);
+    push(swap(i, -f.p), up
+      ? `divided by ${powTex(f.sym, f.p)} instead of multiplying by it`
+      : `multiplied by ${powTex(f.sym, -f.p)} instead of dividing by it`);
+    if (fs.length > 1) push(swap(i, 0), `left ${powTex(f.sym, 1)} out`);
+  });
+  if (rooted) out.push({ v: target.map((e) => 2 * e) as Vec, trap: 'forgot the square root, so every power is twice what it should be' });
+  else if (target.every((e) => e % 2 === 0)) out.push({ v: target.map((e) => e / 2) as Vec, trap: 'took a square root that is not there' });
+  out.push({ v: target.map((e) => -e) as Vec, trap: 'read the formula upside down' });
+  const ok = (w: WrongVec) => !sameVec(w.v, target)
+    && w.v.every((e) => Number.isInteger(e) && Math.abs(e) <= 4)
+    && w.v.some((e) => e !== 0)
+    && (electrical || w.v[3] === 0);
+  const seen: Vec[] = [];
+  const kept: WrongVec[] = [];
+  for (const w of rng.shuffle(out)) {
+    if (!ok(w) || seen.some((v) => sameVec(v, w.v))) continue;
+    seen.push(w.v);
+    kept.push(w);
+  }
+  return kept;
+}
+
 function vecOptions(rng: RNG, target: Vec, extras: WrongVec[] = [], near: string[] = []): Option[] | null {
   const seen: Vec[] = [target];
   const wrongs: { display: string; trap: string }[] = [];
@@ -315,99 +379,107 @@ function baseUnitsQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 2
 
-const CONSTANTS: { sym: string; eq: string; where: string; spec: Spec; note: string; near: string[]; trap: string }[] = [
+const CONSTANTS: { sym: string; eq: string; where: string; factors: Factor[]; note: string; near: string[]; trap: string }[] = [
   {
     sym: 'k', eq: 'F = kx', where: '$F$ is a force and $x$ is an extension',
-    spec: { num: [['force', 1]], den: [['length', 1]] },
+    factors: [{ sym: 'F', qty: 'force', p: 1 }, { sym: 'x', qty: 'length', p: -1 }],
     note: '$k = F/x$, so the units are $\\text{N m}^{-1} = \\text{kg s}^{-2}$',
     near: ['force', 'pressure', 'energy', 'accel', 'momentum'],
     trap: 'Dividing the newton by a length removes one power of m: kg s⁻², not kg m s⁻² (that is the force itself).',
   },
   {
     sym: 'G', eq: 'F = \\dfrac{G m_1 m_2}{r^{2}}', where: '$F$ is a force, $m_1$ and $m_2$ are masses and $r$ is a distance',
-    spec: { num: [['force', 1], ['length', 2]], den: [['mass', 2]] },
+    factors: [{ sym: 'F', qty: 'force', p: 1 }, { sym: 'r', qty: 'length', p: 2 }, { sym: 'm', qty: 'mass', p: -2 }],
     note: '$G = Fr^{2}/(m_1 m_2)$, so the units are $\\text{N m}^{2}\\text{kg}^{-2} = \\text{m}^{3}\\text{kg}^{-1}\\text{s}^{-2}$',
     near: ['accel', 'force', 'energy', 'density', 'spring', 'pressure'],
     trap: 'Two masses divide, not one, so the kg power is −1; the r² adds two powers of m to the newton, giving m³.',
   },
   {
     sym: 'h', eq: 'E = hf', where: '$E$ is an energy and $f$ is a frequency',
-    spec: { num: [['energy', 1]], den: [['freq', 1]] },
+    factors: [{ sym: 'E', qty: 'energy', p: 1 }, { sym: 'f', qty: 'freq', p: -1 }],
     note: '$h = E/f$, so the units are $\\text{J s} = \\text{kg m}^{2}\\text{s}^{-1}$',
     near: ['energy', 'power', 'momentum', 'force', 'spring', 'speed'],
     trap: 'A frequency is s⁻¹, so dividing by it multiplies by a second: J s, one power of s above the joule — not J s⁻¹, which is a watt.',
   },
   {
     sym: 'b', eq: 'F = bv', where: '$F$ is a drag force and $v$ is a speed',
-    spec: { num: [['force', 1]], den: [['speed', 1]] },
+    factors: [{ sym: 'F', qty: 'force', p: 1 }, { sym: 'v', qty: 'speed', p: -1 }],
     note: '$b = F/v$, so the units are $\\text{N s m}^{-1} = \\text{kg s}^{-1}$',
     near: ['spring', 'mass', 'force', 'freq', 'linearDensity'],
     trap: 'Dividing the newton by a speed cancels one m and one s⁻¹: kg s⁻¹, a mass per second, not kg s⁻² (a spring constant).',
   },
   {
     sym: '\\eta', eq: 'F = 6\\pi \\eta r v', where: '$F$ is a force, $r$ is a radius and $v$ is a speed',
-    spec: { num: [['force', 1]], den: [['length', 1], ['speed', 1]] },
+    factors: [{ sym: 'F', qty: 'force', p: 1 }, { sym: 'r', qty: 'length', p: -1 }, { sym: 'v', qty: 'speed', p: -1 }],
     note: '$\\eta = F/(6\\pi r v)$ and $6\\pi$ has no units, so the units are $\\text{kg m}^{-1}\\text{s}^{-1}$',
     near: ['pressure', 'density', 'linearDensity', 'spring', 'mass', 'force'],
     trap: 'The 6π carries no units: dividing the newton by a length and a speed leaves kg m⁻¹ s⁻¹, one power of s away from a pressure.',
   },
   {
     sym: 'R', eq: 'V = IR', where: '$V$ is a potential difference and $I$ is a current',
-    spec: { num: [['voltage', 1]], den: [['current', 1]] },
+    factors: [{ sym: 'V', qty: 'voltage', p: 1 }, { sym: 'I', qty: 'current', p: -1 }],
     note: '$R = V/I$, so the units are $\\text{V A}^{-1} = \\text{kg m}^{2}\\text{s}^{-3}\\text{A}^{-2}$',
     near: ['voltage', 'power', 'charge', 'current', 'resistivity', 'energy'],
     trap: 'Dividing the volt by the ampere gives a second power of A⁻¹: kg m² s⁻³ A⁻², not the A⁻¹ of the volt itself.',
   },
   {
     sym: 'k', eq: 'P = kv^{3}', where: '$P$ is the power of a wind turbine and $v$ is the wind speed',
-    spec: { num: [['power', 1]], den: [['speed', 3]] },
+    factors: [{ sym: 'P', qty: 'power', p: 1 }, { sym: 'v', qty: 'speed', p: -3 }],
     note: '$k = P/v^{3}$, so the units are $\\text{kg m}^{2}\\text{s}^{-3} \\div \\text{m}^{3}\\text{s}^{-3} = \\text{kg m}^{-1}$',
     near: ['density', 'mass', 'pressure', 'spring', 'linearDensity', 'force'],
     trap: 'The speed is cubed, so three powers of m and three of s⁻¹ divide out: the s powers cancel completely, leaving kg m⁻¹.',
   },
   {
     sym: 'c', eq: 'E = mc^{2}', where: '$E$ is an energy and $m$ is a mass',
-    spec: { num: [['energy', 1], ['mass', -1]] },
+    factors: [{ sym: 'E', qty: 'energy', p: 0.5 }, { sym: 'm', qty: 'mass', p: -0.5 }],
     note: '$c^{2} = E/m$, so $c$ has the units of a speed, $\\text{m s}^{-1}$',
     near: ['accel', 'energy', 'freq', 'length', 'time', 'momentum'],
     trap: 'E/m gives c², not c: take the square root, which halves both powers, to get m s⁻¹.',
   },
   {
-    sym: 'E', eq: '\\sigma = E\\varepsilon', where: '$\\sigma$ is a stress (a force per unit area) and $\\varepsilon$ is a strain (a ratio of two lengths)',
-    spec: { num: [['pressure', 1]] },
+    sym: 'E', eq: '\\sigma = E\\varepsilon', where: '$\\sigma$ is a stress, the force $F$ on a cross-section of area $A$ divided by $A$, and $\\varepsilon$ is a strain (a ratio of two lengths)',
+    factors: [{ sym: 'F', qty: 'force', p: 1 }, { sym: 'A', qty: 'area', p: -1 }],
     note: 'a strain is a pure number, so $E$ has the units of a stress: $\\text{N m}^{-2} = \\text{kg m}^{-1}\\text{s}^{-2}$',
     near: ['pressure', 'spring', 'force', 'density', 'energy'],
     trap: 'Strain is a ratio of two lengths and has no units, so the Young modulus has the units of a stress, not of a force.',
   },
   {
     sym: '\\rho', eq: 'R = \\dfrac{\\rho L}{A}', where: '$R$ is a resistance, $L$ is a length and $A$ is an area',
-    spec: { num: [['resistance', 1], ['length', 2]], den: [['length', 1]] },
+    factors: [{ sym: 'R', qty: 'resistance', p: 1 }, { sym: 'A', qty: 'area', p: 1 }, { sym: 'L', qty: 'length', p: -1 }],
     note: '$\\rho = RA/L$, so the units are $\\Omega\\ \\text{m} = \\text{kg m}^{3}\\text{s}^{-3}\\text{A}^{-2}$',
     near: ['resistance', 'voltage', 'power', 'density', 'resistivity', 'charge'],
     trap: 'The area is on top and the length underneath, so the ohm gains one power of m: Ω m, not Ω m⁻¹.',
   },
   {
     sym: '\\lambda', eq: 'N = N_0 e^{-\\lambda t}', where: '$N$ and $N_0$ are numbers of nuclei and $t$ is a time',
-    spec: { num: [['freq', 1]] },
+    factors: [{ sym: 't', qty: 'time', p: -1 }],
     note: 'the exponent $\\lambda t$ must be a pure number, so $\\lambda$ has the units of $1/t$: $\\text{s}^{-1}$',
     near: ['time', 'freq', 'speed', 'accel', 'length', 'mass'],
     trap: 'Anything in an exponent has no units, so λt is dimensionless and λ is one over a time — a decay constant is not a time.',
   },
   {
     sym: 'k', eq: 'F = \\dfrac{k q_1 q_2}{r^{2}}', where: '$F$ is a force, $q_1$ and $q_2$ are charges and $r$ is a distance',
-    spec: { num: [['force', 1], ['length', 2]], den: [['charge', 2]] },
+    factors: [{ sym: 'F', qty: 'force', p: 1 }, { sym: 'r', qty: 'length', p: 2 }, { sym: 'q', qty: 'charge', p: -2 }],
     note: '$k = Fr^{2}/(q_1 q_2)$, so the units are $\\text{kg m}^{3}\\text{s}^{-4}\\text{A}^{-2}$',
     near: ['voltage', 'resistance', 'resistivity', 'force', 'power', 'charge'],
     trap: 'Two charges divide, so the A power is −2 and the two seconds in C = A s push the s power to −4.',
+  },
+  {
+    sym: 'k', eq: 'E = \\tfrac{1}{2}kx^{2}', where: '$E$ is an energy and $x$ is an extension',
+    factors: [{ sym: 'E', qty: 'energy', p: 1 }, { sym: 'x', qty: 'length', p: -2 }],
+    note: '$k = 2E/x^{2}$ and the $\\tfrac12$ has no units, so the units are $\\text{J m}^{-2} = \\text{kg s}^{-2}$',
+    near: ['spring', 'force', 'pressure', 'energy', 'density'],
+    trap: 'The extension is squared, so two powers of m divide out of the joule: kg s⁻², the units of a spring constant.',
   },
 ];
 
 function constantUnitsQ(rng: RNG): Generated | null {
   const item = rng.pick(CONSTANTS);
-  let spec = item.spec;
-  if (item.sym === 'c') spec = { num: [['speed', 1]] }; // c² = E/m, so c itself is a speed
-  const target = specVec(spec)!;
-  const options = vecOptions(rng, target, [], item.near);
+  const spec = factorsSpec(item.factors);
+  const target = factorsVec(item.factors);
+  if (target.every((e) => e === 0)) return null; // a dimensionless constant has nothing to choose between
+  // three slips in this derivation, then the quantities candidates really confuse with it
+  const options = vecOptions(rng, target, slipVecs(rng, item.factors).slice(0, 3), item.near);
   if (!options) return null;
   const g = finish(
     options,
@@ -563,55 +635,111 @@ function oddOneOutQ(rng: RNG): Generated | null {
 
 // ----------------------------------------------------------------------------- level 4
 
-const COMBOS: { expr: string; where: string; spec: Spec; note: string; near: string[]; trap: string }[] = [
+interface Combo { expr: string; where: string; factors: Factor[]; note: string; near?: string[]; trap?: string }
+
+const COMBOS: Combo[] = [
   {
     expr: 'Q = \\rho v^{2} L', where: '$\\rho$ is a density, $v$ is a speed and $L$ is a length',
-    spec: { num: [['density', 1], ['speed', 2], ['length', 1]] },
+    factors: [{ sym: '\\rho', qty: 'density', p: 1 }, { sym: 'v', qty: 'speed', p: 2 }, { sym: 'L', qty: 'length', p: 1 }],
     note: '$[\\rho v^{2} L] = \\text{kg m}^{-3} \\times \\text{m}^{2}\\text{s}^{-2} \\times \\text{m}$',
     near: ['pressure', 'force', 'energy', 'spring', 'linearDensity'],
     trap: 'The speed is squared, so it contributes m² s⁻²; collecting the m powers −3 + 2 + 1 = 0 leaves kg s⁻².',
   },
   {
     expr: 'Q = \\dfrac{1}{2}\\rho v^{2}', where: '$\\rho$ is a density and $v$ is a speed',
-    spec: { num: [['density', 1], ['speed', 2]] },
+    factors: [{ sym: '\\rho', qty: 'density', p: 1 }, { sym: 'v', qty: 'speed', p: 2 }],
     note: '$[\\rho v^{2}] = \\text{kg m}^{-3} \\times \\text{m}^{2}\\text{s}^{-2}$, the units of a pressure',
     near: ['pressure', 'energy', 'force', 'density', 'spring'],
     trap: 'The ½ has no units and the speed is squared: ρv² is a pressure, kg m⁻¹ s⁻², not an energy.',
   },
   {
     expr: 'Q = \\dfrac{1}{2}k x^{2}', where: '$k$ is a spring constant in $\\text{N m}^{-1}$ and $x$ is an extension',
-    spec: { num: [['spring', 1], ['length', 2]] },
+    factors: [{ sym: 'k', qty: 'spring', p: 1 }, { sym: 'x', qty: 'length', p: 2 }],
     note: '$[kx^{2}] = \\text{kg s}^{-2} \\times \\text{m}^{2}$, the units of an energy',
     near: ['energy', 'force', 'power', 'pressure', 'momentum'],
     trap: 'The extension is squared: kg s⁻² × m² is an energy, kg m² s⁻², not a force.',
   },
   {
     expr: 'Q = \\dfrac{mv^{2}}{r}', where: '$m$ is a mass, $v$ is a speed and $r$ is a radius',
-    spec: { num: [['mass', 1], ['speed', 2]], den: [['length', 1]] },
+    factors: [{ sym: 'm', qty: 'mass', p: 1 }, { sym: 'v', qty: 'speed', p: 2 }, { sym: 'r', qty: 'length', p: -1 }],
     note: '$[mv^{2}/r] = \\text{kg} \\times \\text{m}^{2}\\text{s}^{-2} \\div \\text{m}$, the units of a force',
     near: ['force', 'energy', 'momentum', 'pressure', 'spring'],
     trap: 'Dividing the energy kg m² s⁻² by the radius removes one power of m: the result is a force, not an energy.',
   },
   {
     expr: 'Q = \\rho g h', where: '$\\rho$ is a density, $g$ is an acceleration and $h$ is a depth',
-    spec: { num: [['density', 1], ['accel', 1], ['length', 1]] },
+    factors: [{ sym: '\\rho', qty: 'density', p: 1 }, { sym: 'g', qty: 'accel', p: 1 }, { sym: 'h', qty: 'length', p: 1 }],
     note: '$[\\rho g h] = \\text{kg m}^{-3} \\times \\text{m s}^{-2} \\times \\text{m}$, the units of a pressure',
     near: ['pressure', 'force', 'energy', 'density', 'spring'],
     trap: 'Collect the m powers: −3 + 1 + 1 = −1, so ρgh is a pressure, kg m⁻¹ s⁻², as it must be.',
   },
 ];
 
+/**
+ * The building blocks of a drawn combination. Five named formulas are memorable in a session — 300
+ * draws gave 26 stems and only 50 distinct option sets — while a product of two or three of these
+ * with small powers is the same piece of index arithmetic over a space of hundreds.
+ */
+const COMBO_PARTS: { sym: string; qty: string; name: string }[] = [
+  { sym: 'm', qty: 'mass', name: 'a mass' },
+  { sym: 'v', qty: 'speed', name: 'a speed' },
+  { sym: 'L', qty: 'length', name: 'a length' },
+  { sym: 't', qty: 'time', name: 'a time' },
+  { sym: '\\rho', qty: 'density', name: 'a density' },
+  { sym: 'a', qty: 'accel', name: 'an acceleration' },
+  { sym: 'F', qty: 'force', name: 'a force' },
+  { sym: 'A', qty: 'area', name: 'an area' },
+  { sym: 'p', qty: 'pressure', name: 'a pressure' },
+  { sym: 'E', qty: 'energy', name: 'an energy' },
+  { sym: 'P', qty: 'power', name: 'a power' },
+  { sym: 'k', qty: 'spring', name: 'a spring constant in $\\text{N m}^{-1}$' },
+  { sym: 'f', qty: 'freq', name: 'a frequency' },
+];
+
+const prodTex = (fs: Factor[]): string => fs.map((f) => (Math.abs(f.p) === 1 ? f.sym : `${f.sym}^{${Math.abs(f.p)}}`)).join(' ');
+
+/** "$\\rho$ is a density, $v$ is a speed and $L$ is a length" */
+function whereTex(parts: { sym: string; name: string }[]): string {
+  const bits = parts.map((q) => `$${q.sym}$ is ${q.name}`);
+  return bits.length === 1 ? bits[0] : `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}`;
+}
+
+/** A drawn product of two or three quantities, each to a small power. */
+function drawCombo(rng: RNG): Combo | null {
+  const parts = rng.pickDistinct(COMBO_PARTS, rng.int(2, 3));
+  const factors: Factor[] = parts.map((q, i) => ({
+    sym: q.sym,
+    qty: q.qty,
+    // the first factor is always on top, so the expression is never a bare reciprocal
+    p: (i > 0 && rng.bool(0.3) ? -1 : 1) * rng.weighted([1, 2, 3], [6, 3, 1]),
+  }));
+  const target = factorsVec(factors);
+  if (target.every((e) => e === 0)) return null; // a dimensionless Q has no units to choose between
+  if (target.some((e) => Math.abs(e) > 4)) return null; // nothing an exam would print
+  if (factors.reduce((t, f) => t + Math.abs(f.p), 0) > 4) return null; // keep it a 60-second count
+  const num = factors.filter((f) => f.p > 0), den = factors.filter((f) => f.p < 0);
+  if (num.length === 0) return null;
+  const expr = `Q = ${den.length ? `\\dfrac{${prodTex(num)}}{${prodTex(den)}}` : prodTex(num)}`;
+  const unitOf = (f: Factor) => vecTex(add([0, 0, 0, 0], QTY[f.qty], Math.abs(f.p))).replace(/\$/g, '');
+  const note = `$[Q] = ${num.map(unitOf).join(' \\times ')}${den.length ? ` \\div ${den.map(unitOf).join(' \\div ')}` : ''}$`;
+  return { expr, where: whereTex(parts), factors, note };
+}
+
 function comboQ(rng: RNG): Generated | null {
-  const item = rng.pick(COMBOS);
-  const target = specVec(item.spec)!;
-  const options = vecOptions(rng, target, [], item.near);
+  const item: Combo | null = rng.bool(0.35) ? rng.pick(COMBOS) : drawCombo(rng);
+  if (!item) return null;
+  const target = factorsVec(item.factors);
+  const near = item.near ?? [];
+  // the wrong options are what this product gives when the index arithmetic slips, not a list of
+  // other quantities: at level 4 the question is the arithmetic
+  const options = vecOptions(rng, target, slipVecs(rng, item.factors).slice(0, 3), near);
   if (!options) return null;
   const g = finish(
     options,
     `${item.note} $= ${vecTex(target).replace(/\$/g, '')}$.`,
-    item.trap,
+    item.trap ?? 'Collect the powers of kg, m and s one base unit at a time: a squared factor contributes twice its powers, and a factor underneath subtracts them.',
     ['units', 'base units', 'combination'],
-    { shape: 'vec', spec: item.spec },
+    { shape: 'vec', spec: factorsSpec(item.factors) },
   );
   return { ...g, stem: `A quantity $Q$ is given by $${item.expr}$, where ${item.where}.\n\nWhich of the following gives the SI base units of $Q$?` };
 }

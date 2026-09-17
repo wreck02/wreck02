@@ -104,15 +104,22 @@ function namedRungs(e: Est): Map<number, string> {
  * "pick the second largest" then scores without any physics. Candidates keep their order inside
  * each side, so the named mistakes still come before the power-of-ten pads.
  */
-function balance(rng: RNG, answer: Exact, cands: Distractor[], count: number): Distractor[] {
+function balance(rng: RNG, answer: Exact, named: Distractor[], pads: Distractor[], count: number): Distractor[] {
   const a = answer.toNumber();
-  const below = cands.filter((d) => d.value.toNumber() < a);
-  const above = cands.filter((d) => d.value.toNumber() > a);
-  const lo = Math.max(0, count - above.length);
-  const hi = Math.min(count, below.length);
-  if (lo > hi) return cands.slice(0, count);
-  const nBelow = rng.int(lo, hi);
-  return [...below.slice(0, nBelow), ...above.slice(0, count - nBelow)];
+  const out: Distractor[] = [];
+  const take = (q: Distractor[], want: number) => { for (const d of q) { if (want <= 0 || out.length >= count) break; if (!out.includes(d)) { out.push(d); want--; } } };
+  const below = (ds: Distractor[]) => ds.filter((d) => d.value.toNumber() < a);
+  const above = (ds: Distractor[]) => ds.filter((d) => d.value.toNumber() > a);
+  const nb = below(named), na = above(named);
+  const lo = Math.max(0, count - na.length);
+  const hi = Math.min(count, nb.length);
+  take(nb, hi >= lo ? rng.int(lo, hi) : 0);
+  take(na, count - out.length);
+  // a side short of *named* mistakes borrows from the other side before any pad is used
+  take(nb, count - out.length);
+  take(pads.length ? below(pads) : [], count - out.length);
+  take(pads.length ? above(pads) : [], count - out.length);
+  return out;
 }
 
 /** Build the question: a ladder of powers of ten, or a 1 s.f. answer with named wrong turns. */
@@ -154,35 +161,46 @@ function estimate(rng: RNG, e: Est): Generated | null {
       [1, 2, 3, 4]
         .map((k) => rung(sign * k))
         .sort((p, q) => (Math.abs(p.k) + (p.named ? 0 : 1.5)) - (Math.abs(q.k) + (q.named ? 0 : 1.5)));
-    const below = side(-1), above = side(1);
-    const chosen: { k: number; trap: string; named: boolean }[] = [];
-    // A rung beyond a factor of 100 that no named mistake reaches is the weakest option there is: it
-    // carries only "a factor of 10^k out" and a candidate strikes it off on sight. The ordering above
-    // keeps those last, and no more than two of them may ever be used — which is what it costs to let
-    // the answer be the smallest or the largest option in a variant whose mistakes all pull one way.
-    let far = 0;
-    const take = (c: { k: number; trap: string; named: boolean }): boolean => {
-      if (chosen.length >= 4) return false;
-      const isFar = !c.named && Math.abs(c.k) >= 3;
-      if (isFar && far >= 2) return false;
-      if (cleanNum(round(target * Math.pow(10, c.k))) === null) return false;
-      if (isFar) far++;
-      chosen.push(c);
-      return true;
-    };
-    const drain = (q: typeof below, want: number) => {
-      const rest: typeof below = [];
-      while (want > 0 && q.length > 0) {
-        const c = q.shift()!;
-        if (take(c)) want--;
-        else rest.push(c);
-      }
-      q.unshift(...rest); // a rung passed over now may still be needed to fill the list out
-    };
-    drain(below, rng.int(Math.max(0, 4 - above.length), Math.min(4, below.length)));
-    drain(above, 4 - chosen.length);
-    drain(below, 4 - chosen.length);
-    drain(above, 4 - chosen.length);
+    /*
+     * A rung no named mistake reaches carries only "a factor of 10^k out", which names the size of
+     * the error rather than anything a candidate did. So the list is built with at most one such rung,
+     * and the cap is only loosened when the variant genuinely cannot offer four named ones. A rung
+     * beyond a factor of 100 is the weakest of all — nobody is out by 10^4 and cannot tell — so no
+     * more than two of those may ever appear, which is what it costs to let the answer be the
+     * smallest or the largest option in a variant whose mistakes all pull one way.
+     */
+    let chosen: { k: number; trap: string; named: boolean }[] = [];
+    for (const maxUnnamed of [1, 2, 4]) {
+      const below = side(-1), above = side(1);
+      chosen = [];
+      let far = 0;
+      let unnamed = 0;
+      const take = (c: { k: number; trap: string; named: boolean }): boolean => {
+        if (chosen.length >= 4) return false;
+        const isFar = !c.named && Math.abs(c.k) >= 3;
+        if (!c.named && unnamed >= maxUnnamed) return false;
+        if (isFar && far >= 2) return false;
+        if (cleanNum(round(target * Math.pow(10, c.k))) === null) return false;
+        if (isFar) far++;
+        if (!c.named) unnamed++;
+        chosen.push(c);
+        return true;
+      };
+      const drain = (q: typeof below, want: number) => {
+        const rest: typeof below = [];
+        while (want > 0 && q.length > 0) {
+          const c = q.shift()!;
+          if (take(c)) want--;
+          else rest.push(c);
+        }
+        q.unshift(...rest); // a rung passed over now may still be needed to fill the list out
+      };
+      drain(below, rng.int(Math.max(0, 4 - above.length), Math.min(4, below.length)));
+      drain(above, 4 - chosen.length);
+      drain(below, 4 - chosen.length);
+      drain(above, 4 - chosen.length);
+      if (chosen.length >= 4) break;
+    }
     if (chosen.length < 4) return null;
     const wrong = chosen.map((c) => round(target * Math.pow(10, c.k)));
     const values = [target, ...wrong];
@@ -209,6 +227,7 @@ function estimate(rng: RNG, e: Est): Generated | null {
   }
 
   const cands: Distractor[] = [];
+  const pads: Distractor[] = [];
   const seen: Exact[] = [ex];
   for (const m of e.mistakes) {
     if (m.value === null) continue;
@@ -226,9 +245,9 @@ function estimate(rng: RNG, e: Est): Generated | null {
     const v = cleanNum(round(target * Math.pow(10, k)));
     if (!v || seen.some((s) => s.equals(v))) continue;
     seen.push(v);
-    cands.push({ value: v, trap: slipTrap(k) });
+    pads.push({ value: v, trap: slipTrap(k) });
   }
-  const ds = balance(rng, ex, cands, 4);
+  const ds = balance(rng, ex, cands, pads, 4);
   if (ds.length < 4) return null;
   return {
     stem: e.stem,
@@ -285,7 +304,7 @@ function airMassQ(rng: RNG): Generated | null {
       { value: round(12 * l * w * h), trap: 'misread the density of air as $12\\ \\text{kg m}^{-3}$' },
       { value: round(rho * l * w * h * 10), trap: 'gave the weight in newtons, not the mass in kilograms' },
       { value: round(1200 * l * w * h), trap: 'read the density as $1.2\\ \\text{g cm}^{-3}$, which is $1200\\ \\text{kg m}^{-3}$' },
-      { value: round(2 * rho * (l * w + l * h + w * h)), trap: 'used the surface area of the room instead of its volume' },
+      { value: rho, trap: 'quoted the density, not the mass' },
     ],
     solution: `Volume $= ${n(l)} \\times ${n(w)} \\times ${n(h)} = ${n(l * w * h)}\\ \\text{m}^{3}$, so the mass is $1.2 \\times ${n(l * w * h)} \\approx ${napp(value)}\\ \\text{kg}$, i.e. about $${n(sf1(value))}\\ \\text{kg}$.`,
     trap: 'A room is three-dimensional: leaving out one dimension changes the answer by a factor of the order of 10, and air is a thousand times less dense than water.',
@@ -318,7 +337,8 @@ function bathQ(rng: RNG): Generated | null {
       { value: round(rho * l * w * d * 1000), trap: 'gave the mass in grams, not kilograms' },
       { value: round(10000 * l * w * d), trap: 'used $10^{4}\\ \\text{kg m}^{-3}$ for the density of water' },
       { value: round(rho * l * w * d * 10), trap: 'gave the weight in newtons, not the mass in kilograms' },
-      { value: round(2 * rho * (l * w + l * d + w * d)), trap: 'used the surface area of the water instead of its volume' },
+      { value: rho, trap: 'quoted the density, not the mass' },
+      { value: round(100 * l * w * d), trap: 'used $100\\ \\text{kg m}^{-3}$ for the density of water' },
     ],
     solution: `Volume $= ${n(l)} \\times ${n(w)} \\times ${n(d)} = ${napp(l * w * d)}\\ \\text{m}^{3}$, so the mass is $1000 \\times ${napp(l * w * d)} \\approx ${napp(value)}\\ \\text{kg}$, i.e. about $${n(sf1(value))}\\ \\text{kg}$.`,
     trap: 'Mass = density × volume, and a cubic metre of water is 1000 kg: the depth is part of the volume.',
@@ -479,7 +499,6 @@ function atmosphereQ(rng: RNG): Generated | null {
       { value: round((p * l * h) / 1000), trap: 'gave the force in kN, not N' },
       { value: round(p * 1000 * l * h), trap: 'read the pressure as $10^{5}\\ \\text{kPa}$' },
       { value: round(1e4 * l * h), trap: 'took atmospheric pressure as $10^{4}\\ \\text{Pa}$' },
-      { value: round(p * 2 * (l + h)), trap: 'used the perimeter of the wall instead of its area' },
     ],
     solution: `Area $= ${n(l)} \\times ${n(h)} = ${n(l * h)}\\ \\text{m}^{2}$, so $F = pA = 10^{5} \\times ${n(l * h)} = ${E(value).toLatex({ format: 'sf' })}\\ \\text{N}$, i.e. about $${E(sf1(value)).toLatex({ format: 'sf' })}\\ \\text{N}$.`,
     trap: 'Force = pressure × area; the wall does not fall over because the same air pushes on the other side.',
@@ -510,7 +529,6 @@ function solarQ(rng: RNG): Generated | null {
       { value: round(I * l * w * 60), trap: 'multiplied by 60: that is the energy in a minute, in joules' },
       { value: round(I * 1000 * l * w), trap: 'read the intensity as $1000\\ \\text{kW m}^{-2}$' },
       { value: round(100 * l * w), trap: 'took the intensity as $100\\ \\text{W m}^{-2}$' },
-      { value: round(I * 2 * (l + w)), trap: 'used the perimeter of the roof instead of its area' },
     ],
     solution: `Area $= ${n(l)} \\times ${n(w)} = ${n(l * w)}\\ \\text{m}^{2}$, so $P = IA = 1000 \\times ${n(l * w)} = ${E(value).toLatex({ format: 'sf' })}\\ \\text{W}$, i.e. about $${E(sf1(value)).toLatex({ format: 'sf' })}\\ \\text{W}$.`,
     trap: 'Power = intensity × area: an intensity is already a power per square metre, so it is multiplied, not divided.',

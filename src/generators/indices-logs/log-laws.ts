@@ -1,5 +1,5 @@
 import { defineTemplate, retry, type Generated, type Level } from '../../core/template';
-import { E, frac } from '../../core/exact';
+import { E, frac, type Exact } from '../../core/exact';
 import { buildOptions, buildChoiceOptions, type Distractor } from '../../core/options';
 import { isCleanExact } from '../../core/clean';
 import type { RNG } from '../../core/rng';
@@ -50,6 +50,43 @@ function factorPairs(S: number, max: number): [number, number][] {
 
 function clean(ds: Distractor[]): Distractor[] {
   return ds.filter((d) => Number.isFinite(d.value.toNumber()) && isCleanExact(d.value).ok);
+}
+
+/**
+ * Fill the four slots from both sides of the answer. A target number of options below the answer
+ * is drawn first and each slot is then filled from whichever side is still short, with the
+ * headline traps preferred *within the side that is needed*. Taking every `must` first (or, worse,
+ * offering a fixed menu of three candidates below and three above, as the log equation used to)
+ * makes the answer the median of the five options in question after question. Returns null when
+ * four distinct named candidates are not available, so the caller redraws instead of letting
+ * `buildOptions` pad with unlabelled perturbations.
+ */
+function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] | null {
+  const seen: Exact[] = [answer];
+  const out: Distractor[] = [];
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  const pools = [rng.shuffle(clean(must)), rng.shuffle(clean(extra))];
+  const wantBelow = rng.int(0, count);
+  const pull = (below: boolean): Distractor | null => {
+    for (const pool of pools) {
+      const i = pool.findIndex((d) => isBelow(d) === below && !seen.some((s) => s.equals(d.value)));
+      if (i >= 0) return pool.splice(i, 1)[0];
+    }
+    return null;
+  };
+  while (out.length < count) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    const d = pull(needBelow) ?? pull(!needBelow);
+    if (!d) return null;
+    seen.push(d.value);
+    out.push(d);
+  }
+  return out;
+}
+
+function numericOptions(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]) {
+  const ds = ranked(rng, answer, must, extra);
+  return ds && buildOptions(rng, answer, ds);
 }
 
 /** "2\log_{3} 6 - \log_{3} 4" from signed coefficients. */
@@ -126,47 +163,59 @@ function slipsLand(b: number, k: number, coefs: number[], args: number[]): boole
 }
 
 /**
- * Distractors for the "find the value" levels. Every one is the value a named mistake produces:
- * the law slips that land on a power of the base, the reversal of a difference, the argument
- * quoted instead of the logarithm, and a single miscount of the powers of b.
+ * Distractors for the "find the value" levels, split into the headline mistakes the question is
+ * built around and the rest. Every one is the value a named mistake produces: the law slips that
+ * land on a power of the base, the reversal of a difference, a term dropped or mis-signed, the
+ * argument quoted instead of the logarithm, and a miscount of the powers of b (the two miscounts
+ * are opposite slips, so they carry different wording rather than the same trap twice).
  */
-function collapseDistractors(b: number, k: number, coefs: number[], args: number[]): Distractor[] {
+function collapseDistractors(b: number, k: number, coefs: number[], args: number[]): { must: Distractor[]; extra: Distractor[] } {
   const T = b ** k;
   const named: Distractor[] = [];
   for (const s of slipArgs(coefs, args)) {
     const m = powerExp(b, s.arg);
     if (m !== null && m !== k) named.push({ value: E(m), trap: s.trap });
   }
-  // reversing a two-term difference gives log_b(y / x^n) = −k
-  if (coefs.length === 2 && coefs.some((c) => c < 0) && k !== 0) {
-    named.push({ value: E(-k), trap: 'divided the wrong way round: that is the logarithm of the reciprocal' });
-  }
-  named.slice(0, 2).forEach((d) => { d.must = true; });
-  const extra: Distractor[] = [];
+  // Reversing a two-term difference gives log_b(y / x^n) = −k exactly. It is not offered: the value
+  // of one of these expressions is positive by construction, so a list holding both v and −v lets a
+  // candidate take the positive one without touching a log law. "Multiplied where the minus means
+  // divide" covers the same misconception with a value that is not the answer's mirror image.
+  const must = clean(named).slice(0, 2).map((d) => ({ ...d, must: true }));
+  const extra: Distractor[] = clean(named).slice(2);
   if (T <= 1000) {
-    extra.push({
-      value: E(T),
-      trap: 'gave the argument of the logarithm rather than its value',
-      // when no law slip lands on a power of the base, this is the mistake the question tests
-      must: named.length === 0,
-    });
+    extra.push({ value: E(T), trap: 'gave the argument of the logarithm rather than its value' });
+    // when no law slip lands on a power of the base, that is the mistake the question tests
+    if (must.length === 0) must.push({ value: E(T), trap: 'gave the argument of the logarithm rather than its value', must: true });
   }
   if (Number.isInteger(T / b) && T / b <= 100) {
     extra.push({ value: E(T / b), trap: `divided the argument by the base: $\\log_{${b}} ${T}$ is not $${T} \\div ${b}$` });
   }
+  // a whole logarithm dropped, or the last one's sign reversed — offered when what is left is
+  // still a power of the base, so the value is one a candidate could actually write down
+  const last = coefs.length - 1;
+  const partial = powerExp(b, argument(coefs.slice(0, last), args.slice(0, last)));
+  if (partial !== null && partial !== k) extra.push({ value: E(partial), trap: `left out $\\log_{${b}} ${args[last]}$ altogether` });
+  const flipped = powerExp(b, argument([...coefs.slice(0, last), -coefs[last]], args));
+  if (flipped !== null && flipped !== k) {
+    extra.push({ value: E(flipped), trap: coefs[last] < 0 ? 'multiplied by the last argument where the minus sign means divide' : 'divided by the last argument where the plus sign means multiply' });
+  }
   if (k !== 0) extra.push({ value: E(0), trap: 'thought the arguments cancelled down to $\\log_b 1 = 0$' });
   if (k !== 1) extra.push({ value: E(1), trap: 'thought the arguments cancelled down to $\\log_b b = 1$' });
-  extra.push({ value: E(k - 1), trap: `miscounted the powers of ${b}: ${T} = ${b}^{${k}}` });
-  extra.push({ value: E(k + 1), trap: `miscounted the powers of ${b}: ${T} = ${b}^{${k}}` });
-  return clean([...named, ...extra]);
+  extra.push({ value: E(k - 1), trap: `counted one power of ${b} too few: ${T} = ${b}^{${k}}` });
+  extra.push({ value: E(k + 1), trap: `counted one power of ${b} too many: ${T} = ${b}^{${k}}` });
+  extra.push({ value: E(k + 2), trap: `misread ${T} as ${b}^{${k + 2}}` });
+  return { must, extra: clean(extra) };
 }
 
-function collapseValue(rng: RNG, b: number, k: number, coefs: number[], args: number[], level: Level): Generated {
+function collapseValue(rng: RNG, b: number, k: number, coefs: number[], args: number[], level: Level): Generated | null {
   const answer = E(k);
   const T = b ** k;
   const single = argument(coefs, args);
   const hasCoef = coefs.some((c) => Math.abs(c) !== 1);
   const hasMinus = coefs.some((c) => c < 0);
+  const { must, extra } = collapseDistractors(b, k, coefs, args);
+  const options = numericOptions(rng, answer, must, extra);
+  if (!options) return null;
   const trap = hasCoef
     ? 'n log a = log(a^n), not log(na): the coefficient becomes a power before the arguments are combined.'
     : hasMinus
@@ -175,7 +224,7 @@ function collapseValue(rng: RNG, b: number, k: number, coefs: number[], args: nu
   return {
     stem: `Find the value of $${exprTex(b, coefs, args)}$.`,
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, collapseDistractors(b, k, coefs, args), { fallback: [E(k + 2), E(k - 2), E(2 * k)] }),
+    options,
     solution: `Combine into one logarithm: $${exprTex(b, coefs, args)} = \\log_{${b}} ${single}$, and $${b}^{${k}} = ${T}$, so the value is $${k}$.`,
     trap,
     tags: ['logarithms', 'log-laws', level >= 2 ? 'power-law' : 'product-law'],
@@ -238,13 +287,13 @@ const NA_FAMILIES: [number, number][] = [[3, 6], [3, 18], [3, 54], [5, 10], [5, 
 /** Level 2: 2 log_3 6 − log_3 4 = 2, 3 log_2 6 − log_2 27 = 3, 2 log_5 10 + log_5 5 − log_5 4 = 3. */
 function coefCollapse(rng: RNG): Generated | null {
   let b: number, n: number, x: number;
-  if (rng.bool(0.5)) {
+  if (rng.bool(0.35)) {
     [b, x] = rng.pick(NA_FAMILIES);
     n = 2;
   } else {
     b = rng.pick(BASES);
     n = rng.pick([2, 2, 3]);
-    x = rng.int(2, 16);
+    x = rng.int(2, 24);
     if (powerExp(b, x) !== null) return null; // n log_b b^m is no question at all
   }
   const P = x ** n;
@@ -268,10 +317,13 @@ function coefCollapse(rng: RNG): Generated | null {
   while (h) [g, h] = [h, g % h];
   const y = T / g, z = P / g;
   if (y < 2 || y > 100 || z < 2 || z > 100 || y === z) return null;
-  // the coefficient reads just as naturally in the middle: log_5 5 + 2 log_5 10 − log_5 4
-  return rng.bool(0.5)
-    ? collapseValue(rng, b, k, [n, 1, -1], [x, y, z], 2)
-    : collapseValue(rng, b, k, [1, n, -1], [y, x, z], 2);
+  // the coefficient reads just as naturally in the middle or at the end:
+  // log_5 5 + 2 log_5 10 − log_5 4,  log_5 5 − log_5 4 + 2 log_5 10
+  return rng.pick([
+    () => collapseValue(rng, b, k, [n, 1, -1], [x, y, z], 2),
+    () => collapseValue(rng, b, k, [1, n, -1], [y, x, z], 2),
+    () => collapseValue(rng, b, k, [1, -1, n], [y, z, x], 2),
+  ])();
 }
 
 // ----------------------------------------------------------------------------- level 3
@@ -401,21 +453,27 @@ function chain(rng: RNG): Generated | null {
   const m = usePower ? p ** mPow : rng.pick([6, 7, 10, 12, 15, 20]);
   if (m === B || m === 1 || m > 200) return null;
   if (usePower && (m === N || p ** mPow > 128)) return null;
-  const cands: Distractor[] = [
-    { value: frac(a, e), trap: 'inverted the chain: this is log_N B, not log_B N', must: true },
+  const must: Distractor[] = [
+    { value: frac(a, e), trap: 'inverted the chain: this is log_N B, not log_B N' },
+  ];
+  const extra: Distractor[] = [
     { value: E(p ** (e - a)), trap: 'divided the numbers instead of taking logarithms' },
-    { value: answer.add(E(1)), trap: 'index slip of one' },
-    { value: answer.sub(E(1)), trap: 'index slip of one' },
+    { value: E(e - a), trap: `subtracted the indices: $\\log_{${B}} ${N}$ divides them, it does not subtract them` },
+    { value: E(e * a), trap: 'multiplied the indices instead of dividing them' },
+    { value: frac(e + 1, a), trap: `miscounted the powers of ${p}: ${N} = ${p}^{${e}}` },
+    { value: frac(e, a + 1), trap: `miscounted the powers of ${p}: ${B} = ${p}^{${a}}` },
     { value: answer.mulRat(2), trap: 'doubled the result' },
   ];
   if (usePower) {
-    cands.push({ value: frac(mPow, a).add(frac(e, mPow)), trap: 'added the two logarithms instead of multiplying them', must: true });
-    cands.push({ value: frac(mPow, a).mul(frac(mPow, e)), trap: 'inverted the second logarithm' });
+    must.push({ value: frac(mPow, a).add(frac(e, mPow)), trap: 'added the two logarithms instead of multiplying them' });
+    extra.push({ value: frac(mPow, a).mul(frac(mPow, e)), trap: 'inverted the second logarithm' });
   }
+  const options = numericOptions(rng, answer, must, extra);
+  if (!options) return null;
   return {
     stem: `Find the value of $\\log_{${B}} ${m} \\times \\log_{${m}} ${N}$.`,
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, clean(cands), { fallback: [answer.add(E(2)), frac(e + 1, a), frac(e, a + 1)].filter((v) => isCleanExact(v).ok) }),
+    options,
     solution: `Change of base: $\\log_{${B}} ${m} \\times \\log_{${m}} ${N} = \\log_{${B}} ${N}$. Since $${B} = ${p}^{${a}}$ and $${N} = ${p}^{${e}}$, this is $${answer.toLatex()}$.`,
     trap: 'log_B m × log_m N telescopes to log_B N — the middle number disappears; it is not a sum.',
     tags: ['logarithms', 'change-of-base', 'log-laws'],
@@ -424,36 +482,56 @@ function chain(rng: RNG): Generated | null {
   };
 }
 
-/** Solve log_b x + log_b (x − d) = k. */
+/**
+ * Solve log_b x + log_b (x − d) = k, or log_b x + log_b (x + d) = k.
+ *
+ * Both signs are drawn: with "− d" the answer is the larger factor of b^k and with "+ d" it is the
+ * smaller, so the wrong routes do not all sit on the same side of the answer in every question.
+ */
 function solveEquation(rng: RNG): Generated | null {
   const b = rng.pick(BASES);
-  const k = rng.int(2, b === 2 ? 6 : b === 3 ? 4 : b === 5 ? 3 : 2);
+  const k = rng.int(2, b === 2 ? 7 : b === 3 ? 4 : b === 5 ? 3 : 2);
   const N = b ** k;
   if (N < 8 || N > 200) return null;
   const divisors: number[] = [];
   for (let r = 2; r <= N; r++) if (N % r === 0 && r > N / r) divisors.push(r);
-  const pool = divisors.filter((r) => r - N / r <= 30 && r <= 60 && N / r >= 2);
+  const pool = divisors.filter((r) => r - N / r <= 30 && r <= 64 && N / r >= 2);
   if (pool.length === 0) return null;
-  const r = rng.pick(pool);
-  const other = N / r;
-  const d = r - other;
+  const big = rng.pick(pool);
+  const small = N / big;
+  const d = big - small;
+  const minus = rng.bool(0.5); // x(x − d) = N (answer is the larger root) or x(x + d) = N (the smaller)
+  const r = minus ? big : small;
+  const otherRoot = minus ? -small : -big; // the rejected root of the quadratic
+  const wrongRoot = minus ? small : big; // the other factor: what x ∓ d equals
   const answer = E(r);
-  const cands: Distractor[] = [
-    { value: E(-other), trap: 'kept the negative root, but a logarithm needs a positive argument', must: true },
-    { value: E(other), trap: `solved for $x - ${d}$ rather than for $x$` },
-    { value: E(N), trap: 'ignored the second logarithm and read x = b^k straight off' },
-    { value: E(r + d), trap: 'added the difference back on again' },
-    { value: E(k), trap: 'gave the value of the logarithm, not of x' },
+  const sq = Math.round(Math.sqrt(N));
+  const must: Distractor[] = [
+    { value: E(otherRoot), trap: 'kept the negative root, but a logarithm needs a positive argument' },
   ];
-  if ((N + d) % 2 === 0) cands.push({ value: E((N + d) / 2), trap: 'treated log a + log b as log(a + b)', must: true });
+  const extra: Distractor[] = [
+    { value: E(wrongRoot), trap: `solved for $x ${minus ? '-' : '+'} ${d}$ rather than for $x$` },
+    { value: E(N), trap: 'ignored the second logarithm and read x = b^k straight off' },
+    { value: E(minus ? r + d : r - d), trap: `moved the ${d} the wrong way at the end` },
+    { value: E(k), trap: 'gave the value of the logarithm, not of x' },
+    { value: E(minus ? N + d : N - d), trap: `applied the base to the second logarithm only: read it as $x ${minus ? '-' : '+'} ${d} = ${b}^{${k}}$` },
+  ];
+  if (sq * sq === N && sq !== r) extra.push({ value: E(sq), trap: `dropped the ${d} and solved $x^{2} = ${N}$` });
+  // log_b x + log_b (x ∓ d) read as log_b(2x ∓ d) = k gives a linear equation
+  if ((N + (minus ? d : -d)) % 2 === 0) {
+    must.push({ value: E((N + (minus ? d : -d)) / 2), trap: 'treated log a + log b as log(a + b)' });
+  }
+  const dTex = minus ? `x - ${d}` : `x + ${d}`;
+  const options = numericOptions(rng, answer, must, extra);
+  if (!options) return null;
   return {
-    stem: `Solve $\\log_{${b}} x + \\log_{${b}} (x - ${d}) = ${k}$.`,
+    stem: `Solve $\\log_{${b}} x + \\log_{${b}} (${dTex}) = ${k}$.`,
     answer: { kind: 'exact', value: answer },
-    options: buildOptions(rng, answer, clean(cands)),
-    solution: `$\\log_{${b}} \\left(x(x - ${d})\\right) = ${k}$, so $x(x - ${d}) = ${b}^{${k}} = ${N}$, i.e. $x = ${r}$ or $x = ${-other}$. The negative root is rejected because $\\log_{${b}} x$ needs $x > 0$, so $x = ${r}$.`,
+    options,
+    solution: `$\\log_{${b}} \\left(x(${dTex})\\right) = ${k}$, so $x(${dTex}) = ${b}^{${k}} = ${N}$, i.e. $x = ${r}$ or $x = ${otherRoot}$. The negative root is rejected because $\\log_{${b}} x$ needs $x > 0$, so $x = ${r}$.`,
     trap: 'Both logarithms need a positive argument, so the negative root of the quadratic must be rejected.',
     tags: ['logarithms', 'log-laws', 'equation'],
-    params: { variant: 'solve', b, k, d },
+    params: { variant: 'solve', b, k, d: minus ? d : -d },
     typedAllowed: true,
   };
 }

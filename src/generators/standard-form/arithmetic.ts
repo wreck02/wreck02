@@ -240,8 +240,8 @@ function renormProduct(rng: RNG): Generated | null {
     { value: sf(ab, m * n), trap: 'multiplied the exponents' },
     { value: sf(a + b, m + n), trap: 'added the mantissas' },
     { value: sf(ab, m - n), trap: 'subtracted the exponents' },
-    { value: sf(ab, m), trap: 'dropped one of the powers of ten' },
-    { value: sf(ab, n), trap: 'dropped one of the powers of ten' },
+    { value: sf(ab, m), trap: "kept only the first number's power of ten" },
+    { value: sf(ab, n), trap: "kept only the second number's power of ten" },
   ]);
   const stem = `Find the value of $${br(a, m)} \\times ${br(b, n)}$, ${IN_SF}.`;
   const solution = `$${a} \\times ${b} = ${ab}$ and $10^{${m}} \\times 10^{${n}} = 10^{${m + n}}$, giving $${sfTex(ab, m + n)}$. Renormalise: $${ab} = ${ab / 10} \\times 10$, so the answer is $${ansTex(ans)}$.`;
@@ -343,8 +343,8 @@ function squareRoot(rng: RNG): Generated | null {
     { value: sf(Mw / 2, kA), trap: 'halved the mantissa instead of square-rooting it' },
     { value: sf(sw, Ew), trap: even ? 'square-rooted the mantissa but left the power of ten alone' : `rewrote as $${Mw} \\times 10^{${Ew}}$ but forgot to halve the exponent` },
     { value: even ? null : sf(sw, Ex), trap: 'square-rooted the mantissa but left the power of ten alone' },
-    { value: sf(sw, kA + 1), trap: even ? 'exponent off by one' : `halved ${Ex + 1} instead of rewriting with the even exponent ${Ew}` },
-    { value: sf(sw, kA - 1), trap: 'exponent off by one' },
+    { value: sf(sw, kA + 1), trap: even ? 'the halved exponent came out one too large' : `halved ${Ex + 1} instead of rewriting with the even exponent ${Ew}` },
+    { value: sf(sw, kA - 1), trap: 'the halved exponent came out one too small' },
     { value: sf(Mw, kA), trap: 'halved the exponent but forgot to square-root the mantissa' },
     { value: sf(Mw / 2, Ew), trap: 'halved the mantissa and left the exponent alone' },
   ]);

@@ -161,6 +161,8 @@ function neitherQ(rng: RNG): Generated | null {
   if (!r) return null;
   const ask = rng.bool() ? 'neither' : 'exactly-one';
   const answer = ask === 'neither' ? r.neither : r.onlyA + r.onlyB;
+  // an answer that is already printed in the stem can be copied off the page without counting
+  if ([r.n, r.a, r.b, r.both].includes(answer)) return null;
   const question = ask === 'neither'
     ? `How many of them ${c.verb} neither ${c.objA} nor ${c.objB}?`
     : `How many of them ${c.verb} exactly one of the two?`;

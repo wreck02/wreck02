@@ -271,7 +271,6 @@ function sectorAreaQ(rng: RNG): Generated | null {
     { value: E(4 * r * r).mulRat(HALF).mul(theta(a)), trap: 'used the diameter in place of the radius' },
     { value: E(r * r).mulRat(HALF), trap: 'forgot to multiply by the angle' },
     { value: theta(a).mulRat(HALF), trap: 'gave ½θ: the radius was never used' },
-    { value: s.perimeter, trap: 'gave the perimeter of the sector instead of its area' },
     { value: E(2 * r).mul(Exact.pi()), trap: 'gave the circumference of the whole circle' },
     { value: E(r * r).mul(theta(a)).div(Exact.pi().mulRat(2)), trap: 'multiplied $r^2$ by the fraction of a turn θ/2π instead of using ½r²θ' },
   ];

@@ -68,22 +68,41 @@ function cleanOnly(ds: Cand[]): Distractor[] {
 }
 
 /**
- * Every distinct `must` trap gets a slot before any `extra` one, so the headline mistakes survive the
- * shuffle; options more than `spread` times away from the answer are dropped — a wildly wrong size
- * gives the answer away.
+ * Fill the four slots from both sides of the answer: a target number of options below it is drawn
+ * first and each slot then comes from whichever side is still short, with the headline (`must`)
+ * mistakes preferred *within the side that is needed*.
+ *
+ * Taking every `must` first is what pinned two of these variants. All three headline mistakes in
+ * the tipping plank are shorter distances than the answer and two of the crane's are larger than
+ * the counterweight, so consuming them up front fixed the answer's rank in every single question
+ * ("the greatest distance is always one of the two largest numbers"). A must is now lost only in
+ * the draws that deliberately ask for the other side.
+ *
+ * Options more than `spread` times away from the answer are dropped — a wildly wrong size gives
+ * the answer away — and a draw that cannot fill four slots is rejected by `pack`, never padded.
  */
 function ranked(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], spread: number, count = 4): Distractor[] {
+  const a = answer.toNumber();
+  const near = (d: Distractor) => { const r = d.value.toNumber() / a; return r > 1 / spread - 1e-12 && r < spread + 1e-12; };
   const seen: Exact[] = [answer];
   const out: Distractor[] = [];
-  const a = answer.toNumber();
-  const near = (v: Exact) => { const r = v.toNumber() / a; return r > 1 / spread - 1e-12 && r < spread + 1e-12; };
-  const take = (d: Distractor) => {
-    if (out.length >= count || !near(d.value) || seen.some((s) => s.equals(d.value))) return;
+  const isBelow = (d: Distractor) => d.value.cmp(answer) < 0;
+  const pools = [rng.shuffle(must.filter(near)), rng.shuffle(extra.filter(near))];
+  const wantBelow = rng.int(0, count);
+  const pull = (below: boolean): Distractor | null => {
+    for (const pool of pools) {
+      const i = pool.findIndex((d) => isBelow(d) === below && !seen.some((s) => s.equals(d.value)));
+      if (i >= 0) return pool.splice(i, 1)[0];
+    }
+    return null;
+  };
+  while (out.length < count) {
+    const needBelow = out.filter(isBelow).length < wantBelow;
+    const d = pull(needBelow) ?? pull(!needBelow);
+    if (!d) break;
     seen.push(d.value);
     out.push(d);
-  };
-  must.forEach(take);
-  rng.shuffle(extra).forEach(take);
+  }
   return out;
 }
 
@@ -565,6 +584,8 @@ function crane(rng: RNG): Generated | null {
       { value: wj + wl, trap: 'added the two weights' },
       { value: (wj * (L / 2 - p) + wl * (L - p)) / (L - p), trap: 'divided by the load’s distance instead of the counterweight’s' },
       { value: (wj * (L / 2 - p) + wl * L) / p, trap: 'measured only the load’s distance from the wrong point' },
+      { value: ((wj + wl) * (L - p)) / p, trap: 'took the jib’s weight to act at $B$ with the load, not at the centre of the jib' },
+      { value: (wj * (L / 2 - p) + wl * (L - p)) * 2 / p, trap: 'doubled the counterweight' },
       { value: c / 2, trap: 'halved the counterweight' },
     ],
     solution: `Distances from $P$: the jib’s centre is $${n(L / 2 - p)}\\ \\text{m}$ and $B$ is $${n(L - p)}\\ \\text{m}$ on one side, the counterweight $${n(p)}\\ \\text{m}$ on the other. Moments about $P$: $C \\times ${n(p)} = ${n(wj)} \\times ${n(L / 2 - p)} + ${n(wl)} \\times ${n(L - p)}$, so $C = ${n(c)}\\ ${unit}$.`,

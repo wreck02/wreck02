@@ -53,7 +53,14 @@ for (const t of TEMPLATES) {
         s.ranks.push(rank / (nums.length - 1));
         if (rank === 0 || rank === nums.length - 1) s.extreme++;
         const abs = nums.map(Math.abs).filter((x) => x > 0);
-        if (abs.length >= 2) s.spreads.push(Math.max(...abs) / Math.min(...abs));
+        if (abs.length >= 2) {
+          // A power-of-ten ladder (unit conversions, standard form, order-of-magnitude
+          // estimates) is the right distractor set for those questions, so its spread
+          // is not a defect. Detect it and leave it out of the spread statistic.
+          const lo = Math.min(...abs);
+          const ladder = abs.every((x) => Math.abs(Math.log10(x / lo) - Math.round(Math.log10(x / lo))) < 0.02);
+          if (!ladder) s.spreads.push(Math.max(...abs) / lo);
+        }
         const keys = new Set(nums.map((x) => Number(x.toPrecision(3))));
         if (keys.size < nums.length) s.dup++;
       }

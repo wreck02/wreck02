@@ -39,11 +39,21 @@ function displayable(x: Exact): boolean {
   return e !== null && e >= -12 && e <= 14 && Math.abs(e) >= 2;
 }
 
+/**
+ * Filter the candidate list down to the distractors an exam would print.
+ *
+ * Two candidates with the *same* trap text are one mistake wearing two hats: offering both spends two
+ * of the four wrong slots on a single observation ("dropped one of the powers of ten" twice), so only
+ * the first of each trap survives. Give two genuinely different slips two different labels.
+ */
 function keep(cands: { value: Exact | null; trap: string }[]): Distractor[] {
   const out: Distractor[] = [];
+  const traps = new Set<string>();
   for (const c of cands) {
     if (!c.value || !displayable(c.value)) continue;
     if (out.some((d) => d.value.equals(c.value!))) continue;
+    if (traps.has(c.trap)) continue;
+    traps.add(c.trap);
     out.push({ value: c.value, trap: c.trap });
   }
   return out;

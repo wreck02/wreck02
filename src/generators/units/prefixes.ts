@@ -33,6 +33,10 @@ function cleanOnly(ds: Cand[], fmt: Fmt): Distractor[] {
     const v = round(d.value);
     if (v > 1e15 || v < 1e-12) continue;
     if (fmt === 'decimal' && (v > 1e7 || v < 1e-4)) continue;
+    // Beside options in standard form this one would print as "5 \times 10^{0}", which no exam
+    // writes and which marks the option out as the odd one on the page. The answer itself is never
+    // in this range when the list is in standard form.
+    if (fmt === 'sf' && v >= 1 && v < 10) continue;
     let ex: Exact;
     try { ex = E(v); } catch { continue; }
     if (!isCleanExact(ex).ok) continue;
@@ -203,7 +207,7 @@ interface Recipe {
   /** what generate multiplies by */
   mult: number;
   values: number[];
-  ctx: (v: string) => string;
+  ctx: (v: string, x: number) => string;
   quantity: string;
   /** extra named traps, as multipliers applied to the input value */
   wrong: { m: number; trap: string }[];
@@ -211,6 +215,18 @@ interface Recipe {
   hint?: string;
   /** the one-line trap for this conversion */
   trapLine: string;
+  /** how wide the option ladder may be, when 10^6 is wider than this conversion's mistakes need */
+  spread?: number;
+}
+
+/**
+ * A speed needs a context that fits its size. "A cyclist rides at 50 m s⁻¹" is 180 km/h, and once the
+ * stem is impossible the only option on the page that looks like a real speed is the correct one —
+ * which answers the question without any conversion.
+ */
+function speedCtx(kmh: number, v: string, unit: string): string {
+  const who = kmh <= 12 ? 'A runner jogs' : kmh <= 36 ? 'A cyclist rides' : kmh <= 110 ? 'A car travels' : 'A train travels';
+  return `${who} at $${v}\\ ${unit}$.`;
 }
 
 /** LaTeX for a conversion factor: 10^{-4}, 3.6, 1/3.6, 3.6 x 10^{6}. */
@@ -331,17 +347,21 @@ const LEVEL3: Recipe[] = [
     from: 'km/h', to: 'm/s',
     trapLine: '1000 m in 3600 s: km/h to $\\text{m s}^{-1}$ divides by 3.6, it does not multiply.', fromTex: '\\text{km/h}', toTex: '\\text{m s}^{-1}', words: 'in $\\text{m s}^{-1}$', mult: 5 / 18,
     values: [9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 144, 162, 180], quantity: 'speed',
-    ctx: (v) => `A car travels at $${v}\\ \\text{km/h}$.`,
+    ctx: (v, x) => speedCtx(x, v, '\\text{km/h}'),
     wrong: [{ m: 18 / 5, trap: 'multiplied by 3.6 instead of dividing by it' }, { m: 1e3 / 60, trap: 'divided by 60 instead of 3600' }, { m: 1, trap: 'left the number unchanged' }, { m: 1 / 3600, trap: 'divided by 3600 but forgot the 1000 m in a kilometre' }, { m: 1 / 60, trap: 'divided by 60 only: that converts hours to minutes' }],
     hint: '(1000 m in 3600 s: divide by 3.6.)',
+    // the mistakes here are factors of 3.6, 60 and 3600, so a three-decade ladder holds all of them,
+    // and it keeps two or three of the options at speeds a real cyclist, car or train could have
+    spread: 1e3,
   },
   {
     from: 'm/s', to: 'km/h',
     trapLine: '3.6 goes the other way here: $\\text{m s}^{-1}$ to km/h multiplies by 3.6.', fromTex: '\\text{m s}^{-1}', toTex: '\\text{km/h}', words: 'in $\\text{km/h}$', mult: 18 / 5,
     values: [2.5, 5, 7.5, 8, 10, 12, 12.5, 15, 17.5, 20, 22.5, 25, 30, 35, 40, 45, 50], quantity: 'speed',
-    ctx: (v) => `A cyclist rides at $${v}\\ \\text{m s}^{-1}$.`,
+    ctx: (v, x) => speedCtx(x * 3.6, v, '\\text{m s}^{-1}'),
     wrong: [{ m: 5 / 18, trap: 'divided by 3.6 instead of multiplying by it' }, { m: 60 / 1e3, trap: 'used 60 seconds in an hour' }, { m: 1, trap: 'left the number unchanged' }, { m: 3600, trap: 'multiplied by 3600 but forgot the 1000 m in a kilometre' }, { m: 60, trap: 'multiplied by 60 only: that converts seconds to minutes' }],
     hint: '(3600 s in an hour, 1000 m in a km: multiply by 3.6.)',
+    spread: 1e3,
   },
   {
     from: 'g/cm^3', to: 'kg/m^3',
@@ -390,7 +410,7 @@ function recipeQ(rng: RNG, pool: Recipe[]): Generated | null {
   const a = round(v * r.mult);
   const sf = fmtFor(a) === 'sf';
   return pack(rng, {
-    stem: `${r.ctx(n(v))}\n\nGive this ${r.quantity} ${r.words}${sf ? ', in standard form' : ''}.`,
+    stem: `${r.ctx(n(v), v)}\n\nGive this ${r.quantity} ${r.words}${sf ? ', in standard form' : ''}.`,
     answer: a,
     unit: r.toTex,
     must: r.wrong.slice(0, 2).map((w) => ({ value: round(v * w.m), trap: w.trap })),
@@ -404,8 +424,9 @@ function recipeQ(rng: RNG, pool: Recipe[]): Generated | null {
     params: { variant: 'convert', v, from: r.from, to: r.to },
     // 10^6, not the default 10^4: the headline trap of a conversion is the conversion applied the
     // wrong way round, which sits a factor of mult² from the answer. A narrower ladder would leave
-    // the very mistake the question tests out of the option list.
-    spread: 1e6,
+    // the very mistake the question tests out of the option list. A recipe whose mistakes are closer
+    // in than that says so itself.
+    spread: r.spread ?? 1e6,
   });
 }
 

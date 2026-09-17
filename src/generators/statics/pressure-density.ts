@@ -240,9 +240,9 @@ function densityQ(rng: RNG): Generated | null {
     trap: '1 m³ is 10⁶ cm³, not 10³: dividing by the wrong power of ten is the whole question.',
     tags: ['density', 'units'],
     params: { variant: 'density', rho, vCm3, mKg },
-    // A conversion question's options are a power-of-ten ladder, and the mistakes it is built from are
-    // 10³ and 10⁴ out, so the ladder has to be at least that long on both sides of the answer.
-    spread: 1e4,
+    // A conversion question's options are a power-of-ten ladder, and the mistakes it is built from
+    // reach 10³ from the answer, so the ladder has to be about that long on both sides of it.
+    spread: 2000,
   });
 }
 
@@ -326,7 +326,7 @@ function massFromDensityQ(rng: RNG): Generated | null {
     trap: 'The volume must be in m³ (÷10⁶) before it is multiplied by a density in kg m⁻³.',
     tags: ['density', 'mass', 'units'],
     params: { variant: 'mass-from-density', rho, vCm3 },
-    spread: 1e4,
+    spread: 2000,
   });
 }
 
@@ -666,7 +666,7 @@ function hydraulicQ(rng: RNG, ask: 'load' | 'rise' | 'work'): Generated | null {
       trap: 'Turn the mass into a weight first, then divide by the ratio of the areas — the small piston carries the smaller force.',
       tags: ['pressure', 'hydraulics'],
       params: { variant: 'hydraulic-load', a1, a2, mKg },
-      spread: 200,
+      spread: 120,
     });
   }
 
@@ -699,7 +699,7 @@ function hydraulicQ(rng: RNG, ask: 'load' | 'rise' | 'work'): Generated | null {
       trap: 'A hydraulic press conserves energy: the large force moves through a proportionally smaller distance, so the work is the same on both sides — and centimetres must become metres.',
       tags: ['pressure', 'hydraulics', 'energy'],
       params: { variant: 'hydraulic-work', a1, a2, F1, d1 },
-      spread: 500,
+      spread: 150,
     });
   }
 
@@ -724,14 +724,13 @@ function hydraulicQ(rng: RNG, ask: 'load' | 'rise' | 'work'): Generated | null {
       { value: round(d2 * 10), trap: 'gave the answer in mm, not cm' },
       { value: round(d2 / 10), trap: 'a power of ten lost' },
       { value: round(d1 / 2), trap: 'halved the distance instead of dividing by the ratio of the forces' },
-      { value: round(d2 / 100), trap: 'gave the answer in metres, not centimetres' },
       { value: round(d1 / (k * k)), trap: 'divided by the ratio of the forces twice over' },
     ],
     solution: `The press cannot create energy, so $F_1 d_1 = W d_2$: the ratio of the forces is $${n(W2)} / ${n(F1)} = ${n(k)}$, so $d_2 = \\dfrac{${n(d1)}}{${n(k)}} = ${n(d2)}\\ \\text{cm}$.`,
     trap: 'Work in = work out: the load rises as many times less as its weight is times bigger than the applied force.',
     tags: ['pressure', 'hydraulics', 'energy'],
     params: { variant: 'hydraulic-rise', F1, W2, d1 },
-    spread: 200,
+    spread: 60,
   });
 }
 

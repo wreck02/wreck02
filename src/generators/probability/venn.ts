@@ -59,18 +59,54 @@ function intro(c: Ctx, r: Regions): string {
   return `In ${c.group} ${r.n} ${c.unit}, ${r.a} ${c.verb} ${c.objA}, ${r.b} ${c.verb} ${c.objB} and ${r.both} ${c.verb} both.`;
 }
 
-function countOptions(rng: RNG, answer: number, ds: Distractor[]) {
-  const usable = ds.filter((d) => d.value.isInteger() && d.value.toNumber() > 0 && isCleanExact(d.value).ok);
-  const fallback = [answer + 1, answer - 1, answer + 2, answer - 2, answer + 5, answer - 5, answer + 10].filter((v) => v > 0).map(E);
-  return buildOptions(rng, E(answer), usable, { fallback });
+/**
+ * Choose which distractors reach the option list.
+ *
+ * Exactly ONE `must` trap is guaranteed a slot, drawn at random from the headline mistakes; the
+ * remaining slots are filled towards a target rank drawn uniformly from whatever the pool allows.
+ * Guaranteeing both halves of a bracketing pair — |A| + |B| and |A| + |B| + |A ∩ B| are always above
+ * the union, "exactly one" and "neither" always below it — put the answer at the exact middle of the
+ * five in two questions out of three, so "strike the ends and take the middle" beat counting.
+ */
+function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[], count = 4): Distractor[] {
+  const seen: Exact[] = [answer];
+  const keep: Distractor[] = [];
+  for (const d of [...rng.shuffle(must).map((x) => ({ ...x, must: true })), ...extra]) {
+    if (!Number.isFinite(d.value.toNumber()) || seen.some((s) => s.equals(d.value))) continue;
+    seen.push(d.value);
+    keep.push(d);
+  }
+  const forced = keep.filter((d) => d.must).slice(0, 1);
+  const rest = rng.shuffle(keep.filter((d) => !forced.includes(d)));
+  const below = rest.filter((d) => d.value.cmp(answer) < 0);
+  const above = rest.filter((d) => d.value.cmp(answer) > 0);
+  const need = count - forced.length;
+  const fBelow = forced.filter((d) => d.value.cmp(answer) < 0).length;
+  const lo = fBelow + Math.max(0, need - above.length);
+  const hi = fBelow + Math.min(need, below.length);
+  if (lo > hi) return [...forced, ...rest].slice(0, count);
+  const r = rng.int(lo, hi);
+  return [...forced, ...below.slice(0, r - fBelow), ...above.slice(0, need - (r - fBelow))];
 }
 
-function probOptions(rng: RNG, answer: Exact, ds: Distractor[]) {
-  const usable = ds.filter((d) => {
+/**
+ * Options for a count. `max` is the size of the group: an option bigger than that is struck out on
+ * sight ("31 of the 28 people own one"), so the double-counting traps are only offered when the
+ * numbers keep them inside the group.
+ */
+function countOptions(rng: RNG, answer: number, must: Distractor[], extra: Distractor[], max: number) {
+  const ok = (d: Distractor) => d.value.isInteger() && d.value.toNumber() > 0 && d.value.toNumber() <= max && isCleanExact(d.value).ok;
+  const fallback = [answer + 1, answer - 1, answer + 2, answer - 2, answer + 5, answer - 5, answer + 10]
+    .filter((v) => v > 0 && v <= max).map(E);
+  return buildOptions(rng, E(answer), balanced(rng, E(answer), must.filter(ok), extra.filter(ok)), { fallback });
+}
+
+function probOptions(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor[]) {
+  const ok = (d: Distractor) => {
     const v = d.value.toNumber();
     return Number.isFinite(v) && v > 0 && v < 1 && isCleanExact(d.value).ok;
-  });
-  return buildOptions(rng, answer, usable, { format: 'fraction', fallback: PROB_FALLBACK });
+  };
+  return buildOptions(rng, answer, balanced(rng, answer, must.filter(ok), extra.filter(ok)), { format: 'fraction', fallback: PROB_FALLBACK });
 }
 
 function pickVariant(rng: RNG, fns: ((rng: RNG) => Generated | null)[]): Generated | null {
@@ -88,16 +124,27 @@ function unionQ(rng: RNG): Generated | null {
   const c = rng.pick(CONTEXTS);
   const r = drawRegions(rng, [20, 24, 25, 28, 30, 32, 36, 40]);
   if (!r) return null;
+  // |A| + |B| = union + |A ∩ B| and |A| + |B| + |A ∩ B| = union + 2|A ∩ B| are the double-counting
+  // traps, and both have to be possible counts: bigger than the group, they are struck out without
+  // any counting at all, and they are also the only two options above the answer.
+  if (2 * r.both > r.neither) return null;
   return {
     stem: `${intro(c, r)}\n\nHow many of them ${c.verb} at least one of the two?`,
     answer: { kind: 'exact', value: E(r.union) },
     options: countOptions(rng, r.union, [
-      { value: E(r.a + r.b), trap: 'added the two groups without subtracting the overlap', must: true },
+      { value: E(r.a + r.b), trap: 'added the two groups without subtracting the overlap' },
+    ], [
       { value: E(r.a + r.b - 2 * r.both), trap: 'counted only those doing exactly one of the two' },
       { value: E(r.neither), trap: 'gave the number doing neither' },
       { value: E(r.n - r.both), trap: 'subtracted the overlap from the whole group' },
       { value: E(r.a + r.b + r.both), trap: 'added the overlap instead of subtracting it' },
-    ]),
+      // undershoots: without them every option but "exactly one" sits above the union and the answer
+      // is the middle of the five in two questions out of three
+      { value: E(r.union - r.both), trap: 'subtracted the overlap twice' },
+      { value: E(Math.max(r.a, r.b)), trap: 'gave the larger of the two groups on its own' },
+      { value: E(Math.min(r.a, r.b)), trap: 'gave the smaller of the two groups on its own' },
+      { value: E(r.n), trap: 'assumed nobody was left out and gave the size of the whole group' },
+    ], r.n),
     solution: `$|A \\cup B| = ${r.a} + ${r.b} - ${r.both} = ${r.union}$ — the ${r.both} in both groups are counted twice in ${r.a} + ${r.b}.`,
     trap: 'Adding the two totals double-counts the overlap, so the intersection must be subtracted once.',
     tags: ['probability', 'venn', 'inclusion-exclusion'],
@@ -117,22 +164,33 @@ function neitherQ(rng: RNG): Generated | null {
   const question = ask === 'neither'
     ? `How many of them ${c.verb} neither ${c.objA} nor ${c.objB}?`
     : `How many of them ${c.verb} exactly one of the two?`;
-  const ds: Distractor[] = ask === 'neither'
+  // Only one headline trap is guaranteed a slot: forcing both n − |A| − |B| (below) and the union
+  // (above) bracketed the answer in every question.
+  const must: Distractor[] = ask === 'neither'
     ? [
-      // n − |A| − |B| is only a possible answer when the overlap is smaller than the residue,
-      // so "gave the union" carries the headline trap for the rest of the draws
-      { value: E(r.n - r.a - r.b), trap: 'forgot to add the overlap back: it was subtracted twice', must: true },
-      { value: E(r.union), trap: 'gave the number doing at least one, not the number doing neither', must: true },
+      { value: E(r.n - r.a - r.b), trap: 'forgot to add the overlap back: it was subtracted twice' },
+      { value: E(r.union), trap: 'gave the number doing at least one, not the number doing neither' },
+    ]
+    : [
+      { value: E(r.union), trap: 'counted everyone doing at least one, including those doing both' },
+    ];
+  const extra: Distractor[] = ask === 'neither'
+    ? [
       { value: E(r.n - r.onlyA - r.onlyB), trap: 'left out those doing both' },
       { value: E(r.both), trap: 'gave the size of the overlap' },
       { value: E(r.n - r.a), trap: `subtracted only those who ${c.verb} ${c.objA}` },
+      { value: E(r.n - r.b), trap: `subtracted only those who ${c.verb} ${c.objB}` },
+      { value: E(r.n - Math.max(r.a, r.b) - r.both), trap: 'took off the larger group and the overlap as well' },
+      { value: E(Math.abs(r.onlyA - r.onlyB)), trap: 'took the difference of the two "only" groups' },
     ]
     : [
-      { value: E(r.union), trap: 'counted everyone doing at least one, including those doing both', must: true },
       { value: E(r.a + r.b), trap: 'added the two groups without removing the overlap at all' },
       { value: E(r.onlyA), trap: `gave only those who ${c.verb} ${c.objA} but not ${c.objB}` },
+      { value: E(r.onlyB), trap: `gave only those who ${c.verb} ${c.objB} but not ${c.objA}` },
       { value: E(r.neither), trap: 'gave the number doing neither' },
       { value: E(r.union - 2 * r.both), trap: 'subtracted the overlap once too often' },
+      { value: E(r.n - r.both), trap: 'subtracted the overlap from the whole group' },
+      { value: E(r.union + r.both), trap: 'added the overlap instead of subtracting it twice' },
     ];
   const solution = ask === 'neither'
     ? `At least one: $${r.a} + ${r.b} - ${r.both} = ${r.union}$, so neither is $${r.n} - ${r.union} = ${r.neither}$.`
@@ -140,7 +198,7 @@ function neitherQ(rng: RNG): Generated | null {
   return {
     stem: `${intro(c, r)}\n\n${question}`,
     answer: { kind: 'exact', value: E(answer) },
-    options: countOptions(rng, answer, ds),
+    options: countOptions(rng, answer, must, extra, r.n),
     solution,
     trap: ask === 'neither'
       ? 'Take off the union, not |A| + |B|: subtracting both totals removes the overlap twice.'
@@ -157,10 +215,23 @@ type ProbAsk = 'both' | 'a-given-b' | 'b-given-a' | 'neither' | 'only-a';
 
 function probabilityQ(rng: RNG): Generated | null {
   const c = rng.pick(CONTEXTS);
-  const r = drawRegions(rng, [20, 24, 25, 30, 36, 40, 50, 60]);
-  if (!r) return null;
   const ask = rng.pick<ProbAsk>(['both', 'a-given-b', 'a-given-b', 'b-given-a', 'neither', 'only-a']);
   const conditional = ask === 'a-given-b' || ask === 'b-given-a';
+  /**
+   * P(A ∩ B) and P(neither) are the small regions, and every mistake they are set against is a bigger
+   * region or a smaller denominator: unless some other region is smaller still, the answer is simply
+   * the smallest of the five. The split is redrawn for the ask — rejecting the whole question instead
+   * would quietly turn "both" into one question in twenty.
+   */
+  const usable = (x: Regions): boolean =>
+    (ask !== 'both' || Math.min(x.onlyA, x.onlyB, x.neither) < x.both)
+    && (ask !== 'neither' || Math.min(x.onlyA, x.onlyB, x.both) < x.neither);
+  let r: Regions | null = null;
+  for (let i = 0; i < 60 && !r; i++) {
+    const cand = drawRegions(rng, [20, 24, 25, 30, 36, 40, 50, 60]);
+    if (cand && usable(cand)) r = cand;
+  }
+  if (!r) return null;
   const answer =
     ask === 'both' ? frac(r.both, r.n)
       : ask === 'a-given-b' ? frac(r.both, r.b)
@@ -175,21 +246,42 @@ function probabilityQ(rng: RNG): Generated | null {
           : ask === 'neither' ? `Find the probability that this ${c.one} is one of those who ${c.verb} neither ${c.objA} nor ${c.objB}.`
             : `Find the probability that this ${c.one} is one of those who ${c.verb} ${c.objA} but not ${c.objB}.`;
   // the headline mistake depends on what was asked, so it is chosen here rather than fixed
-  const must =
+  const headline =
     conditional ? frac(r.both, r.n)
       : ask === 'both' ? frac(r.both, r.b)
         : ask === 'neither' ? frac(r.union, r.n)
           : frac(r.a, r.n);
+  /**
+   * |A ∩ B| / |A| and |A ∩ B| / |B| are the same misconception written twice — and on a question
+   * that asks for no conditional probability at all, "conditioned on the wrong group" is not even
+   * the right name for it. Each gets its own label, and only one of the pair is ever offered.
+   */
+  const overGroup = (size: number, obj: string): Distractor => ({
+    value: frac(r.both, size),
+    trap: conditional
+      ? `conditioned on the wrong group: divided by the number who ${c.verb} ${obj}`
+      : `divided by the number who ${c.verb} ${obj} instead of by the whole group`,
+  });
+  const pair = [overGroup(r.a, c.objA), overGroup(r.b, c.objB)].filter((d) => !d.value.equals(answer));
+  const oneOfThePair = pair.find((d) => d.value.equals(headline)) ?? rng.pick(pair);
   const ds: Distractor[] = [
     { value: frac(r.both, r.n), trap: 'used the whole group as the denominator instead of the given group' },
-    { value: frac(r.both, r.a), trap: 'conditioned on the wrong group' },
-    { value: frac(r.both, r.b), trap: 'conditioned on the wrong group' },
+    oneOfThePair,
     { value: frac(r.union, r.n), trap: 'gave the probability of at least one' },
     { value: frac(r.neither, r.n), trap: 'gave the probability of neither' },
     { value: frac(r.onlyA, r.n), trap: `gave "${c.objA} but not ${c.objB}" rather than what was asked` },
+    { value: frac(r.onlyB, r.n), trap: `gave "${c.objB} but not ${c.objA}" rather than what was asked` },
+    { value: frac(r.onlyA + r.onlyB, r.n), trap: 'gave the probability of exactly one of the two' },
     { value: frac(r.a, r.n), trap: `gave $P(${c.objA})$ on its own` },
     { value: frac(r.b, r.n), trap: `gave $P(${c.objB})$ on its own` },
-  ].filter((d) => !d.value.equals(answer)).map((d) => (d.value.equals(must) ? { ...d, must: true } : d));
+    // undershoots. Every mistake above is a bigger region or a smaller denominator, so without
+    // these P(A ∩ B) was the smallest of the five in 86% of the questions that asked for it.
+    { value: frac(r.both, r.a + r.b + r.neither), trap: 'counted those doing both twice in the size of the group' },
+    { value: frac(r.neither, r.a + r.b + r.neither), trap: 'used $|A| + |B| +$ neither as the size of the group' },
+    { value: frac(r.a * r.b, r.n * r.n), trap: 'multiplied $P(A)$ by $P(B)$, as if the two were independent' },
+  ].filter((d) => !d.value.equals(answer));
+  const must = ds.filter((d) => d.value.equals(headline));
+  const extra = ds.filter((d) => !d.value.equals(headline));
   // "\frac{10}{24} = \frac{5}{12}", or just "\frac{4}{15}" when it is already in lowest terms
   const ratio = (num: number, den: number) => {
     const shown = `\\frac{${num}}{${den}}`;
@@ -210,7 +302,7 @@ function probabilityQ(rng: RNG): Generated | null {
   return {
     stem: `${intro(c, r)}\n\nOne of the ${r.n} ${c.unit} is chosen at random. ${question}`,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
-    options: probOptions(rng, answer, ds),
+    options: probOptions(rng, answer, must, extra),
     solution,
     trap,
     tags: ['probability', 'venn', conditional ? 'conditional' : ask],
@@ -309,6 +401,9 @@ function independentValueQ(rng: RNG): Generated | null {
       { value: union.sub(pA).div(pA), trap: 'divided by $P(A)$ instead of by $1 - P(A)$' },
       { value: pA.mul(union), trap: 'multiplied the two given probabilities' },
       { value: E(1).sub(union), trap: 'gave the probability that neither happens' },
+      // P(B) is recovered by a division, so nearly every slip undershoots it
+      { value: union, trap: 'gave $P(A \\cup B)$ back: the formula was never rearranged' },
+      { value: E(1).sub(pA), trap: "gave $P(A')$" },
     ];
     solution = `$1 - P(A \\cup B) = P(A')P(B')$, so $P(B') = \\frac{1 - ${union.toLatex(F)}}{1 - ${pA.toLatex(F)}} = ${E(1).sub(pB).toLatex(F)}$ and $P(B) = ${pB.toLatex(F)}$.`;
   } else if (ask === 'exactly-one') {
@@ -332,6 +427,8 @@ function independentValueQ(rng: RNG): Generated | null {
       { value: E(1).sub(union), trap: 'gave the probability that neither happens' },
       { value: exactlyOne, trap: 'left out the case where both happen' },
       { value: inter.mulRat(2), trap: 'doubled the product' },
+      { value: inter.mulRat(frac(1, 2).toRat()), trap: 'halved the product' },
+      { value: pA.add(pB).add(inter), trap: 'added the intersection instead of subtracting it' },
       { value: E(1).sub(inter), trap: 'took the complement of the product' },
       { value: pA.mul(E(1).sub(pB)), trap: "used $P(B')$ instead of $P(B)$" },
       { value: E(1).sub(pA).mul(pB), trap: "used $P(A')$ instead of $P(A)$" },
@@ -344,7 +441,7 @@ function independentValueQ(rng: RNG): Generated | null {
   return {
     stem,
     answer: { kind: 'exact', value: answer, format: 'fraction' },
-    options: probOptions(rng, answer, ds),
+    options: probOptions(rng, answer, ds.filter((d) => d.must), ds.filter((d) => !d.must)),
     solution,
     trap: ask === 'find-b'
       ? 'P(A ∪ B) = P(A) + P(B) − P(A)P(B) for independent events, so P(B) comes out of a division by 1 − P(A).'
@@ -369,32 +466,38 @@ function threeSetQ(rng: RNG): Generated | null {
   const abc = rng.int(2, 6);
   const ab = rng.int(2, 8), ac = rng.int(2, 8), bc = rng.int(2, 8);
   const onlyA = rng.int(4, 14), onlyB = rng.int(4, 14), onlyC = rng.int(4, 14);
-  const none = rng.int(3, 8);
+  // A "none" of 3–8 is smaller than almost every mistake it is set against, which used to make the
+  // answer the smallest of the five far too often; a wider range gives the pool room on both sides.
+  const none = rng.int(3, 16);
   const n = abc + ab + ac + bc + onlyA + onlyB + onlyC + none;
-  if (n > 90 || n % 5 !== 0) return null;
+  if (n > 95 || n % 5 !== 0) return null;
   const A = onlyA + ab + ac + abc, B = onlyB + ab + bc + abc, C = onlyC + ac + bc + abc;
   const AB = ab + abc, AC = ac + abc, BC = bc + abc;
   const union = n - none;
   const ask = rng.bool(0.6) ? 'none' : 'exactly-one';
   const answer = ask === 'none' ? none : onlyA + onlyB + onlyC;
   const sumSingles = A + B + C, sumPairs = AB + AC + BC;
-  const ds: Distractor[] = ask === 'none'
+  const must: Distractor[] = ask === 'none'
+    ? [{ value: E(n - (sumSingles - sumPairs)), trap: 'forgot to add the triple overlap back in' }]
+    : [{ value: E(sumSingles - sumPairs), trap: 'subtracted each pair once instead of twice' }];
+  const extra: Distractor[] = ask === 'none'
     ? [
-      { value: E(n - (sumSingles - sumPairs)), trap: 'forgot to add the triple overlap back in', must: true },
       { value: E(n - (sumSingles - sumPairs - abc)), trap: 'subtracted the triple overlap instead of adding it' },
       { value: E(n - sumSingles), trap: 'ignored all the overlaps' },
       { value: E(union), trap: 'gave the number doing at least one' },
       { value: E(onlyA + onlyB + onlyC), trap: 'gave the number doing exactly one' },
       { value: E(none - abc), trap: 'added the triple overlap back twice' },
       { value: E(abc), trap: 'gave the number doing all three' },
+      { value: E(ab + ac + bc), trap: 'gave the number doing exactly two of the three' },
     ]
     : [
-      { value: E(sumSingles - sumPairs), trap: 'subtracted each pair once instead of twice', must: true },
       { value: E(union), trap: 'gave the number doing at least one' },
       { value: E(none), trap: 'gave the number doing none of the three' },
       { value: E(onlyA + onlyB + onlyC - abc), trap: 'took the triple overlap off as well' },
       { value: E(sumSingles - sumPairs - abc), trap: 'sign slip on the triple overlap' },
       { value: E(union - abc), trap: 'only removed the triple overlap' },
+      { value: E(onlyA + onlyB + onlyC + abc), trap: 'counted those doing all three as doing exactly one' },
+      { value: E(ab + ac + bc), trap: 'gave the number doing exactly two of the three' },
     ];
   const solution = ask === 'none'
     ? `$|A \\cup B \\cup C| = ${A} + ${B} + ${C} - ${AB} - ${AC} - ${BC} + ${abc} = ${union}$, so ${n} − ${union} = ${none} ${c.verb} none of the three.`
@@ -407,7 +510,7 @@ function threeSetQ(rng: RNG): Generated | null {
     // it the exclusive reading makes the figures contradictory.
     stem: `In ${c.group} ${n} ${c.unit}, ${A} ${c.verb} ${c.objA}, ${B} ${c.verb} ${c.objB} and ${C} ${c.verb} ${c.objC}. ${AB} ${c.verb} both ${c.objA} and ${c.objB}, ${AC} ${c.verb} both ${c.objA} and ${c.objC}, ${BC} ${c.verb} both ${c.objB} and ${c.objC}, and ${abc} ${c.verb} all three. Each of these pair totals includes the ${abc} who ${c.verb} all three.\n\n${question}`,
     answer: { kind: 'exact', value: E(answer) },
-    options: countOptions(rng, answer, ds),
+    options: countOptions(rng, answer, must, extra, n),
     solution,
     trap: 'Inclusion–exclusion for three sets adds the triple overlap back after subtracting the three pairs.',
     tags: ['probability', 'venn', 'three-sets'],
@@ -425,14 +528,17 @@ function intersectionFromUnionQ(rng: RNG): Generated | null {
     stem: `In ${c.group} ${r.n} ${c.unit}, ${r.a} ${c.verb} ${c.objA} and ${r.b} ${c.verb} ${c.objB}. ${r.neither} of them ${c.verb} neither ${c.objA} nor ${c.objB}.\n\nHow many ${c.verb} both?`,
     answer: { kind: 'exact', value: E(r.both) },
     options: countOptions(rng, r.both, [
-      { value: E(r.a + r.b - r.n), trap: 'forgot that some do neither, so used the whole group as the union', must: true },
+      { value: E(r.a + r.b - r.n), trap: 'forgot that some do neither, so used the whole group as the union' },
+    ], [
       { value: E(r.union), trap: 'gave the number doing at least one' },
       { value: E(r.onlyA), trap: `gave those who ${c.verb} ${c.objA} only` },
       { value: E(r.onlyB), trap: `gave those who ${c.verb} ${c.objB} only` },
       { value: E(r.onlyA + r.onlyB), trap: 'gave the number doing exactly one' },
       { value: E(r.neither), trap: 'gave the number doing neither' },
       { value: E(Math.abs(r.a - r.b)), trap: 'took the difference of the two groups' },
-    ]),
+      { value: E(r.a + r.b - r.n - r.neither), trap: 'took the "neither" count off the union instead of adding it back' },
+      { value: E(r.n - Math.max(r.a, r.b)), trap: `subtracted only those who ${c.verb} the more popular of the two` },
+    ], r.n),
     solution: `At least one: $${r.n} - ${r.neither} = ${r.union}$. Then $|A \\cap B| = ${r.a} + ${r.b} - ${r.union} = ${r.both}$.`,
     trap: 'The union is the group minus those doing neither — not the whole group.',
     tags: ['probability', 'venn', 'inclusion-exclusion'],

@@ -223,12 +223,15 @@ function arcQ(rng: RNG): Generated | null {
   const s = drawSector(rng, SECTOR_ANGLES);
   if (!s) return null;
   const { r, a } = s;
+  // One of these two is guaranteed a slot, and they sit on opposite sides of rθ: with only the
+  // sector area forced, nothing above the answer could ever be the guaranteed trap and the arc was
+  // never the largest of the five.
   const must: Distractor[] = [
     { value: s.area, trap: 'used the sector-area formula ½r²θ instead of rθ' },
+    { value: E(r).mul(theta(a)).mulRat(HALF), trap: 'halved: ½rθ is not the arc length' },
   ];
   const extra: Distractor[] = [
     { value: E(r * r).mul(theta(a)), trap: 'squared the radius' },
-    { value: E(r).mul(theta(a)).mulRat(HALF), trap: 'halved: ½rθ is not the arc length' },
     { value: s.perimeter, trap: 'gave the whole perimeter of the sector' },
     { value: E(2 * r).mul(theta(a)), trap: 'used the diameter instead of the radius' },
     { value: E(2 * r).mul(Exact.pi()), trap: 'gave the circumference of the whole circle' },
@@ -255,11 +258,13 @@ function sectorAreaQ(rng: RNG): Generated | null {
   const s = drawSector(rng, SECTOR_ANGLES);
   if (!s) return null;
   const { r, a } = s;
+  // As in arcQ: one of a pair on opposite sides of ½r²θ, so the answer is not kept out of the top
+  // slot by a guaranteed overshoot.
   const must: Distractor[] = [
     { value: E(r * r).mul(theta(a)), trap: 'forgot the ½ in ½r²θ' },
+    { value: s.arc, trap: 'found the arc length rθ instead of the area' },
   ];
   const extra: Distractor[] = [
-    { value: s.arc, trap: 'found the arc length rθ instead of the area' },
     { value: E(r).mul(theta(a)).mulRat(HALF), trap: 'forgot to square the radius' },
     { value: E(r * r).mul(Exact.pi()), trap: 'gave the area of the whole circle' },
     { value: E(r * r).mulRat(frac(1, 4).toRat()).mul(theta(a)), trap: 'halved twice' },
@@ -290,15 +295,17 @@ function perimeterQ(rng: RNG): Generated | null {
   if (!tidy(s.perimeter, 4)) return null;
   // The whole phrase, maths and unit together: "$60^{\circ}$" or "$\frac{\pi}{3}$ radians".
   const angleTex = inDegrees ? `$${degOf(a)}^{\\circ}$` : `$${thetaTex(a)}$ radians`;
+  // Both halves of the pair are headline mistakes and they sit either side of 2r + rθ, so the
+  // guaranteed trap is as often above the answer as below it.
   const must: Distractor[] = [
     { value: s.arc, trap: 'gave the arc only: the two straight edges were left out' },
+    { value: E(2 * r).add(s.arc.mulRat(2)), trap: 'doubled the arc as well as the radii' },
   ];
   const extra: Distractor[] = [
     { value: E(r).add(s.arc), trap: 'added only one radius' },
     { value: E(2 * r), trap: 'gave the two straight edges only: the arc was left out' },
     { value: E(2 * r).add(theta(a)), trap: 'added the angle instead of the arc length' },
     { value: E(2 * r).add(s.area), trap: 'used the sector area in place of the arc length' },
-    { value: E(2 * r).add(s.arc.mulRat(2)), trap: 'doubled the arc as well as the radii' },
     { value: E(4 * r).add(s.arc), trap: 'used the diameter for each straight edge' },
     { value: E(2 * r).mul(Exact.pi()).add(E(2 * r)), trap: 'used the whole circumference' },
     { value: E(2 * r).add(E(r).mul(theta(a)).mulRat(HALF)), trap: 'halved the arc length' },

@@ -465,6 +465,20 @@ const CONSTANTS: { sym: string; eq: string; where: string; factors: Factor[]; no
     trap: 'Two charges divide, so the A power is −2 and the two seconds in C = A s push the s power to −4.',
   },
   {
+    sym: '\\rho', eq: 'p = \\rho g h', where: '$p$ is a pressure, $g$ is an acceleration and $h$ is a depth',
+    factors: [{ sym: 'p', qty: 'pressure', p: 1 }, { sym: 'g', qty: 'accel', p: -1 }, { sym: 'h', qty: 'length', p: -1 }],
+    note: '$\\rho = p/(gh)$, so the units are $\\text{kg m}^{-1}\\text{s}^{-2} \\div (\\text{m s}^{-2} \\times \\text{m}) = \\text{kg m}^{-3}$',
+    near: ['density', 'linearDensity', 'pressure', 'mass', 'spring'],
+    trap: 'Dividing the pascal by an acceleration and a length cancels both powers of s: kg m⁻³, a density, as it must be.',
+  },
+  {
+    sym: 'f', eq: 'v = f\\lambda', where: '$v$ is a speed and $\\lambda$ is a wavelength',
+    factors: [{ sym: 'v', qty: 'speed', p: 1 }, { sym: '\\lambda', qty: 'length', p: -1 }],
+    note: '$f = v/\\lambda$, so the units are $\\text{m s}^{-1} \\div \\text{m} = \\text{s}^{-1}$',
+    near: ['freq', 'time', 'speed', 'accel', 'length'],
+    trap: 'A speed divided by a length leaves s⁻¹: the metres cancel, so a frequency is not a speed.',
+  },
+  {
     sym: 'k', eq: 'E = \\tfrac{1}{2}kx^{2}', where: '$E$ is an energy and $x$ is an extension',
     factors: [{ sym: 'E', qty: 'energy', p: 1 }, { sym: 'x', qty: 'length', p: -2 }],
     note: '$k = 2E/x^{2}$ and the $\\tfrac12$ has no units, so the units are $\\text{J m}^{-2} = \\text{kg s}^{-2}$',
@@ -506,6 +520,8 @@ const ODD_SETS: { q: string; name: string; right: { display: string; why: string
       { display: '$\\text{W}\\,\\text{s}$', why: 'a power times a time is an energy (a watt second is a joule)' },
       { display: '$\\text{kg}\\,\\text{m}^{2}\\,\\text{s}^{-2}$', why: 'these are the base units of energy, from $\\tfrac12 mv^{2}$' },
       { display: '$\\text{Pa}\\,\\text{m}^{3}$', why: 'a pressure times a volume is an energy' },
+      { display: '$\\text{V}\\,\\text{C}$', why: 'a potential difference times a charge is an energy: each coulomb gains V joules' },
+      { display: '$\\text{V}\\,\\text{A}\\,\\text{s}$', why: 'V A is a power, so V A s is a power times a time: an energy' },
     ],
     odd: [
       { display: '$\\text{N}\\,\\text{s}$', why: 'N s is momentum (an impulse), not energy' },
@@ -521,6 +537,8 @@ const ODD_SETS: { q: string; name: string; right: { display: string; why: string
       { display: '$\\text{N}\\,\\text{m}\\,\\text{s}^{-1}$', why: 'a force times a speed is a power' },
       { display: '$\\text{kg}\\,\\text{m}^{2}\\,\\text{s}^{-3}$', why: 'these are the base units of power' },
       { display: '$\\text{V}\\,\\text{A}$', why: 'a potential difference times a current is a power' },
+      { display: '$\\text{J}\\,\\text{Hz}$', why: 'Hz is s⁻¹, so an energy times a frequency is an energy per second: a power' },
+      { display: '$\\text{V}\\,\\text{C}\\,\\text{s}^{-1}$', why: 'V C is an energy, so V C s⁻¹ is an energy per second' },
     ],
     odd: [
       { display: '$\\text{V}\\,\\text{A}\\,\\text{s}$', why: 'V A is a power, so V A s is an energy (a joule), not a power' },
@@ -537,6 +555,8 @@ const ODD_SETS: { q: string; name: string; right: { display: string; why: string
       { display: '$\\text{J}\\,\\text{m}^{-1}$', why: 'an energy per unit distance is a force' },
       { display: '$\\text{Pa}\\,\\text{m}^{2}$', why: 'a pressure times an area is a force' },
       { display: '$\\text{W}\\,\\text{s}\\,\\text{m}^{-1}$', why: 'W s is an energy, so an energy per unit distance again: a force' },
+      { display: '$\\text{kg}\\,\\text{m}\\,\\text{Hz}^{2}$', why: 'Hz² is s⁻², so this is mass × acceleration' },
+      { display: '$\\text{V}\\,\\text{C}\\,\\text{m}^{-1}$', why: 'V C is an energy, and an energy per unit distance is a force' },
     ],
     odd: [
       { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-1}$', why: 'that is a momentum, not a force' },
@@ -553,6 +573,8 @@ const ODD_SETS: { q: string; name: string; right: { display: string; why: string
       { display: '$\\text{J}\\,\\text{m}^{-3}$', why: 'an energy per unit volume has exactly the units of a pressure' },
       { display: '$\\text{kg}\\,\\text{m}^{-1}\\,\\text{s}^{-2}$', why: 'these are the base units of pressure' },
       { display: '$\\text{W}\\,\\text{s}\\,\\text{m}^{-3}$', why: 'W s is an energy, so this is again an energy per volume' },
+      { display: '$\\text{kg}\\,\\text{m}^{-1}\\,\\text{Hz}^{2}$', why: 'Hz² is s⁻², so these are the base units of pressure' },
+      { display: '$\\text{V}\\,\\text{C}\\,\\text{m}^{-3}$', why: 'V C is an energy, and an energy per unit volume is a pressure' },
     ],
     odd: [
       { display: '$\\text{N}\\,\\text{m}^{-1}$', why: 'that is a force per length (a spring constant), not a pressure' },
@@ -568,6 +590,8 @@ const ODD_SETS: { q: string; name: string; right: { display: string; why: string
       { display: '$\\text{J}\\,\\text{s}\\,\\text{m}^{-1}$', why: 'an energy × time ÷ length reduces to kg m s⁻¹' },
       { display: '$\\text{Pa}\\,\\text{m}^{2}\\,\\text{s}$', why: 'Pa m² is a force, and a force × time is a momentum' },
       { display: '$\\text{W}\\,\\text{s}^{2}\\,\\text{m}^{-1}$', why: 'W s² is an energy × time, which ÷ length is a momentum' },
+      { display: '$\\text{kg}\\,\\text{m}\\,\\text{Hz}$', why: 'Hz is s⁻¹, so this is mass × velocity' },
+      { display: '$\\text{V}\\,\\text{C}\\,\\text{s}\\,\\text{m}^{-1}$', why: 'V C is an energy, so this is energy × time ÷ length' },
     ],
     odd: [
       { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-2}$', why: 'that is a force: momentum has one power of s more' },
@@ -939,11 +963,13 @@ const CONSISTENCY: {
     ],
   },
   {
-    given: '$E$ is an energy, $m$ is a mass, $v$ is a speed, $h$ is a height and $g$ is an acceleration',
+    given: '$E$ is an energy, $m$ is a mass, $v$ is a speed, $h$ is a height, $g$ is an acceleration, $\\rho$ is a density and $L$ is a length',
     lhs: 'energy',
     consistent: [
       { expr: { display: '$E = \\tfrac12 m v^{2}$', factors: [['mass', 1, 1], ['speed', 2, 1]] }, note: '$[mv^{2}] = \\text{kg} \\times \\text{m}^{2}\\text{s}^{-2} = \\text{J}$, and the $\\tfrac12$ has no units' },
       { expr: { display: '$E = mgh$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1]] }, note: '$[mgh] = \\text{kg} \\times \\text{m s}^{-2} \\times \\text{m} = \\text{kg m}^{2}\\text{s}^{-2} = \\text{J}$' },
+      { expr: { display: '$E = \\rho v^{2} L^{3}$', factors: [['density', 1, 1], ['speed', 2, 1], ['length', 3, 1]] }, note: '$[\\rho v^{2} L^{3}] = \\text{kg m}^{-3} \\times \\text{m}^{2}\\text{s}^{-2} \\times \\text{m}^{3} = \\text{kg m}^{2}\\text{s}^{-2}$' },
+      { expr: { display: '$E = \\rho g h L^{3}$', factors: [['density', 1, 1], ['accel', 1, 1], ['length', 4, 1]] }, note: '$\\rho g h$ is a pressure, $\\text{kg m}^{-1}\\text{s}^{-2}$, and a pressure times a volume is an energy' },
     ],
     wrong: [
       { display: '$E = \\tfrac12 m v$', factors: [['mass', 1, 1], ['speed', 1, 1]], why: 'that is a momentum' },
@@ -956,6 +982,70 @@ const CONSISTENCY: {
       { display: '$E = mv^{2}h^{2}$', factors: [['mass', 1, 1], ['speed', 2, 1], ['length', 2, 1]], why: 'two powers of the height too many' },
       { display: '$E = \\dfrac{mv^{2}}{gh}$', factors: [['mass', 1, 1], ['speed', 2, 1], ['accel', -1, 1], ['length', -1, 1]], why: 'the $gh$ underneath cancels the whole of $v^{2}$, leaving a mass' },
       { display: '$E = \\dfrac{1}{2}mgv$', factors: [['mass', 1, 1], ['accel', 1, 1], ['speed', 1, 1]], why: '$\\text{kg m}^{2}\\text{s}^{-3}$ is a power, not an energy' },
+      { display: '$E = \\rho v^{2} L^{2}$', factors: [['density', 1, 1], ['speed', 2, 1], ['length', 2, 1]], why: 'one power of $L$ short: that is a force' },
+      { display: '$E = \\rho v L^{3}$', factors: [['density', 1, 1], ['speed', 1, 1], ['length', 3, 1]], why: 'the speed is not squared: that is a momentum' },
+      { display: '$E = \\rho v^{2} L^{4}$', factors: [['density', 1, 1], ['speed', 2, 1], ['length', 4, 1]], why: 'one power of $L$ too many: an energy times a length' },
+      { display: '$E = \\dfrac{\\rho v^{2}}{L^{3}}$', factors: [['density', 1, 1], ['speed', 2, 1], ['length', -3, 1]], why: 'the volume divides instead of multiplying' },
+    ],
+  },
+  {
+    given: '$p$ is a pressure, $\\rho$ is a density, $g$ is an acceleration, $h$ is a depth, $v$ is a speed, $F$ is a force, $L$ is a length and $A$ is an area',
+    lhs: 'pressure',
+    consistent: [
+      { expr: { display: '$p = \\dfrac{F}{A}$', factors: [['force', 1, 1], ['area', -1, 1]] }, note: '$[F/A] = \\text{kg m s}^{-2} \\div \\text{m}^{2} = \\text{kg m}^{-1}\\text{s}^{-2}$' },
+      { expr: { display: '$p = \\rho g h$', factors: [['density', 1, 1], ['accel', 1, 1], ['length', 1, 1]] }, note: '$[\\rho g h] = \\text{kg m}^{-3} \\times \\text{m s}^{-2} \\times \\text{m} = \\text{kg m}^{-1}\\text{s}^{-2}$' },
+      { expr: { display: '$p = \\tfrac12 \\rho v^{2}$', factors: [['density', 1, 1], ['speed', 2, 1]] }, note: '$[\\rho v^{2}] = \\text{kg m}^{-3} \\times \\text{m}^{2}\\text{s}^{-2} = \\text{kg m}^{-1}\\text{s}^{-2}$' },
+      { expr: { display: '$p = \\dfrac{F}{L^{2}}$', factors: [['force', 1, 1], ['length', -2, 1]] }, note: '$[F/L^{2}] = \\text{kg m s}^{-2} \\div \\text{m}^{2} = \\text{kg m}^{-1}\\text{s}^{-2}$, a force per unit area' },
+    ],
+    wrong: [
+      { display: '$p = FA$', factors: [['force', 1, 1], ['area', 1, 1]], why: '$\\text{kg m}^{3}\\text{s}^{-2}$: the area divides, it does not multiply' },
+      { display: '$p = \\rho h$', factors: [['density', 1, 1], ['length', 1, 1]], why: '$\\text{kg m}^{-2}$: there is no $\\text{s}^{-2}$ without the $g$' },
+      { display: '$p = \\rho g h^{2}$', factors: [['density', 1, 1], ['accel', 1, 1], ['length', 2, 1]], why: 'one power of the depth too many' },
+      { display: '$p = \\tfrac12 \\rho v$', factors: [['density', 1, 1], ['speed', 1, 1]], why: '$\\text{kg m}^{-2}\\text{s}^{-1}$: the speed must be squared' },
+      { display: '$p = \\dfrac{F}{A^{2}}$', factors: [['force', 1, 1], ['area', -2, 1]], why: 'the area divides twice' },
+      { display: '$p = \\rho g v$', factors: [['density', 1, 1], ['accel', 1, 1], ['speed', 1, 1]], why: '$\\text{kg m}^{-1}\\text{s}^{-3}$, a pressure per second' },
+      { display: '$p = \\dfrac{F}{L}$', factors: [['force', 1, 1], ['length', -1, 1]], why: 'a force per unit length is a spring constant, not a pressure' },
+      { display: '$p = \\dfrac{\\rho v^{2}}{A}$', factors: [['density', 1, 1], ['speed', 2, 1], ['area', -1, 1]], why: 'dividing a pressure by an area leaves $\\text{kg m}^{-3}\\text{s}^{-2}$' },
+      { display: '$p = \\rho v^{2} h$', factors: [['density', 1, 1], ['speed', 2, 1], ['length', 1, 1]], why: '$\\text{kg s}^{-2}$: one power of m too many' },
+    ],
+  },
+  {
+    given: '$P$ is a power, $F$ is a force, $v$ is a speed, $m$ is a mass, $g$ is an acceleration, $h$ is a height, $t$ is a time, $\\rho$ is a density and $A$ is an area',
+    lhs: 'power',
+    consistent: [
+      { expr: { display: '$P = Fv$', factors: [['force', 1, 1], ['speed', 1, 1]] }, note: '$[Fv] = \\text{kg m s}^{-2} \\times \\text{m s}^{-1} = \\text{kg m}^{2}\\text{s}^{-3}$' },
+      { expr: { display: '$P = \\dfrac{mgh}{t}$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1], ['time', -1, 1]] }, note: '$mgh$ is an energy and an energy per second is a power' },
+      { expr: { display: '$P = \\tfrac12 \\rho A v^{3}$', factors: [['density', 1, 1], ['area', 1, 1], ['speed', 3, 1]] }, note: '$[\\rho A v^{3}] = \\text{kg m}^{-3} \\times \\text{m}^{2} \\times \\text{m}^{3}\\text{s}^{-3} = \\text{kg m}^{2}\\text{s}^{-3}$' },
+      { expr: { display: '$P = \\dfrac{mv^{2}}{t}$', factors: [['mass', 1, 1], ['speed', 2, 1], ['time', -1, 1]] }, note: '$mv^{2}$ is an energy, so dividing by a time gives $\\text{kg m}^{2}\\text{s}^{-3}$' },
+    ],
+    wrong: [
+      { display: '$P = Fvt$', factors: [['force', 1, 1], ['speed', 1, 1], ['time', 1, 1]], why: 'that is an energy, not a power' },
+      { display: '$P = mgh$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1]], why: 'that is an energy: a power is an energy per second' },
+      { display: '$P = \\dfrac{F}{v}$', factors: [['force', 1, 1], ['speed', -1, 1]], why: '$\\text{kg s}^{-1}$, a mass per second' },
+      { display: '$P = \\rho A v^{2}$', factors: [['density', 1, 1], ['area', 1, 1], ['speed', 2, 1]], why: '$\\text{kg m s}^{-2}$: that is a force' },
+      { display: '$P = \\rho A v^{3} t$', factors: [['density', 1, 1], ['area', 1, 1], ['speed', 3, 1], ['time', 1, 1]], why: 'a power times a time is an energy' },
+      { display: '$P = mght$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1], ['time', 1, 1]], why: 'an energy times a time' },
+      { display: '$P = \\dfrac{mv}{t}$', factors: [['mass', 1, 1], ['speed', 1, 1], ['time', -1, 1]], why: 'a momentum per second is a force' },
+      { display: '$P = \\dfrac{mgh}{t^{2}}$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1], ['time', -2, 1]], why: 'one power of the time too many' },
+      { display: '$P = \\dfrac{\\rho A v^{3}}{t}$', factors: [['density', 1, 1], ['area', 1, 1], ['speed', 3, 1], ['time', -1, 1]], why: 'a power per second, $\\text{kg m}^{2}\\text{s}^{-4}$' },
+    ],
+  },
+  {
+    given: '$v$ is a speed, $p$ is a pressure, $\\rho$ is a density, $F$ is a force, $A$ is an area and $m$ is a mass',
+    lhs: 'speed',
+    consistent: [
+      { expr: { display: '$v = \\sqrt{\\dfrac{p}{\\rho}}$', factors: [['pressure', 1, 2], ['density', -1, 2]] }, note: '$p/\\rho = \\text{kg m}^{-1}\\text{s}^{-2} \\div \\text{kg m}^{-3} = \\text{m}^{2}\\text{s}^{-2}$, the square of a speed' },
+      { expr: { display: '$v = \\sqrt{\\dfrac{F}{\\rho A}}$', factors: [['force', 1, 2], ['density', -1, 2], ['area', -1, 2]] }, note: '$F/(\\rho A) = \\text{kg m s}^{-2} \\div \\text{kg m}^{-1} = \\text{m}^{2}\\text{s}^{-2}$' },
+    ],
+    wrong: [
+      { display: '$v = \\sqrt{\\dfrac{\\rho}{p}}$', factors: [['density', 1, 2], ['pressure', -1, 2]], why: 'the reciprocal of a speed' },
+      { display: '$v = \\dfrac{p}{\\rho}$', factors: [['pressure', 1, 1], ['density', -1, 1]], why: '$\\text{m}^{2}\\text{s}^{-2}$: the square root is missing' },
+      { display: '$v = \\sqrt{p\\rho}$', factors: [['pressure', 1, 2], ['density', 1, 2]], why: '$\\text{kg m}^{-2}\\text{s}^{-1}$: the density must divide' },
+      { display: '$v = \\sqrt{\\dfrac{F}{\\rho}}$', factors: [['force', 1, 2], ['density', -1, 2]], why: '$\\text{m}^{2}\\text{s}^{-1}$: the area is missing' },
+      { display: '$v = \\dfrac{F}{\\rho A}$', factors: [['force', 1, 1], ['density', -1, 1], ['area', -1, 1]], why: 'the square of a speed, not a speed' },
+      { display: '$v = \\sqrt{\\dfrac{m}{\\rho A}}$', factors: [['mass', 1, 2], ['density', -1, 2], ['area', -1, 2]], why: '$\\text{m}^{1/2}$: that is the square root of a length' },
+      { display: '$v = \\sqrt{\\dfrac{pA}{\\rho}}$', factors: [['pressure', 1, 2], ['area', 1, 2], ['density', -1, 2]], why: '$\\text{m}^{2}\\text{s}^{-1}$: the area should not be there' },
+      { display: '$v = \\sqrt{\\dfrac{p}{\\rho A}}$', factors: [['pressure', 1, 2], ['density', -1, 2], ['area', -1, 2]], why: '$\\text{s}^{-1}$: the metres all cancel' },
     ],
   },
 ];
@@ -1003,6 +1093,14 @@ const CONSISTENCY_SUMS: typeof CONSISTENCY = [
         expr: { display: '$v = \\dfrac{s}{t} + at$', terms: [[['length', 1, 1], ['time', -1, 1]], [['accel', 1, 1], ['time', 1, 1]]] },
         note: '$[s/t] = \\text{m s}^{-1}$ and $[at] = \\text{m s}^{-1}$: both terms are speeds',
       },
+      {
+        expr: { display: '$v = u + \\sqrt{as}$', terms: [[['speed', 1, 1]], [['accel', 1, 2], ['length', 1, 2]]] },
+        note: '$[as] = \\text{m}^{2}\\text{s}^{-2}$, so its square root is a speed',
+      },
+      {
+        expr: { display: '$v = \\dfrac{s}{t} + \\sqrt{as}$', terms: [[['length', 1, 1], ['time', -1, 1]], [['accel', 1, 2], ['length', 1, 2]]] },
+        note: '$[s/t] = \\text{m s}^{-1}$ and $[\\sqrt{as}] = (\\text{m}^{2}\\text{s}^{-2})^{1/2} = \\text{m s}^{-1}$',
+      },
     ],
     wrong: [
       { display: '$v = u + at^{2}$', terms: [[['speed', 1, 1]], [['accel', 1, 1], ['time', 2, 1]]], why: '$at^{2}$ is a distance, not a speed' },
@@ -1014,6 +1112,12 @@ const CONSISTENCY_SUMS: typeof CONSISTENCY = [
       { display: '$v = u + \\dfrac{a}{t}$', terms: [[['speed', 1, 1]], [['accel', 1, 1], ['time', -1, 1]]], why: '$a/t$ is $\\text{m s}^{-3}$' },
       { display: '$v = u + \\dfrac{s}{a}$', terms: [[['speed', 1, 1]], [['length', 1, 1], ['accel', -1, 1]]], why: '$s/a$ is a time squared' },
       { display: '$v = u + ast$', terms: [[['speed', 1, 1]], [['accel', 1, 1], ['length', 1, 1], ['time', 1, 1]]], why: '$ast$ is $\\text{m}^{2}\\text{s}^{-1}$' },
+      { display: '$v = \\dfrac{s}{t} + a$', terms: [[['length', 1, 1], ['time', -1, 1]], [['accel', 1, 1]]], why: 'an acceleration cannot be added to a speed' },
+      { display: '$v = \\dfrac{s}{t} + as$', terms: [[['length', 1, 1], ['time', -1, 1]], [['accel', 1, 1], ['length', 1, 1]]], why: '$as$ is the square of a speed' },
+      { display: '$v = \\dfrac{s}{t} + at^{2}$', terms: [[['length', 1, 1], ['time', -1, 1]], [['accel', 1, 1], ['time', 2, 1]]], why: '$at^{2}$ is a distance' },
+      { display: '$v = u + \\sqrt{at}$', terms: [[['speed', 1, 1]], [['accel', 1, 2], ['time', 1, 2]]], why: '$\\sqrt{at}$ is $(\\text{m s}^{-1})^{1/2}$, not a speed' },
+      { display: '$v = \\sqrt{as} + at^{2}$', terms: [[['accel', 1, 2], ['length', 1, 2]], [['accel', 1, 1], ['time', 2, 1]]], why: 'the second term is a distance' },
+      { display: '$v = \\sqrt{\\dfrac{s}{a}} + at$', terms: [[['length', 1, 2], ['accel', -1, 2]], [['accel', 1, 1], ['time', 1, 1]]], why: 'the first term is a time' },
     ],
   },
 ];
@@ -1039,13 +1143,35 @@ function exprKey(e: { factors?: [string, number, number][]; terms?: [string, num
     .join(' + ');
 }
 
+/**
+ * The surface shape of an equation: how many terms it has and how its first term is written.
+ *
+ * The correct equation must not stand out by its shape. "v = s/t + at" among four options that all
+ * begin "v = u + ..." is picked without a single index being matched, so the wrong options are
+ * ordered by how closely they mimic the correct one — same number of terms first, then the same
+ * leading term — before the different-observation rule chooses between them.
+ */
+function surface(display: string): { terms: number; lead: string } {
+  const rhs = display.slice(display.indexOf('=') + 1);
+  const terms = rhs.split('+');
+  const lead = terms[0].replace(/\\tfrac\{1\}\{2\}|\\dfrac|\\frac|\\sqrt|\\left|\\right|[\s${}]/g, '');
+  return { terms: terms.length, lead };
+}
+
 function consistencyQ(rng: RNG): Generated | null {
   const item = rng.pick([...CONSISTENCY, ...CONSISTENCY_SUMS]);
   const right = rng.pick(item.consistent);
-  // four wrong equations that are four *different* observations, not the same one four times over
+  const shape = surface(right.expr.display);
+  const like = (d: string) => {
+    const t = surface(d);
+    return (t.terms === shape.terms ? 2 : 0) + (t.lead === shape.lead ? 1 : 0);
+  };
+  // four wrong equations that are four *different* observations, not the same one four times over,
+  // and as far as the list allows they wear the same surface shape as the correct one
   const wrongs: typeof item.wrong = [];
   const keys = new Set<string>();
-  for (const w of rng.shuffle(item.wrong)) {
+  const pool = rng.shuffle(item.wrong).sort((a, b) => like(b.display) - like(a.display));
+  for (const w of pool) {
     if (wrongs.length >= 4) break;
     const k = exprKey(w);
     if (keys.has(k)) continue;
@@ -1103,7 +1229,12 @@ function graphQ(rng: RNG, level: Level): Generated | null {
   const target = specVec(spec)!;
   // the classic slip: the area worked out where the gradient was asked for, or the other way round
   const swapped = specVec(item.op === 'gradient' ? area : gradient)!;
-  const options = vecOptions(rng, target, [{ v: swapped, trap: `gradient and area swapped: these are the units of the ${item.op === 'gradient' ? 'area under' : 'gradient of'} the graph` }], item.near);
+  const extras: WrongVec[] = [{ v: swapped, trap: `gradient and area swapped: these are the units of the ${item.op === 'gradient' ? 'area under' : 'gradient of'} the graph` }];
+  // and the slips in the division itself, which are what this question is really testing
+  if (item.op === 'gradient') extras.push({ v: target.map((e) => -e) as Vec, trap: 'divided the units of the horizontal axis by those of the vertical axis' });
+  if (yPow !== 1) extras.push({ v: specVec({ num: [[item.y, 1]], den: item.op === 'gradient' ? [[item.x, xPow]] : [] })!, trap: `forgot that the vertical axis carries ${item.yName}, not the quantity itself` });
+  if (xPow !== 1) extras.push({ v: specVec(item.op === 'gradient' ? { num: [[item.y, yPow]], den: [[item.x, 1]] } : { num: [[item.y, yPow], [item.x, 1]] })!, trap: `forgot that the horizontal axis carries ${item.xName}, not the quantity itself` });
+  const options = vecOptions(rng, target, extras, item.near);
   if (!options) return null;
   const g = finish(
     options,

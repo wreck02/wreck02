@@ -77,8 +77,13 @@ function balanced(rng: RNG, answer: Exact, must: Distractor[], extra: Distractor
   rng.shuffle(extra).forEach((d) => add(d, 1));
   rng.shuffle(last).forEach((d) => add(d, 2));
   if (pool.length < count) return pool;
+  // Which headline trap is guaranteed a slot: pick the *side* first. Taking one at random instead
+  // meant that when a variant's headline traps nearly all overshoot (as the area formula's do) the
+  // guaranteed one sat above the answer almost every time, and the answer could then never be the
+  // largest option — the top of the list was a free elimination in every question.
   const musts = pool.filter((d) => d.tier === 0);
-  const forced = musts.length ? [rng.pick(musts)] : [];
+  const mSides = [musts.filter((d) => d.value.cmp(answer) < 0), musts.filter((d) => d.value.cmp(answer) > 0)].filter((x) => x.length > 0);
+  const forced = mSides.length ? [rng.pick(rng.pick(mSides))] : [];
   // stable sort: the tiers keep their priority, the shuffle inside a tier keeps its order
   const rest = pool.filter((d) => !forced.includes(d)).sort((x, y) => x.tier - y.tier);
   const below = rest.filter((d) => d.value.cmp(answer) < 0);
@@ -162,12 +167,12 @@ function areaQ(rng: RNG): Generated | null {
     { value: frac(p * q, 2), trap: 'forgot the sin C factor' },
     { value: attempt(() => E(p).mul(E(q)).mul(exactCos(C)).mul(frac(1, 2))), trap: 'used cos C instead of sin C' },
     { value: attempt(() => E(p).mul(E(q)).mul(exactSin(swap3060(C))).mul(frac(1, 2))), trap: 'sin 30° and sin 60° swapped' },
+    // The one headline trap that undershoots. Without it every guaranteed trap sits above the answer
+    // and the largest option is wrong in every single question.
+    { value: E(p).mul(E(q)).mul(sinC).mul(frac(1, 4)), trap: 'used ¼ab sin C' },
   ]), cleanOnly([
     { value: E(p * q), trap: 'just multiplied the two sides' },
     { value: frac(p + q, 2).mul(sinC), trap: 'added the sides instead of multiplying them' },
-    // Two under-estimates, so the over-estimates ("forgot the ½", "just multiplied the sides") do not
-    // crowd every other option below the answer and leave the top of the list a free elimination.
-    { value: E(p).mul(E(q)).mul(sinC).mul(frac(1, 4)), trap: 'used ¼ab sin C' },
     { value: E(p).mul(E(q)).mul(sinC).mul(frac(1, 2)).mul(frac(1, 2)), trap: 'halved the area a second time' },
     ...[30, 45, 60].filter((d) => d !== C).map((d) => ({
       value: E(p).mul(E(q)).mul(exactSin(d)).mul(frac(1, 2)),
@@ -459,6 +464,10 @@ function sineThenAreaQ(rng: RNG): Generated | null {
     { value: b, trap: 'stopped after finding the second side' },
     { value: attempt(() => E(a).mul(b).mul(exactCos(C)).mul(frac(1, 2))), trap: 'used cos C instead of sin C' },
     { value: attempt(() => E(a).mul(b).mul(sinC).mul(frac(1, 4))), trap: 'used ¼ab sin C' },
+    // Over-estimates: without them every option but one sits below the answer and the question is
+    // answerable by position.
+    { value: attempt(() => E(a).mul(b)), trap: 'multiplied the two sides only' },
+    { value: attempt(() => b.mul(b).mul(sinC).mul(frac(1, 2))), trap: 'used $AC$ for both sides instead of $BC$ for one of them' },
   ]));
   if (distractors.length < 4) return null;
   return {

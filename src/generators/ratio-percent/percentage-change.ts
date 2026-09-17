@@ -189,7 +189,9 @@ function applyChange(rng: RNG): Generated | null {
     // wrong options nearly all undershoot), which pinned the answer to the top of the sorted list.
     // These two overshoot an increase and undershoot a decrease, so both sides are live.
     { value: tryE(() => E(N).mul(mult(2 * sp))), trap: `doubled the percentage: used ${2 * Math.abs(p)}% instead of ${p}%` },
-    { value: tryE(() => E(N).div(mult(-sp))), trap: `divided by ${multStr(-sp)}, the multiplier for a change the other way` },
+    // Same ceiling as the ×10 slip: dividing 300 by 0.1 gives 3000, which no one reads as "300
+    // increased by 90%".
+    { value: 100 - sp >= 40 ? tryE(() => E(N).div(mult(-sp))) : null, trap: `divided by ${multStr(-sp)}, the multiplier for a change the other way` },
   ]);
   const weak = keep([{ value: E(100 + sp), trap: 'gave the multiplier as a percentage instead of the new value' }], { exclude: [N] });
   let stem: string;
@@ -288,16 +290,16 @@ function reverse(rng: RNG): Generated | null {
     // a typo rather than as a mistake, and it is struck out on sight.
     { value: newV <= 10 * p ? E(newV - sp) : null, trap: `${up ? 'subtracted' : 'added'} ${p} rather than undoing ${p}%` },
     { value: E(newV).mul(frac(p, 100)), trap: `found ${p}% of the new value` },
-    // Capped at five times the answer: for p = 5 this is twenty times the new value, and a town of
-    // 1.52 million after a 5% fall from 80 000 is eliminated without any arithmetic.
-    { value: 100 * newV <= 5 * p * O ? E(newV).mul(frac(100, p)) : null, trap: `treated the new value as ${p}% of the original` },
+    { value: E(newV).mul(frac(100, p)), trap: `treated the new value as ${p}% of the original` },
     // Undoing a change lands nearly every mistake on the same side of the original — below it for a
     // rise, above it for a fall — so the answer was the largest option in 80% of decrease questions.
     // These three over-correct, and so sit on the other side in each direction.
     { value: tryE(() => E(newV).div(mult(sp)).mul(mult(-sp))), trap: `over-corrected: undid the ${p}% change and then applied a ${p}% change the other way on top` },
     { value: tryE(() => E(newV).div(mult(sp)).div(mult(sp))), trap: `divided by ${multStr(sp)} a second time` },
     { value: 100 + 2 * sp > 0 ? tryE(() => E(newV).div(mult(2 * sp))) : null, trap: `doubled the percentage in the multiplier: divided by ${multStr(2 * sp)}` },
-  ]);
+    // Nothing beyond five times the original: for p = 5 "treated the new value as 5% of the original"
+    // is twenty times the answer, and a town of 1.52 million after a 5% fall from 80 000 goes on sight.
+  ], { max: 5 * O });
   let stem: string;
   if (ctx === 'sale') stem = `In a sale all prices are reduced by $${p}\\%$. The sale price of a jacket is £${newV}. Find its original price in pounds.`;
   else if (ctx === 'population') stem = `After ${up ? 'an increase' : 'a decrease'} of $${p}\\%$, the population of a town is $${thou(newV)}$. Find the original population.`;

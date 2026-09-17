@@ -224,7 +224,7 @@ const L1_QUANTITIES: { q: string; name: string; unit: string; note: string; near
   },
   {
     q: 'charge', name: 'electric charge', unit: 'the coulomb', note: '$Q = It$, so $\\text{C} = \\text{A s}$',
-    near: ['current', 'time', 'voltage'],
+    near: ['current', 'time', 'voltage', 'resistance', 'freq', 'power'],
     trap: 'A coulomb is an ampere second: the ampere is the base unit, the coulomb is derived from it.',
   },
   {
@@ -244,17 +244,17 @@ const L1_QUANTITIES: { q: string; name: string; unit: string; note: string; near
   },
   {
     q: 'freq', name: 'frequency', unit: 'the hertz', note: '$f = 1/T$, so $\\text{Hz} = \\text{s}^{-1}$',
-    near: ['time', 'speed', 'accel', 'length'],
+    near: ['time', 'speed', 'accel', 'length', 'spring', 'area'],
     trap: 'A frequency is one over a time: s⁻¹, the reciprocal of the period, with no metres in it.',
   },
   {
     q: 'resistance', name: 'electrical resistance', unit: 'the ohm', note: '$R = V/I$, so $\\Omega = \\text{V A}^{-1} = \\text{kg m}^{2}\\text{s}^{-3}\\text{A}^{-2}$',
-    near: ['voltage', 'power', 'charge', 'current'],
+    near: ['voltage', 'power', 'charge', 'current', 'resistivity', 'energy'],
     trap: 'Dividing the volt by the ampere gives a second A⁻¹: kg m² s⁻³ A⁻², not the A⁻¹ of the volt.',
   },
   {
     q: 'voltage', name: 'potential difference', unit: 'the volt', note: '$V = P/I$, so $\\text{V} = \\text{W A}^{-1} = \\text{kg m}^{2}\\text{s}^{-3}\\text{A}^{-1}$',
-    near: ['power', 'energy', 'charge', 'resistance'],
+    near: ['power', 'energy', 'charge', 'resistance', 'current', 'force'],
     trap: 'A volt is a joule per coulomb — a watt per ampere — so it carries A⁻¹, not A.',
   },
   {
@@ -327,14 +327,14 @@ const CONSTANTS: { sym: string; eq: string; where: string; spec: Spec; note: str
     sym: 'G', eq: 'F = \\dfrac{G m_1 m_2}{r^{2}}', where: '$F$ is a force, $m_1$ and $m_2$ are masses and $r$ is a distance',
     spec: { num: [['force', 1], ['length', 2]], den: [['mass', 2]] },
     note: '$G = Fr^{2}/(m_1 m_2)$, so the units are $\\text{N m}^{2}\\text{kg}^{-2} = \\text{m}^{3}\\text{kg}^{-1}\\text{s}^{-2}$',
-    near: ['accel', 'force', 'energy', 'density'],
+    near: ['accel', 'force', 'energy', 'density', 'spring', 'pressure'],
     trap: 'Two masses divide, not one, so the kg power is −1; the r² adds two powers of m to the newton, giving m³.',
   },
   {
     sym: 'h', eq: 'E = hf', where: '$E$ is an energy and $f$ is a frequency',
     spec: { num: [['energy', 1]], den: [['freq', 1]] },
     note: '$h = E/f$, so the units are $\\text{J s} = \\text{kg m}^{2}\\text{s}^{-1}$',
-    near: ['energy', 'power', 'momentum', 'force'],
+    near: ['energy', 'power', 'momentum', 'force', 'spring', 'speed'],
     trap: 'A frequency is s⁻¹, so dividing by it multiplies by a second: J s, one power of s above the joule — not J s⁻¹, which is a watt.',
   },
   {
@@ -348,28 +348,28 @@ const CONSTANTS: { sym: string; eq: string; where: string; spec: Spec; note: str
     sym: '\\eta', eq: 'F = 6\\pi \\eta r v', where: '$F$ is a force, $r$ is a radius and $v$ is a speed',
     spec: { num: [['force', 1]], den: [['length', 1], ['speed', 1]] },
     note: '$\\eta = F/(6\\pi r v)$ and $6\\pi$ has no units, so the units are $\\text{kg m}^{-1}\\text{s}^{-1}$',
-    near: ['pressure', 'density', 'linearDensity', 'spring'],
+    near: ['pressure', 'density', 'linearDensity', 'spring', 'mass', 'force'],
     trap: 'The 6π carries no units: dividing the newton by a length and a speed leaves kg m⁻¹ s⁻¹, one power of s away from a pressure.',
   },
   {
     sym: 'R', eq: 'V = IR', where: '$V$ is a potential difference and $I$ is a current',
     spec: { num: [['voltage', 1]], den: [['current', 1]] },
     note: '$R = V/I$, so the units are $\\text{V A}^{-1} = \\text{kg m}^{2}\\text{s}^{-3}\\text{A}^{-2}$',
-    near: ['voltage', 'power', 'charge', 'current'],
+    near: ['voltage', 'power', 'charge', 'current', 'resistivity', 'energy'],
     trap: 'Dividing the volt by the ampere gives a second power of A⁻¹: kg m² s⁻³ A⁻², not the A⁻¹ of the volt itself.',
   },
   {
     sym: 'k', eq: 'P = kv^{3}', where: '$P$ is the power of a wind turbine and $v$ is the wind speed',
     spec: { num: [['power', 1]], den: [['speed', 3]] },
     note: '$k = P/v^{3}$, so the units are $\\text{kg m}^{2}\\text{s}^{-3} \\div \\text{m}^{3}\\text{s}^{-3} = \\text{kg m}^{-1}$',
-    near: ['density', 'mass', 'pressure', 'spring'],
+    near: ['density', 'mass', 'pressure', 'spring', 'linearDensity', 'force'],
     trap: 'The speed is cubed, so three powers of m and three of s⁻¹ divide out: the s powers cancel completely, leaving kg m⁻¹.',
   },
   {
     sym: 'c', eq: 'E = mc^{2}', where: '$E$ is an energy and $m$ is a mass',
     spec: { num: [['energy', 1], ['mass', -1]] },
     note: '$c^{2} = E/m$, so $c$ has the units of a speed, $\\text{m s}^{-1}$',
-    near: ['accel', 'energy', 'freq', 'length'],
+    near: ['accel', 'energy', 'freq', 'length', 'time', 'momentum'],
     trap: 'E/m gives c², not c: take the square root, which halves both powers, to get m s⁻¹.',
   },
   {
@@ -383,21 +383,21 @@ const CONSTANTS: { sym: string; eq: string; where: string; spec: Spec; note: str
     sym: '\\rho', eq: 'R = \\dfrac{\\rho L}{A}', where: '$R$ is a resistance, $L$ is a length and $A$ is an area',
     spec: { num: [['resistance', 1], ['length', 2]], den: [['length', 1]] },
     note: '$\\rho = RA/L$, so the units are $\\Omega\\ \\text{m} = \\text{kg m}^{3}\\text{s}^{-3}\\text{A}^{-2}$',
-    near: ['resistance', 'voltage', 'power', 'density'],
+    near: ['resistance', 'voltage', 'power', 'density', 'resistivity', 'charge'],
     trap: 'The area is on top and the length underneath, so the ohm gains one power of m: Ω m, not Ω m⁻¹.',
   },
   {
     sym: '\\lambda', eq: 'N = N_0 e^{-\\lambda t}', where: '$N$ and $N_0$ are numbers of nuclei and $t$ is a time',
     spec: { num: [['freq', 1]] },
     note: 'the exponent $\\lambda t$ must be a pure number, so $\\lambda$ has the units of $1/t$: $\\text{s}^{-1}$',
-    near: ['time', 'freq', 'speed', 'accel'],
+    near: ['time', 'freq', 'speed', 'accel', 'length', 'mass'],
     trap: 'Anything in an exponent has no units, so λt is dimensionless and λ is one over a time — a decay constant is not a time.',
   },
   {
     sym: 'k', eq: 'F = \\dfrac{k q_1 q_2}{r^{2}}', where: '$F$ is a force, $q_1$ and $q_2$ are charges and $r$ is a distance',
     spec: { num: [['force', 1], ['length', 2]], den: [['charge', 2]] },
     note: '$k = Fr^{2}/(q_1 q_2)$, so the units are $\\text{kg m}^{3}\\text{s}^{-4}\\text{A}^{-2}$',
-    near: ['voltage', 'resistance', 'resistivity', 'force'],
+    near: ['voltage', 'resistance', 'resistivity', 'force', 'power', 'charge'],
     trap: 'Two charges divide, so the A power is −2 and the two seconds in C = A s push the s power to −4.',
   },
 ];
@@ -464,11 +464,13 @@ const ODD_SETS: { q: string; name: string; right: { display: string; why: string
       { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-2}$', why: 'these are the base units of force, from $F = ma$' },
       { display: '$\\text{J}\\,\\text{m}^{-1}$', why: 'an energy per unit distance is a force' },
       { display: '$\\text{Pa}\\,\\text{m}^{2}$', why: 'a pressure times an area is a force' },
+      { display: '$\\text{W}\\,\\text{s}\\,\\text{m}^{-1}$', why: 'W s is an energy, so an energy per unit distance again: a force' },
     ],
     odd: [
       { display: '$\\text{kg}\\,\\text{m}\\,\\text{s}^{-1}$', why: 'that is a momentum, not a force' },
       { display: '$\\text{N}\\,\\text{m}$', why: 'N m is a moment or an energy, not a force' },
       { display: '$\\text{J}\\,\\text{m}$', why: 'dividing by the length is what gives a force, not multiplying' },
+      { display: '$\\text{W}\\,\\text{m}^{-1}$', why: 'a power per unit length is a force per second, not a force' },
     ],
   },
   {
@@ -509,11 +511,29 @@ const ODD_SETS: { q: string; name: string; right: { display: string; why: string
       { display: '$\\text{N}\\,\\text{s}\\,\\text{kg}^{-1}$', why: 'an impulse divided by a mass is a change of velocity' },
       { display: '$\\text{J}\\,\\text{s}\\,\\text{m}^{-1}\\,\\text{kg}^{-1}$', why: 'J s m⁻¹ is a momentum, and a momentum per unit mass is a velocity' },
       { display: '$\\text{Pa}\\,\\text{m}^{2}\\,\\text{s}\\,\\text{kg}^{-1}$', why: 'Pa m² is a force, so this is force × time ÷ mass, again a velocity' },
+      { display: '$\\text{m}\\,\\text{Hz}$', why: 'a wavelength times a frequency is a speed, $v = f\\lambda$' },
+      { display: '$\\text{W}\\,\\text{N}^{-1}$', why: 'a power divided by a force is a speed, from $P = Fv$' },
     ],
     odd: [
       { display: '$\\text{m}\\,\\text{s}^{-2}$', why: 'that is an acceleration: one power of s too many' },
       { display: '$\\text{N}\\,\\text{s}$', why: 'N s is a momentum, not a velocity — it still carries the mass' },
       { display: '$\\text{J}\\,\\text{kg}^{-1}$', why: 'an energy per unit mass is the square of a speed, m² s⁻²' },
+      { display: '$\\text{W}\\,\\text{kg}^{-1}$', why: 'a power per unit mass is m² s⁻³, not a speed' },
+    ],
+  },
+  {
+    q: 'density', name: 'density',
+    right: [
+      { display: '$\\text{kg}\\,\\text{m}^{-3}$', why: 'these are the base units of density, from $\\rho = m/V$' },
+      { display: '$\\text{N}\\,\\text{s}^{2}\\,\\text{m}^{-4}$', why: 'N s² is a mass × a length, so dividing by m⁴ leaves kg m⁻³' },
+      { display: '$\\text{Pa}\\,\\text{s}^{2}\\,\\text{m}^{-2}$', why: 'Pa s² is kg m⁻¹, so dividing by m² gives kg m⁻³' },
+      { display: '$\\text{J}\\,\\text{s}^{2}\\,\\text{m}^{-5}$', why: 'J s² is kg m², so dividing by m⁵ gives kg m⁻³' },
+      { display: '$\\text{W}\\,\\text{s}^{3}\\,\\text{m}^{-5}$', why: 'W s³ is kg m², so dividing by m⁵ gives kg m⁻³ again' },
+    ],
+    odd: [
+      { display: '$\\text{kg}\\,\\text{m}^{-2}$', why: 'that is a mass per unit area, one power of m short' },
+      { display: '$\\text{kg}\\,\\text{m}^{-1}$', why: 'that is a mass per unit length, not per unit volume' },
+      { display: '$\\text{N}\\,\\text{s}^{2}\\,\\text{m}^{-3}$', why: 'N s² m⁻³ is kg m⁻², a mass per unit area' },
     ],
   },
 ];
@@ -528,15 +548,17 @@ function oddOneOutQ(rng: RNG): Generated | null {
   const odd = rng.pick(set.odd);
   const right = rng.pickDistinct(set.right, 4);
   const options = buildChoiceOptions(rng, odd.display, right.map((r) => ({ display: r.display, trap: r.why })));
+  // the wording follows the five units, so the same question never comes round twice in two guises
+  const ask = phrasing(odd.display + right.map((r) => r.display).join(''), ODD_PHRASINGS)(set.name);
   const g = finish(
     options,
-    `In base units a ${set.name} is ${vecTex(QTY[set.q])}; every other option reduces to that, but ${odd.display} does not — ${odd.why}.`,
+    `In base units ${/^[aeiou]/i.test(set.name) ? 'an' : 'a'} ${set.name} is ${vecTex(QTY[set.q])}; every other option reduces to that, but ${odd.display} does not — ${odd.why}.`,
     // the trap names the confusion this instance really turns on, not a fixed line about some other quantity
     `${odd.why.charAt(0).toUpperCase()}${odd.why.slice(1)}: reduce every option to kg, m and s before deciding.`,
     ['units', 'base units', 'odd one out'],
     { shape: 'odd', quantity: set.q },
   );
-  return { ...g, stem: rng.pick(ODD_PHRASINGS)(set.name) };
+  return { ...g, stem: ask };
 }
 
 // ----------------------------------------------------------------------------- level 4
@@ -765,6 +787,8 @@ const CONSISTENCY: {
       { display: '$v = g t^{2}$', factors: [['accel', 1, 1], ['time', 2, 1]], why: '$\\text{m}$: that is a distance' },
       { display: '$v = \\dfrac{t}{L}$', factors: [['time', 1, 1], ['length', -1, 1]], why: 'the reciprocal of a speed' },
       { display: '$v = Lt$', factors: [['length', 1, 1], ['time', 1, 1]], why: '$\\text{m s}$ is nothing familiar — a speed divides by the time' },
+      { display: '$v = \\dfrac{L}{t^{2}}$', factors: [['length', 1, 1], ['time', -2, 1]], why: 'that is an acceleration, $\\text{m s}^{-2}$' },
+      { display: '$v = g$', factors: [['accel', 1, 1]], why: 'an acceleration is not a speed: it is metres per second *per second*' },
     ],
   },
   {
@@ -782,6 +806,8 @@ const CONSISTENCY: {
       { display: '$T = \\sqrt{\\dfrac{g}{L}}$', factors: [['accel', 1, 2], ['length', -1, 2]], why: 'that is a frequency, $\\text{s}^{-1}$' },
       { display: '$T = \\dfrac{L}{g}$', factors: [['length', 1, 1], ['accel', -1, 1]], why: '$\\text{s}^{2}$: the square root is missing' },
       { display: '$T = Lg$', factors: [['length', 1, 1], ['accel', 1, 1]], why: '$\\text{m}^{2}\\text{s}^{-2}$, the square of a speed' },
+      { display: '$T = \\dfrac{m}{\\sqrt{k}}$', factors: [['mass', 1, 1], ['spring', -1, 2]], why: '$\\text{kg}^{1/2}\\text{s}$: the mass does not cancel' },
+      { display: '$T = \\sqrt{\\dfrac{L}{k}}$', factors: [['length', 1, 2], ['spring', -1, 2]], why: 'a length over a spring constant leaves $\\text{m}^{1/2}\\text{kg}^{-1/2}\\text{s}$' },
     ],
   },
   {
@@ -799,6 +825,9 @@ const CONSISTENCY: {
       { display: '$E = \\dfrac{1}{2} m^{2} v$', factors: [['mass', 2, 1], ['speed', 1, 1]], why: '$\\text{kg}^{2}\\text{m s}^{-1}$' },
       { display: '$E = mgh^{2}$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 2, 1]], why: 'one power of the height too many' },
       { display: '$E = \\dfrac{mgh}{v}$', factors: [['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1], ['speed', -1, 1]], why: 'dividing by a speed leaves a momentum' },
+      { display: '$E = mv^{2}h^{2}$', factors: [['mass', 1, 1], ['speed', 2, 1], ['length', 2, 1]], why: 'two powers of the height too many' },
+      { display: '$E = \\dfrac{mv^{2}}{gh}$', factors: [['mass', 1, 1], ['speed', 2, 1], ['accel', -1, 1], ['length', -1, 1]], why: 'the $gh$ underneath cancels the whole of $v^{2}$, leaving a mass' },
+      { display: '$E = \\dfrac{1}{2}mgv$', factors: [['mass', 1, 1], ['accel', 1, 1], ['speed', 1, 1]], why: '$\\text{kg m}^{2}\\text{s}^{-3}$ is a power, not an energy' },
     ],
   },
 ];
@@ -828,6 +857,10 @@ const CONSISTENCY_SUMS: typeof CONSISTENCY = [
       { display: '$E = mgh + \\dfrac{mv^{2}}{h}$', terms: [[['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1]], [['mass', 1, 1], ['speed', 2, 1], ['length', -1, 1]]], why: 'the second term is a force: dividing by the height loses a power of m' },
       { display: '$E = mgh^{2} + Fd$', terms: [[['mass', 1, 1], ['accel', 1, 1], ['length', 2, 1]], [['force', 1, 1], ['length', 1, 1]]], why: 'the first term has one power of the height too many' },
       { display: '$E = F d^{2} + \\tfrac12 mv^{2}$', terms: [[['force', 1, 1], ['length', 2, 1]], [['mass', 1, 1], ['speed', 2, 1]]], why: 'the first term is an energy times a length' },
+      { display: '$E = Fd + \\tfrac12 m^{2}v$', terms: [[['force', 1, 1], ['length', 1, 1]], [['mass', 2, 1], ['speed', 1, 1]]], why: 'the second term is $\\text{kg}^{2}\\text{m s}^{-1}$, nothing physical' },
+      { display: '$E = mgh + Fdv$', terms: [[['mass', 1, 1], ['accel', 1, 1], ['length', 1, 1]], [['force', 1, 1], ['length', 1, 1], ['speed', 1, 1]]], why: 'the second term is an energy times a speed' },
+      { display: '$E = \\tfrac12 mv^{2} + \\dfrac{F}{d}$', terms: [[['mass', 1, 1], ['speed', 2, 1]], [['force', 1, 1], ['length', -1, 1]]], why: 'the second term is a force per unit length, a spring constant' },
+      { display: '$E = \\tfrac12 mv + F d^{2}$', terms: [[['mass', 1, 1], ['speed', 1, 1]], [['force', 1, 1], ['length', 2, 1]]], why: 'neither term is an energy: a momentum plus an energy times a length' },
     ],
   },
   {
@@ -850,15 +883,49 @@ const CONSISTENCY_SUMS: typeof CONSISTENCY = [
       { display: '$v = u + \\dfrac{s}{t^{2}}$', terms: [[['speed', 1, 1]], [['length', 1, 1], ['time', -2, 1]]], why: '$s/t^{2}$ is an acceleration' },
       { display: '$v = u + as$', terms: [[['speed', 1, 1]], [['accel', 1, 1], ['length', 1, 1]]], why: '$as$ is $\\text{m}^{2}\\text{s}^{-2}$, the square of a speed' },
       { display: '$v = \\dfrac{s}{t^{2}} + at$', terms: [[['length', 1, 1], ['time', -2, 1]], [['accel', 1, 1], ['time', 1, 1]]], why: 'the first term is an acceleration' },
+      { display: '$v = u + \\dfrac{a}{t}$', terms: [[['speed', 1, 1]], [['accel', 1, 1], ['time', -1, 1]]], why: '$a/t$ is $\\text{m s}^{-3}$' },
+      { display: '$v = u + \\dfrac{s}{a}$', terms: [[['speed', 1, 1]], [['length', 1, 1], ['accel', -1, 1]]], why: '$s/a$ is a time squared' },
+      { display: '$v = u + ast$', terms: [[['speed', 1, 1]], [['accel', 1, 1], ['length', 1, 1], ['time', 1, 1]]], why: '$ast$ is $\\text{m}^{2}\\text{s}^{-1}$' },
     ],
   },
 ];
 
+/**
+ * What a candidate has to notice about a wrong equation: the units each of its terms reduces to.
+ * Two equations with the same signature — $T = m/k$ and $T = L/g$, both $\text{s}^{2}$, or
+ * $E = mg$ and $E = mv^{2}/h$, both forces — are one observation, so offering both would kill two
+ * options with a single thought. `key` lets `buildChoiceOptions` keep at most one of each.
+ */
+function exprKey(e: { factors?: [string, number, number][]; terms?: [string, number, number][][] }): string {
+  const parts = e.terms ?? (e.factors ? [e.factors] : []);
+  return parts
+    .map((fs) => {
+      let v: Vec = [0, 0, 0, 0];
+      for (const [sym, nu, de] of fs) {
+        if (!QTY[sym]) return '?';
+        v = add(v, QTY[sym], nu / de);
+      }
+      return v.join(',');
+    })
+    .sort()
+    .join(' + ');
+}
+
 function consistencyQ(rng: RNG): Generated | null {
   const item = rng.pick([...CONSISTENCY, ...CONSISTENCY_SUMS]);
   const right = rng.pick(item.consistent);
-  const wrongs = rng.pickDistinct(item.wrong, 4);
-  const options = buildChoiceOptions(rng, right.expr.display, wrongs.map((w) => ({ display: w.display, trap: w.why })));
+  // four wrong equations that are four *different* observations, not the same one four times over
+  const wrongs: typeof item.wrong = [];
+  const keys = new Set<string>();
+  for (const w of rng.shuffle(item.wrong)) {
+    if (wrongs.length >= 4) break;
+    const k = exprKey(w);
+    if (keys.has(k)) continue;
+    keys.add(k);
+    wrongs.push(w);
+  }
+  if (wrongs.length < 4) return null;
+  const options = buildChoiceOptions(rng, right.expr.display, wrongs.map((w) => ({ display: w.display, trap: w.why, key: exprKey(w) })));
   // only mention the square root when one of the five equations actually has one
   const rooted = options.some((o) => o.display.includes('\\sqrt'));
   const g = finish(
@@ -870,7 +937,12 @@ function consistencyQ(rng: RNG): Generated | null {
     ['units', 'dimensional analysis', 'consistency'],
     { shape: 'expr', lhs: item.lhs, exprs: [right.expr, ...wrongs.map((w) => ({ display: w.display, factors: w.factors, terms: w.terms }))] },
   );
-  return { ...g, stem: `Given that ${item.given}, which of the following equations is dimensionally consistent?\n\n(Numerical factors have no units.)` };
+  // as at level 3, the wording follows the content, so a re-phrasing is always a different question
+  const ask = phrasing(item.lhs + right.expr.display, [
+    'which of the following equations is dimensionally consistent?',
+    'which of the following equations could be correct on grounds of units alone?',
+  ]);
+  return { ...g, stem: `Given that ${item.given}, ${ask}\n\n(Numerical factors have no units.)` };
 }
 
 /**
@@ -879,13 +951,13 @@ function consistencyQ(rng: RNG): Generated | null {
  * level-4 ones: the gradient is no longer one division of two familiar units.
  */
 const GRAPHS: { y: string; yName: string; yPow?: number; x: string; xName: string; xPow?: number; op: 'gradient' | 'area'; note: string; near: string[]; hard?: boolean }[] = [
-  { y: 'force', yName: 'force', x: 'length', xName: 'extension', op: 'gradient', note: 'the gradient is a force divided by a length', near: ['spring', 'force', 'energy', 'pressure'] },
-  { y: 'force', yName: 'force', x: 'length', xName: 'extension', op: 'area', note: 'the area is a force times a length, i.e. work done', near: ['energy', 'force', 'power', 'spring'] },
-  { y: 'speed', yName: 'velocity', x: 'time', xName: 'time', op: 'gradient', note: 'the gradient is a velocity divided by a time, i.e. an acceleration', near: ['accel', 'speed', 'force', 'freq'] },
-  { y: 'speed', yName: 'velocity', x: 'time', xName: 'time', op: 'area', note: 'the area is a velocity times a time, i.e. a displacement', near: ['length', 'speed', 'accel', 'area'] },
-  { y: 'force', yName: 'force', x: 'time', xName: 'time', op: 'area', note: 'the area is a force times a time, i.e. an impulse', near: ['momentum', 'force', 'energy', 'speed'] },
-  { y: 'power', yName: 'power', x: 'time', xName: 'time', op: 'area', note: 'the area is a power times a time, i.e. an energy', near: ['energy', 'power', 'force', 'momentum'] },
-  { y: 'voltage', yName: 'potential difference', x: 'current', xName: 'current', op: 'gradient', note: 'the gradient is a potential difference divided by a current, i.e. a resistance', near: ['voltage', 'power', 'charge', 'current'], hard: true },
+  { y: 'force', yName: 'force', x: 'length', xName: 'extension', op: 'gradient', note: 'the gradient is a force divided by a length', near: ['spring', 'force', 'energy', 'pressure', 'momentum', 'density'] },
+  { y: 'force', yName: 'force', x: 'length', xName: 'extension', op: 'area', note: 'the area is a force times a length, i.e. work done', near: ['energy', 'force', 'power', 'spring', 'momentum', 'pressure'] },
+  { y: 'speed', yName: 'velocity', x: 'time', xName: 'time', op: 'gradient', note: 'the gradient is a velocity divided by a time, i.e. an acceleration', near: ['accel', 'speed', 'force', 'freq', 'length', 'time'] },
+  { y: 'speed', yName: 'velocity', x: 'time', xName: 'time', op: 'area', note: 'the area is a velocity times a time, i.e. a displacement', near: ['length', 'speed', 'accel', 'area', 'time', 'freq'] },
+  { y: 'force', yName: 'force', x: 'time', xName: 'time', op: 'area', note: 'the area is a force times a time, i.e. an impulse', near: ['momentum', 'force', 'energy', 'speed', 'mass', 'spring'] },
+  { y: 'power', yName: 'power', x: 'time', xName: 'time', op: 'area', note: 'the area is a power times a time, i.e. an energy', near: ['energy', 'power', 'force', 'momentum', 'pressure', 'speed'] },
+  { y: 'voltage', yName: 'potential difference', x: 'current', xName: 'current', op: 'gradient', note: 'the gradient is a potential difference divided by a current, i.e. a resistance', near: ['voltage', 'power', 'charge', 'current', 'resistivity', 'energy'], hard: true },
   { y: 'pressure', yName: 'the pressure in a liquid', x: 'length', xName: 'the depth below the surface', op: 'gradient', note: 'the gradient is a pressure divided by a depth, i.e. $\\rho g$', near: ['density', 'pressure', 'spring', 'linearDensity', 'accel'], hard: true },
   { y: 'energy', yName: 'the kinetic energy of a trolley', x: 'speed', xPow: 2, xName: 'the square of its speed', op: 'gradient', note: 'the gradient is an energy divided by the square of a speed, i.e. half the mass', near: ['mass', 'energy', 'momentum', 'force'], hard: true },
   { y: 'time', yPow: 2, yName: 'the square of the period of a pendulum', x: 'length', xName: 'its length', op: 'gradient', note: 'the gradient is a time squared divided by a length, i.e. $4\\pi^{2}/g$', near: ['accel', 'speed', 'time', 'freq'], hard: true },

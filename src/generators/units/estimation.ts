@@ -80,16 +80,20 @@ function slipTrap(k: number): string {
 }
 
 /**
- * The mistake a wrong option represents. A named mistake that lands on this rung (to the nearest
- * power of ten) names it; otherwise the size of the slip does. No wrong option is ever unlabelled:
- * the review screen has to be able to say what went wrong.
+ * The rungs of the power-of-ten ladder that a *named* mistake actually lands on, as k → its trap.
+ * These are the rungs the ladder is built from: an option a candidate can reach by making a mistake
+ * the question is about, rather than one labelled only with the size of the slip.
  */
-function rungTrap(e: Est, k: number): string {
+function namedRungs(e: Est): Map<number, string> {
+  const out = new Map<number, string>();
   for (const m of e.mistakes) {
     if (m.value === null || !(m.value > 0)) continue;
-    if (Math.abs(Math.log10(m.value / e.value) - k) <= 0.5) return m.trap;
+    const lg = Math.log10(m.value / e.value);
+    const k = Math.round(lg);
+    if (k === 0 || Math.abs(lg - k) > 0.5 || Math.abs(k) > 4) continue;
+    if (!out.has(k)) out.set(k, m.trap);
   }
-  return slipTrap(k);
+  return out;
 }
 
 /**
@@ -132,22 +136,61 @@ function estimate(rng: RNG, e: Est): Generated | null {
   const disp = (v: number): string => `$${E(round(v)).toLatex({ format })}${e.unit ? `\\ ${e.unit}` : ''}$`;
 
   if (e.mode === 'choice') {
-    // The ladder runs from target×10^start to target×10^(start+4): drawing start from -4 to 0 puts the
-    // answer at every rank, including the smallest and the largest option. A narrower range would let a
-    // candidate strike out the ends without doing any physics — in the one template about size.
-    const start = rng.int(-4, 0);
-    const values: number[] = [];
-    for (let k = start; k < start + 5; k++) values.push(round(target * Math.pow(10, k)));
-    if (values.some((v) => cleanNum(v) === null)) return null;
-    const wrong = values.filter((v) => Math.abs(v / target - 1) > 1e-9);
-    if (wrong.length !== 4) return null;
+    /*
+     * The four wrong rungs are chosen from the ones a named mistake lands on, working outwards, and
+     * only then filled with "a factor of 10^k out" rungs — which are kept within a factor of 100 of
+     * the answer, with one rung at 10^±3 as a last resort. A contiguous five-rung run instead put an
+     * option 10^3 or 10^4 away in four questions out of five (a bath holding 3000 tonnes of water):
+     * absurd on sight, so it cost the question an option and told the candidate nothing.
+     *
+     * How many rungs sit below the answer is still drawn first, so its rank gives nothing away.
+     */
+    const named = namedRungs(e);
+    const rung = (k: number) => ({ k, trap: named.get(k) ?? slipTrap(k), named: named.has(k) });
+    // Each side offers the rungs from 10^1 to 10^4 away, ordered by how good an option they make: a
+    // rung a named mistake lands on beats a bare "10^k out" rung a decade nearer, and among equals
+    // the nearer rung wins. Four rungs a side means the answer can sit anywhere in the sorted list.
+    const side = (sign: number) =>
+      [1, 2, 3, 4]
+        .map((k) => rung(sign * k))
+        .sort((p, q) => (Math.abs(p.k) + (p.named ? 0 : 1.5)) - (Math.abs(q.k) + (q.named ? 0 : 1.5)));
+    const below = side(-1), above = side(1);
+    const chosen: { k: number; trap: string; named: boolean }[] = [];
+    // An unnamed rung beyond a factor of 100 names no mistake, so at most one may appear in a list.
+    // A missed 10^3 conversion (litres for m³, grams for kilograms) is at least a slip these chains
+    // really produce; 10^4 is not, so an unnamed one of those is a last resort, used only once both
+    // sides have run out of anything better.
+    let far = 0, allowFar = false;
+    const take = (c: { k: number; trap: string; named: boolean }): boolean => {
+      if (chosen.length >= 4) return false;
+      const isFar = !c.named && Math.abs(c.k) >= 3;
+      if (isFar && (far >= 1 || (Math.abs(c.k) >= 4 && !allowFar))) return false;
+      if (cleanNum(round(target * Math.pow(10, c.k))) === null) return false;
+      if (isFar) far++;
+      chosen.push(c);
+      return true;
+    };
+    const drain = (q: typeof below, want: number) => {
+      const rest: typeof below = [];
+      while (want > 0 && q.length > 0) {
+        const c = q.shift()!;
+        if (take(c)) want--;
+        else rest.push(c);
+      }
+      q.unshift(...rest); // a rung passed over now may still be needed to fill the list out
+    };
+    drain(below, rng.int(Math.max(0, 4 - above.length), Math.min(4, below.length)));
+    drain(above, 4 - chosen.length);
+    allowFar = true;
+    drain(below, 4 - chosen.length);
+    drain(above, 4 - chosen.length);
+    if (chosen.length < 4) return null;
+    const wrong = chosen.map((c) => round(target * Math.pow(10, c.k)));
+    const values = [target, ...wrong];
+    if (new Set(values).size !== values.length) return null;
     let options: Option[];
     try {
-      options = buildChoiceOptions(
-        rng,
-        disp(target),
-        wrong.map((v) => ({ display: disp(v), trap: rungTrap(e, Math.round(Math.log10(v / target))) })),
-      );
+      options = buildChoiceOptions(rng, disp(target), chosen.map((c) => ({ display: disp(round(target * Math.pow(10, c.k))), trap: c.trap })));
     } catch {
       return null;
     }

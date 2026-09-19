@@ -35,6 +35,14 @@ describe('session building', () => {
     expect(qs.every((q) => ids.includes(q.question.templateId))).toBe(true);
     expect(qs.filter((q) => q.question.templateId === ids[0]).length).toBeGreaterThan(10);
   });
+  it('never asks the same calculation twice in one session', () => {
+    // A pool of one template with a small parameter space: 40 questions would repeat without redraws.
+    const cfg = presetConfig('drill', 'ESAT-NOREPEAT', { templateIds: ['m1.arithmetic.multiplication'], level: 1, count: 40 });
+    const stems = buildSession(cfg).map((q) => q.question.stem);
+    expect(new Set(stems).size).toBe(stems.length);
+    // and it is still reproducible
+    expect(buildSession(cfg).map((q) => q.question.stem)).toEqual(stems);
+  });
   it('presets have the exam shape', () => {
     const sim = presetConfig('sim', 'S');
     expect(sim.count).toBe(27);

@@ -154,19 +154,36 @@ export function pickTemplateSequence(rng: RNG, pool: Template[], count: number, 
   return out;
 }
 
-/** Generate question `index` of a session from its seed (reproducible). */
-export function makeQuestion(config: SessionConfig, index: number, template: Template, level: Level): QuestionRecord {
-  const seed = questionSeed(config.seed, index);
+/**
+ * Generate question `index` of a session from its seed (reproducible).
+ * `redraw` > 0 derives an alternative seed for the same slot; buildSession uses it
+ * to avoid asking the identical question twice in one session.
+ */
+export function makeQuestion(config: SessionConfig, index: number, template: Template, level: Level, redraw = 0): QuestionRecord {
+  const seed = questionSeed(config.seed, index) + (redraw > 0 ? `~${redraw}` : '');
   const question = generateQuestion(template, new RNG(seed), level);
   return { index, seed, question };
 }
 
-/** Build every question of a fixed-length session up front. */
+/** Same calculation twice in one session? Only the stem matters (options are shuffled anyway). */
+function stemKey(q: Question): string {
+  return `${q.templateId}|${q.stem.replace(/\s+/g, ' ').trim()}`;
+}
+
+/** Build every question of a fixed-length session up front. No two questions in a session share a stem. */
 export function buildSession(config: SessionConfig): QuestionRecord[] {
   const rng = new RNG(`${config.seed}:plan`);
   const pool = poolFor(config);
   const seq = pickTemplateSequence(rng, pool, config.count, config.weights);
-  return seq.map((t, i) => makeQuestion(config, i, t, drawLevel(rng.child(`level${i}`), config.level)));
+  const seen = new Set<string>();
+  return seq.map((t, i) => {
+    const level = drawLevel(rng.child(`level${i}`), config.level);
+    let rec = makeQuestion(config, i, t, level);
+    // Deterministic redraws keep the session replayable from its seed.
+    for (let k = 1; k <= 8 && seen.has(stemKey(rec.question)); k++) rec = makeQuestion(config, i, t, level, k);
+    seen.add(stemKey(rec.question));
+    return rec;
+  });
 }
 
 /** Presets for the built-in modes. */

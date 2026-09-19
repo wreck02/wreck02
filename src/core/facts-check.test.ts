@@ -95,11 +95,11 @@ describe('checkFact', () => {
     bad('dec_√2', '1.4');
     ok('dec_π²', '9.87');
     ok('dec_π²', '9.8696');
-    ok('log10_2', '0.301');
-    ok('log10_2', '0.3010');
-    bad('log10_2', '0.3');
-    bad('log10_2', '0.30');
-    ok('log10_0.5', '-0.301');
+    // 1/π is stored to 3 s.f.: a correctly rounded shorter value is not accepted, a longer one is
+    ok('dec_1/π', '0.318');
+    ok('dec_1/π', '0.3183');
+    bad('dec_1/π', '0.3');
+    bad('dec_1/π', '0.32');
   });
   it('physics constants accept more precision than asked for', () => {
     ok('phy_e', '1.6e-19');
@@ -145,7 +145,7 @@ describe('helpers', () => {
     expect(typedSigFigs('abc')).toBe(0);
   });
   it('answerSigFigs', () => {
-    expect(answerSigFigs(card('log10_2').answer!)).toBe(3);
+    expect(answerSigFigs(card('dec_1/π').answer!)).toBe(3);
     expect(answerSigFigs(card('phy_e').answer!)).toBe(2);
     expect(answerSigFigs(card('phy_vsound').answer!)).toBe(2);
     expect(answerSigFigs(card('phy_c').answer!)).toBe(1);

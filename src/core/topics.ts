@@ -9,6 +9,7 @@ export interface TopicInfo {
 /** Canonical topic list. Template `topic` fields must use one of these keys. */
 export const TOPICS: TopicInfo[] = [
   // Mathematics 1
+  { key: 'arithmetic', module: 'M1', name: 'Mental arithmetic' },
   { key: 'fractions', module: 'M1', name: 'Fractions, decimals & percentages' },
   { key: 'ratio-percent', module: 'M1', name: 'Ratio & percentage change' },
   { key: 'standard-form', module: 'M1', name: 'Standard form & estimation' },

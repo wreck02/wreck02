@@ -5,7 +5,7 @@ Cambridge, Imperial and Oxford for engineering). Every question is generated pro
 parameterised template, verified at generation time with exact arithmetic, and answered against the exam's
 real constraint: **27 multiple-choice questions in 40 minutes, no calculator, about 89 seconds each.**
 
-**92 templates across 26 topics** cover Mathematics 1, Mathematics 2 and Physics, each parameterised over
+**96 templates across 27 topics** cover Mathematics 1, Mathematics 2 and Physics, each parameterised over
 five difficulty levels, so no two sessions are the same.
 
 Nothing leaves your machine. There is no backend, and the built app makes no network requests at all:
@@ -36,11 +36,12 @@ Other commands:
 
 | mode | what it is | keys |
 |---|---|---|
+| **Mental arithmetic** | random addition, subtraction, multiplication, division and order-of-operations sums at five levels, typed answers, timed; no two questions in a session are the same calculation | Enter submit, N next |
 | **Topic drill** | pick a module, topics and level 1–5; typed or multiple choice; untimed or a per-question clock; feedback after every question with the fastest mental route and the trap the distractors were built from | A–H / 1–8 choose, Enter submit, N next, S skip |
 | **ESAT simulation** | 27 mixed questions, 40 minutes, multiple choice only, one module (or all); move freely between questions, mark "no answer", flag; marked at the end with time per question against the 89-second pace line | ←/→ move, M flag, S no answer |
 | **Sprint** | 10 questions in 5 minutes, warm-up style | as drill |
 | **Gauntlet** | adaptive levelling: start at level 2, up after 5 correct under pace, down after 2 wrong; the highest sustained level per topic is recorded | as drill |
-| **Facts drill** | flashcards for things to know cold: squares to 30², cubes to 15³, 2ⁿ to 2¹⁶, 3ⁿ to 3⁸, primes to 100, √2 √3 √5 decimals, the exact trig table, sevenths/eighths/ninths/elevenths/twelfths, π and log₁₀ values, physics constants and SI prefixes | Enter reveal/submit, 1 missed, 2 got it |
+| **Facts drill** | flashcards for things to know cold: squares to 30², cubes to 15³, 2ⁿ to 2¹⁶, 3ⁿ to 3⁸, primes to 100, √2 √3 √5 and π decimals for estimates, the exact trig table, sevenths/eighths/ninths/elevenths/twelfths, exact logarithms, physics constants and SI prefixes | Enter reveal/submit, 1 missed, 2 got it |
 | **Review** | every wrong or over-pace question puts its template in an error ledger; review sessions regenerate *fresh* instances of those templates, weighted by recent failures (spaced repetition) | as drill |
 
 Every session shows its **seed** (for example `ESAT-K7Q2M9`). The same seed with the same settings replays
@@ -68,7 +69,7 @@ error ledger. Settings lets you export or import all data as JSON.
 
 ## How questions are made
 
-* `src/generators/<topic>/<template>.ts` — one file per template (92 of them). Each exports an `id`, `module`, `topic`,
+* `src/generators/<topic>/<template>.ts` — one file per template (96 of them). Each exports an `id`, `module`, `topic`,
   a description of the parameter ranges for **levels 1–5**, `generate(rng, level)` and an independent
   `verify(question)`.
 * `src/core/exact.ts` — exact arithmetic: rationals, surds and powers of π (`7 + 4√3`, `5π/6`, `3 × 10⁸`).

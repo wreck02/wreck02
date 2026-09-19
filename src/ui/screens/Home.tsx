@@ -69,6 +69,7 @@ export function Home({ nav }: { nav: Nav }) {
       </header>
 
       <div className="grid modes">
+        <ModeCard title="Mental arithmetic" description="Random addition, subtraction, multiplication, division and order of operations at five levels. Typed answers, never the same sum twice in a session." onStart={() => nav.go({ name: 'setup', mode: 'drill', prefill: { module: 'M1', topics: ['arithmetic'], answerMode: 'typed', count: 20, timed: true } })} />
         <ModeCard title="Topic drill" description="Pick a module, topics and level. Feedback after every question." onStart={() => nav.go({ name: 'setup', mode: 'drill' })} />
         <ModeCard title="ESAT simulation" description={`${SIM_QUESTIONS} multiple-choice questions in ${SIM_SECONDS / 60} minutes, one module, marked at the end.`} onStart={() => nav.go({ name: 'setup', mode: 'sim' })} />
         <ModeCard title="Sprint" description={`${SPRINT_QUESTIONS} questions in ${SPRINT_SECONDS / 60} minutes. Pace under pressure.`} onStart={() => nav.go({ name: 'setup', mode: 'sprint' })} />

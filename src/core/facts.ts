@@ -70,8 +70,8 @@ function primes(): FactCard[] {
 function surdDecimals(): FactCard[] {
   const rows: [string, string, string][] = [
     ['√2', '1.414', '1.414'], ['√3', '1.732', '1.732'], ['√5', '2.236', '2.236'], ['√6', '2.449', '2.449'], ['√7', '2.646', '2.646'], ['√10', '3.162', '3.162'],
-    ['1/√2', '0.707', '0.707'], ['√3/2', '0.866', '0.866'], ['π', '3.142', '3.142'], ['π²', '9.870', '9.87'], ['1/π', '0.318', '0.318'], ['√π', '1.772', '1.772'],
-    ['e', '2.718', '2.718'], ['ln 2', '0.693', '0.693'], ['ln 10', '2.303', '2.303'], ['2π', '6.283', '6.283'], ['4π', '12.57', '12.57'], ['π/4', '0.785', '0.785'],
+    ['1/√2', '0.707', '0.707'], ['√3/2', '0.866', '0.866'], ['π', '3.142', '3.142'], ['π²', '9.870', '9.87'], ['1/π', '0.318', '0.318'],
+    ['2π', '6.283', '6.283'], ['4π', '12.57', '12.57'], ['π/4', '0.785', '0.785'],
   ];
   return rows.map(([sym, disp, val]) => {
     const sf = val.replace(/^-?0*\.?0*/, '').replace('.', '').length;
@@ -142,10 +142,10 @@ function fractionDecimals(): FactCard[] {
   return out;
 }
 
+/** Exact logarithm values only: the ESAT never asks for a logarithm as a decimal. */
 function logs(): FactCard[] {
-  const rows: [string, string][] = [['2', '0.301'], ['3', '0.477'], ['5', '0.699'], ['7', '0.845'], ['4', '0.602'], ['6', '0.778'], ['8', '0.903'], ['9', '0.954'], ['20', '1.301'], ['50', '1.699'], ['0.5', '-0.301'], ['200', '2.301']];
-  const out: FactCard[] = rows.map(([x, v]) => ({ id: `log10_${x}`, deck: 'logs', prompt: `$\\log_{10} ${x}$ to 3 d.p.`, answer: dec(v), display: `$\\approx ${v}$` }));
-  const exact: [string, Exact][] = [['\\log_{10} 1000', E(3)], ['\\log_{10} 0.01', E(-2)], ['\\log_{10} \\sqrt{10}', frac(1, 2)], ['\\log_2 \\frac{1}{8}', E(-3)], ['\\log_3 \\sqrt{3}', frac(1, 2)], ['\\log_5 125', E(3)], ['\\log_4 8', frac(3, 2)], ['\\log_8 2', frac(1, 3)], ['\\log_9 27', frac(3, 2)], ['\\log_{2} \\sqrt{2}', frac(1, 2)], ['\\log_{27} 3', frac(1, 3)], ['\\log_{16} 8', frac(3, 4)], ['\\ln e^3', E(3)], ['\\ln 1', E(0)], ['e^{\\ln 5}', E(5)]];
+  const out: FactCard[] = [];
+  const exact: [string, Exact][] = [['\\log_{10} 1000', E(3)], ['\\log_{10} 0.01', E(-2)], ['\\log_{10} \\sqrt{10}', frac(1, 2)], ['\\log_2 \\frac{1}{8}', E(-3)], ['\\log_3 \\sqrt{3}', frac(1, 2)], ['\\log_5 125', E(3)], ['\\log_4 8', frac(3, 2)], ['\\log_8 2', frac(1, 3)], ['\\log_9 27', frac(3, 2)], ['\\log_{2} \\sqrt{2}', frac(1, 2)], ['\\log_{27} 3', frac(1, 3)], ['\\log_{16} 8', frac(3, 4)], ['\\log_{10} 10000', E(4)], ['\\log_2 64', E(6)], ['\\log_3 81', E(4)], ['\\log_{25} 5', frac(1, 2)], ['\\log_{4} \\frac{1}{16}', E(-2)], ['\\log_{7} 1', E(0)], ['\\log_{6} 6', E(1)], ['\\log_{32} 4', frac(2, 5)]];
   for (const [p, a] of exact) out.push({ id: `lx_${p}`, deck: 'logs', prompt: `$${p}$`, answer: a, display: `$${a.toLatex()}$` });
   return out;
 }
@@ -178,10 +178,10 @@ export const FACT_DECKS: FactDeck[] = [
   { key: 'cubes', name: 'Cubes to 15³', description: '2³ … 15³ and cube roots', cards: cubes() },
   { key: 'powers', name: 'Powers of 2 and 3', description: '2⁴ … 2¹⁶, 3³ … 3⁸, log₂ and log₃ of them', cards: powers() },
   { key: 'primes', name: 'Primes to 100', description: 'prime or not, next prime', cards: primes() },
-  { key: 'decimals', name: 'Surd, π and e decimals', description: '√2, √3, √5, π, π², 1/π … to 3 s.f.', cards: surdDecimals() },
+  { key: 'decimals', name: 'Surd and π decimals', description: '√2, √3, √5, √10, π, π², 1/π for quick estimates', cards: surdDecimals() },
   { key: 'trig', name: 'Exact trig table', description: 'sin/cos/tan of 0, 30, 45, 60, 90 in degrees and radians; conversions', cards: trigTable() },
   { key: 'fractions', name: 'Fraction ↔ decimal ↔ percentage', description: 'sevenths, eighths, ninths, elevenths, twelfths and friends', cards: fractionDecimals() },
-  { key: 'logs', name: 'log₁₀ of 2, 3, 5, 7 and exact logs', description: 'three-figure logs and exact log values', cards: logs() },
+  { key: 'logs', name: 'Exact logarithms', description: 'log₂ 8, log₄ 8, log₈ 2, log₁₀ 0.01 … values you can read off', cards: logs() },
   { key: 'constants', name: 'Physics constants and SI prefixes', description: 'g, c, densities, 1 kWh, prefixes', cards: [...physicsConstants(), ...prefixes()] },
 ];
 
